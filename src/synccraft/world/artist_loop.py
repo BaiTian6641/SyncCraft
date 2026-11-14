@@ -21,13 +21,10 @@ from typing import Any
 
 import numpy as np
 
-from synccraft.audit.sync_audit import audit_scene
-from synccraft.data_gen.curriculum_and_assistant import (
-    _prune_unused_palettes_and_materials,
-    coarsen_program_to_tier,
-)
+from synccraft.audit.sync_audit import _evaluate_declared_contact, audit_scene
 from synccraft.dsl.ast_nodes import (
     ANIMATED_PROFILES,
+    Attach,
     BehaviorDecl,
     BehaviorStateDecl,
     Bone,
@@ -54,6 +51,7 @@ from synccraft.kinematics.musculoskeletal import (
     audit_behavior_clip,
     evaluate_muscles_at_activations,
 )
+from synccraft.kinematics.sat_potential import sat_obb
 from synccraft.kinematics.se3_chain import Scene, compile_geometry
 from synccraft.world.inverse_inference import AssetProvenance, ingest_external_asset
 
@@ -901,23 +899,179 @@ def _repair_rest_geometry_if_needed(program: Program) -> Program:
     return program
 
 
-def enhance_artist_project_step(program: Program) -> tuple[Program, str]:
+def _articulate_flat_hierarchy(program: Program) -> Program:
+    """Decompose an overloaded flat root bone into articulated anatomical child chains with zero vertex drift."""
+    scene = compile_geometry(program)
+    root = program.root
+    direct_boxes = [it for it in root.items if isinstance(it, Box)]
+    if len(direct_boxes) <= 1:
+        return program
+
+    used_ids: set[str] = (
+        {b.name for b in scene.bones}
+        | {bx.name for bx in scene.boxes}
+        | {loc.name for loc in scene.locators}
+        | {p.name for p in program.palettes}
+        | {m.name for m in program.muscles}
+    )
+    if program.kinematics is not None:
+        used_ids |= {c.name for c in program.kinematics.ik_chains}
+        used_ids |= {c.name for c in program.kinematics.look_chains}
+    if program.behavior is not None:
+        used_ids |= {c.name for c in program.behavior.clips}
+        used_ids |= {s.name for s in program.behavior.states}
+
+    def _fresh_bone_id(box_name: str) -> str:
+        base = f"bone_{box_name}"
+        cand = base
+        idx = 2
+        while cand in used_ids:
+            cand = f"{base}_{idx}"
+            idx += 1
+        used_ids.add(cand)
+        return cand
+
+    primary_box = direct_boxes[0]
+    direct_order = [bx.name for bx in direct_boxes]
+    direct_set = set(direct_order)
+    root_rot = scene.bone_by_name[root.name].rotation
+
+    children_boxes_of: dict[str, list[Box]] = {bx.name: [] for bx in direct_boxes}
+    for idx in range(1, len(direct_boxes)):
+        bx = direct_boxes[idx]
+        w_c = scene.box_by_name[bx.name]
+        nom_parent = (
+            bx.place.base_box
+            if (bx.place is not None and bx.place.base_box in direct_set and direct_order.index(bx.place.base_box) < idx)
+            else primary_box.name
+        )
+        sat_nom = sat_obb(scene.box_by_name[nom_parent], w_c)
+        chosen_parent = nom_parent
+        if not (-1e-4 <= sat_nom.raw_min_overlap <= 0.5):
+            best_gap = float("inf")
+            for prev_name in direct_order[:idx]:
+                sat_cand = sat_obb(scene.box_by_name[prev_name], w_c)
+                if -1e-4 <= sat_cand.raw_min_overlap <= 0.5:
+                    gap_score = abs(sat_cand.raw_min_overlap)
+                    if gap_score < best_gap:
+                        best_gap = gap_score
+                        chosen_parent = prev_name
+        children_boxes_of[chosen_parent].append(bx)
+
+    existing_bones_by_parent: dict[str, list[Bone]] = {}
+    root_kept_bones: list[Bone] = []
+    for it in root.items:
+        if isinstance(it, Bone):
+            if it.attach is not None and it.attach.parent_box in direct_set and it.attach.parent_box != primary_box.name:
+                existing_bones_by_parent.setdefault(it.attach.parent_box, []).append(it)
+            else:
+                root_kept_bones.append(it)
+
+    def _build_articulated_subbone(parent_box_name: str, child_box: Box) -> Bone:
+        w_p = scene.box_by_name[parent_box_name]
+        w_c = scene.box_by_name[child_box.name]
+        diff = root_rot.T @ (w_c.center - w_p.center)
+        s_p = w_p.size
+        s_c = w_c.size
+        norm_sep = np.abs(diff) / np.maximum(1e-6, 0.5 * (s_p + s_c))
+        dom = int(np.argmax(norm_sep))
+
+        a_arr = np.zeros(3, dtype=np.float64)
+        al_arr = np.zeros(3, dtype=np.float64)
+        off_arr = np.zeros(3, dtype=np.float64)
+        sgn = 1.0 if float(diff[dom]) >= 0.0 else -1.0
+        a_arr[dom] = sgn
+        al_arr[dom] = -sgn
+        off_arr[dom] = float(diff[dom]) - 0.5 * float(s_p[dom]) * sgn - 0.5 * float(s_c[dom]) * sgn
+
+        for j in range(3):
+            if j == dom:
+                continue
+            a_arr[j] = float(np.clip(diff[j] / max(1e-6, 0.5 * float(s_p[j])), -1.0, 1.0))
+            rem_j = float(diff[j]) - 0.5 * float(s_p[j]) * a_arr[j]
+            al_arr[j] = float(np.clip(-rem_j / max(1e-6, 0.5 * float(s_c[j])), -1.0, 1.0))
+            off_arr[j] = rem_j + 0.5 * float(s_c[j]) * al_arr[j]
+
+        sat_pair = sat_obb(w_p, w_c)
+        pair_key = (w_p.name, w_c.name) if w_p.name <= w_c.name else (w_c.name, w_p.name)
+        contact_err = _evaluate_declared_contact(
+            w_p,
+            w_c,
+            pair_key,
+            "attach",
+            sat_pair.raw_min_overlap,
+            collision_tolerance=1e-7,
+            max_contact_gap=1e-4,
+            max_inset_depth=0.5,
+        )
+        can_connect = (contact_err is None) and all(abs(float(x)) <= 0.5 for x in off_arr)
+
+        att = Attach(
+            parent_box=parent_box_name,
+            anchor=(float(a_arr[0]), float(a_arr[1]), float(a_arr[2])),
+            align=(float(al_arr[0]), float(al_arr[1]), float(al_arr[2])),
+            offset=(float(off_arr[0]), float(off_arr[1]), float(off_arr[2])),
+            detached=not can_connect,
+        )
+        moved_box = replace(child_box, place=None)
+        sub_items: list[Box | Locator | Bone] = [moved_box]
+        for grand_bx in children_boxes_of.get(child_box.name, []):
+            sub_items.append(_build_articulated_subbone(child_box.name, grand_bx))
+        sub_items.extend(existing_bones_by_parent.get(child_box.name, []))
+        return Bone(
+            name=_fresh_bone_id(child_box.name),
+            rest_euler=(0.0, 0.0, 0.0),
+            attach=att,
+            items=sub_items,
+        )
+
+    new_root_items: list[Box | Locator | Bone] = [primary_box]
+    new_root_items.extend(it for it in root.items if isinstance(it, Locator))
+    for ch_bx in children_boxes_of[primary_box.name]:
+        new_root_items.append(_build_articulated_subbone(primary_box.name, ch_bx))
+    new_root_items.extend(root_kept_bones)
+
+    return validate_program(replace(program, root=replace(root, items=new_root_items)))
+
+
+def _apply_single_upgrade_op(program: Program, op: str) -> Program:
+    if op == "repair_rest_contacts":
+        return _repair_rest_geometry_if_needed(program)
+    if op == "articulate_hierarchy":
+        return _add_joint_limits_and_locators(_articulate_flat_hierarchy(program))
+    if op in ("add_joint_limits", "add_locators"):
+        return _add_joint_limits_and_locators(program)
+    if op in ("synthesize_scientific_materials", "add_material_weld_groups", "add_style_decl"):
+        return _upgrade_scientific_materials_and_style(program)
+    if op in ("synthesize_muscles_and_kinematics", "synthesize_behavior", "repair_behavior_amplitudes"):
+        return _synthesize_muscles_kinematics_and_behavior(program)
+    return program
+
+
+def enhance_artist_project_step(
+    program: Program,
+    *,
+    seen_dsls: set[str] | None = None,
+) -> tuple[Program, str]:
     """Execute one deterministic rule-grounded enhancement step guided by `analyze_artist_project`."""
     critique = analyze_artist_project(program)
     if not critique.suggestions:
         return program, "noop_already_optimal"
 
-    top = critique.suggestions[0]
-    op = top.proposed_upgrade_op
-    if op == "repair_rest_contacts":
-        return _repair_rest_geometry_if_needed(program), op
-    if op in ("add_joint_limits", "add_locators", "articulate_hierarchy"):
-        return _add_joint_limits_and_locators(program), op
-    if op in ("synthesize_scientific_materials", "add_material_weld_groups", "add_style_decl"):
-        return _upgrade_scientific_materials_and_style(program), op
-    if op in ("synthesize_muscles_and_kinematics", "synthesize_behavior", "repair_behavior_amplitudes"):
-        return _synthesize_muscles_kinematics_and_behavior(program), op
-    return program, "noop_unhandled"
+    cur_dsl = format_program(program)
+    blocked = set(seen_dsls or ()) | {cur_dsl}
+    tried_ops: set[str] = set()
+
+    for sug in critique.suggestions:
+        op = sug.proposed_upgrade_op
+        if op in tried_ops:
+            continue
+        tried_ops.add(op)
+        cand = _apply_single_upgrade_op(program, op)
+        if format_program(cand) not in blocked:
+            return cand, op
+
+    return program, "noop_converged"
 
 
 def run_looped_artist_enhancement(
@@ -948,7 +1102,9 @@ def run_looped_artist_enhancement(
 
     seen_dsls = {format_program(cur_prog)}
     for step_i in range(1, max(1, max_iterations) + 1):
-        next_prog, op_used = enhance_artist_project_step(cur_prog)
+        next_prog, op_used = enhance_artist_project_step(cur_prog, seen_dsls=seen_dsls)
+        if op_used.startswith("noop"):
+            break
         next_dsl = format_program(next_prog)
         next_critique = analyze_artist_project(next_prog)
         history.append(
@@ -959,9 +1115,9 @@ def run_looped_artist_enhancement(
             }
         )
         cur_prog = next_prog
-        if op_used.startswith("noop") or next_dsl in seen_dsls or not next_critique.suggestions:
-            break
         seen_dsls.add(next_dsl)
+        if not next_critique.suggestions:
+            break
 
     final_critique = analyze_artist_project(cur_prog)
     return {
@@ -1002,6 +1158,11 @@ def build_progressive_from_scratch_trajectory(
     masses, adds skeletal joints, sculpts secondary anatomy & sockets, applies scientific
     surface materials, and binds musculoskeletal animation without black-box diffusion noise.
     """
+    from synccraft.data_gen.curriculum_and_assistant import (
+        _prune_unused_palettes_and_materials,
+        coarsen_program_to_tier,
+    )
+
     full_upgraded = _synthesize_muscles_kinematics_and_behavior(
         _upgrade_scientific_materials_and_style(
             _add_joint_limits_and_locators(_repair_rest_geometry_if_needed(master_program))

@@ -6,9 +6,12 @@ from __future__ import annotations
 
 from dataclasses import replace
 import json
+import os
+from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import unittest
-from pathlib import Path
 
 import numpy as np
 
@@ -623,11 +626,250 @@ class TestApexComplexEntityAndAssetPack(unittest.TestCase):
 
             manifest = json.loads((Path(tmp) / "apex_complex_manifest.json").read_text(encoding="utf-8"))
             self.assertEqual(manifest["total_rows"], 30)
+            try:
+                import pyarrow.parquet as pq
+
+                full_tbl = pq.read_table(Path(tmp) / "apex_complex_entities_v3_1.parquet")
+                train_tbl = pq.read_table(Path(tmp) / "train.parquet")
+                unseen_tbl = pq.read_table(Path(tmp) / "test_unseen.parquet")
+                self.assertEqual(full_tbl.num_rows, 30)
+                self.assertEqual(train_tbl.num_rows, 24)
+                self.assertEqual(unseen_tbl.num_rows, 6)
+                for col in ("source_stage", "target_stage", "initial_readiness_score", "critique_json"):
+                    self.assertIn(col, full_tbl.column_names)
+            except ImportError:
+                pass
             for row in rows:
                 self.assertEqual(row["license_spdx"], "Apache-2.0")
                 self.assertTrue(row["commercial_weights_eligible"])
                 parsed = parse_program(row["assistant_dsl"])
                 self.assertTrue(audit_scene(compile_geometry(parsed), enforce_physical_contact=True)["passed"])
+
+
+class TestAdversarialRegressionGuardsV31(unittest.TestCase):
+    """Regression suite locking in fixes for cross-package import order, P1-02 locator connectivity,
+    per-axis Hill muscle/tendon joint stops, multi-root/rotated decompilers, and flat-rig articulation.
+    """
+
+    def test_clean_import_order_world_and_data_gen_subprocesses(self) -> None:
+        repo_src = str(Path(__file__).resolve().parents[1] / "src")
+        env = dict(os.environ, PYTHONPATH=repo_src)
+        for mod in ("synccraft.world", "synccraft.data_gen"):
+            proc = subprocess.run(
+                [sys.executable, "-c", f"import {mod}"],
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, f"Standalone import {mod} failed:\n{proc.stderr}")
+
+    def test_p1_02_connectivity_rejects_floating_box_with_locator_only_intermediate_bone(self) -> None:
+        prog = validate_program(
+            Program(
+                Meta("entity", "bbmodel_5", 16),
+                [Palette("m", (0.5, 0.1, 40.0), 4)],
+                Bone(
+                    "root",
+                    items=[
+                        Box("torso", (6, 6, 6), "m"),
+                        Box(
+                            "floating_illegal",
+                            (2, 2, 2),
+                            "m",
+                            place=Place(None, anchor=(0.0, 0.0, 0.0), align=(0.0, 0.0, 0.0), offset=(0.0, 20.0, 0.0)),
+                        ),
+                        Bone(
+                            "socket_hub",
+                            attach=Attach("torso", anchor=(0.0, 1.0, 0.0), align=(0.0, -1.0, 0.0), detached=False),
+                            items=[
+                                Locator("hub_loc", offset=(0.0, 0.0, 0.0), role="socket"),
+                                Bone(
+                                    "spire",
+                                    attach=Attach("hub_loc", anchor=(0.0, 0.0, 0.0), align=(0.0, -1.0, 0.0), detached=False),
+                                    items=[Box("spire_bx", (2, 4, 2), "m")],
+                                ),
+                            ],
+                        ),
+                    ],
+                ),
+            )
+        )
+        aud = audit_scene(compile_geometry(prog), enforce_physical_contact=True)
+        self.assertFalse(aud["passed"])
+        self.assertTrue(any(v["violation"] == "disconnected_physical_components" for v in aud["contact_violations"]))
+
+    def test_per_axis_muscle_independence_and_joint_limit_clamping_before_tendon_coupling(self) -> None:
+        prog = validate_program(
+            Program(
+                Meta("entity", "bbmodel_5", 16),
+                [Palette("m", (0.5, 0.1, 40.0), 4)],
+                Bone(
+                    "root",
+                    items=[
+                        Box("b0", (4, 4, 4), "m"),
+                        Bone(
+                            "elbow",
+                            attach=Attach("b0", anchor=(0.0, -1.0, 0.0), align=(0.0, 1.0, 0.0)),
+                            joint_limits=((-20.0, 20.0), (-20.0, 20.0), (-20.0, 20.0)),
+                            items=[
+                                Box("b1", (2, 4, 2), "m"),
+                                Bone(
+                                    "wrist",
+                                    attach=Attach("b1", anchor=(0.0, -1.0, 0.0), align=(0.0, 1.0, 0.0)),
+                                    joint_limits=((-15.0, 15.0), (-15.0, 15.0), (-15.0, 15.0)),
+                                    items=[Box("b2", (2, 3, 2), "m")],
+                                ),
+                            ],
+                        ),
+                    ],
+                ),
+                muscles=(
+                    MuscleDecl("pitch_m", "root", "elbow", "x", 45.0, TendonCoupling("wrist", "x", 0.5)),
+                    MuscleDecl("yaw_m", "root", "elbow", "y", 18.0),
+                ),
+            )
+        )
+        res_x = evaluate_muscles_at_activations(prog, {"pitch_m": 1.0, "yaw_m": 0.0})
+        res_xy = evaluate_muscles_at_activations(prog, {"pitch_m": 1.0, "yaw_m": 1.0})
+        # Primary elbow X excursion clamps at 20 deg stop, so 0.5x passive wrist tendon receives 10 deg (not 22.5 deg)
+        self.assertAlmostEqual(res_x.pose_euler_deltas["elbow"][0], 20.0, places=6)
+        self.assertAlmostEqual(res_x.pose_euler_deltas["wrist"][0], 10.0, places=6)
+        # Orthogonal Y muscle does not dilute X excursion
+        self.assertAlmostEqual(res_xy.pose_euler_deltas["elbow"][0], 20.0, places=6)
+        self.assertAlmostEqual(res_xy.pose_euler_deltas["elbow"][1], 18.0, places=6)
+
+    def test_decompiler_8_corner_fidelity_multiroot_bbmodel_rotated_cubes_and_molang_clamp(self) -> None:
+        # 1. Bedrock/Cobblemon rotated cube + bone/clip name collision + multi-harmonic & math.clamp Molang
+        geo = {
+            "format_version": "1.12.0",
+            "minecraft:geometry": [
+                {
+                    "description": {"identifier": "geometry.test", "texture_width": 64, "texture_height": 64},
+                    "bones": [
+                        {"name": "body", "pivot": [0, 8, 0], "cubes": [{"origin": [-3, 5, -3], "size": [6, 6, 6], "uv": [0, 0]}]},
+                        {
+                            "name": "tail",
+                            "parent": "body",
+                            "pivot": [0, 8, -3],
+                            "rotation": [10, 0, 0],
+                            "cubes": [
+                                {"origin": [-1, 7, -9], "size": [2, 2, 6], "uv": [0, 16]},
+                                {"origin": [-1, 9, -8], "size": [2, 3, 2], "pivot": [0, 9, -7], "rotation": [35, 0, 25], "uv": [16, 16]},
+                            ],
+                        },
+                    ],
+                }
+            ],
+        }
+        anim = {
+            "animations": {
+                "animation.creature.tail": {
+                    "loop": True,
+                    "animation_length": 2.0,
+                    "bones": {
+                        "tail": {
+                            "rotation": [
+                                "math.sin(q.anim_time * 90) * 10 + 0.5 * math.sin(q.anim_time * 180 + 30) * 5",
+                                "math.clamp(math.sin(q.anim_time * 720) * 12, -5, 15)",
+                                0,
+                            ]
+                        }
+                    },
+                }
+            }
+        }
+        prov_nc = AssetProvenance("cobble_tail", "https://example.org/c", "Artist", "CC-BY-NC-4.0", "CC-BY-NC-4.0 Artist")
+        rec_bed = ingest_external_asset(geo, "bedrock_geojson", prov_nc, animation_payload=anim, license_policy="research_nc")
+        self.assertLess(rec_bed.vertex_reconstruction_error, 1e-9)
+        assert rec_bed.program.behavior is not None
+        clip = rec_bed.program.behavior.clips[0]
+        self.assertNotEqual(clip.name, "tail")
+        tr_x, tr_y = clip.tracks
+        self.assertAlmostEqual(tr_x.bias_deg, 0.0, places=5)
+        self.assertAlmostEqual(tr_x.freq_hz, 0.25, places=4)
+        self.assertAlmostEqual(tr_y.freq_hz, 2.0, places=4)
+        self.assertAlmostEqual(tr_y.bias_deg - abs(tr_y.amp_deg), -5.0, places=4)
+        self.assertAlmostEqual(tr_y.bias_deg + abs(tr_y.amp_deg), 12.0, places=4)
+
+        # 2. Multi-root .bbmodel with rotated group & rotated element
+        bb_multi = {
+            "resolution": {"width": 32, "height": 32},
+            "elements": [
+                {"name": "torso", "uuid": "e1", "from": [-3, 6, -2], "to": [3, 12, 2], "origin": [0, 9, 0], "rotation": [0, 0, 0]},
+                {"name": "arm_l", "uuid": "e2", "from": [3, 6, -1], "to": [5, 12, 1], "origin": [4, 12, 0], "rotation": [0, 0, 0]},
+                {"name": "crest", "uuid": "e3", "from": [-1, 12, -1], "to": [1, 16, 1], "origin": [0, 12, 0], "rotation": [25, 15, 0]},
+            ],
+            "groups": [
+                {"name": "body_grp", "uuid": "g1", "origin": [0, 9, 0], "rotation": [0, 0, 0]},
+                {"name": "arm_l_grp", "uuid": "g2", "origin": [4, 12, 0], "rotation": [45, 0, 20]},
+            ],
+            "outliner": [
+                {"uuid": "g1", "children": ["e1", "e3"]},
+                {"uuid": "g2", "children": ["e2"]},
+            ],
+        }
+        rec_bb = ingest_external_asset(bb_multi, "bbmodel", AssetProvenance("bb_m", "https://example.org/b", "A", "MIT"))
+        sc_bb = compile_geometry(rec_bb.program)
+        self.assertLess(rec_bb.vertex_reconstruction_error, 1e-9)
+        self.assertFalse(np.allclose(sc_bb.box_by_name["arm_l"].rotation, np.eye(3)))
+        self.assertFalse(np.allclose(sc_bb.box_by_name["crest"].rotation, np.eye(3)))
+
+        # 3. Java .json with rotated first element (elements[0])
+        java_rot0 = {
+            "texture_size": [16, 16],
+            "elements": [
+                {"name": "blade_0", "from": [7, 2, 7], "to": [9, 14, 9], "rotation": {"origin": [8, 8, 8], "axis": "y", "angle": 45}},
+                {"name": "guard_1", "from": [5, 6, 7], "to": [11, 8, 9]},
+            ],
+        }
+        rec_jv = ingest_external_asset(java_rot0, "java_json", AssetProvenance("jv_r", "https://example.org/j", "A", "MIT"))
+        sc_jv = compile_geometry(rec_jv.program)
+        self.assertLess(rec_jv.vertex_reconstruction_error, 1e-9)
+        self.assertFalse(np.allclose(sc_jv.box_by_name["blade_0"].rotation, np.eye(3)))
+
+    def test_flat_ten_box_entity_looped_enhancement_articulates_and_animates_with_zero_drift(self) -> None:
+        flat_draft = validate_program(
+            Program(
+                Meta("entity", "bbmodel_5", 16),
+                [Palette("hide", (0.52, 0.12, 38.0), 6), Palette("horn", (0.78, 0.06, 80.0), 4)],
+                Bone(
+                    "root",
+                    pivot_local=(0.0, 12.0, 0.0),
+                    items=[
+                        Box("torso", (8, 6, 12), "hide"),
+                        Box("neck", (4, 4, 4), "hide", place=Place("torso", anchor=(0.0, 0.3, 1.0), align=(0.0, 0.0, -1.0))),
+                        Box("head", (5, 4, 5), "horn", place=Place("neck", anchor=(0.0, 0.2, 1.0), align=(0.0, 0.0, -1.0))),
+                        Box("tail_1", (4, 3, 6), "hide", place=Place("torso", anchor=(0.0, 0.1, -1.0), align=(0.0, 0.0, 1.0))),
+                        Box("tail_2", (2, 2, 6), "horn", place=Place("tail_1", anchor=(0.0, 0.0, -1.0), align=(0.0, 0.0, 1.0))),
+                        Box("thigh_l", (3, 5, 3), "hide", place=Place("torso", anchor=(0.75, -1.0, 0.6), align=(0.0, 1.0, 0.0))),
+                        Box("shank_l", (2, 5, 2), "hide", place=Place("thigh_l", anchor=(0.0, -1.0, 0.0), align=(0.0, 1.0, 0.0))),
+                        Box("thigh_r", (3, 5, 3), "hide", place=Place("torso", anchor=(-0.75, -1.0, 0.6), align=(0.0, 1.0, 0.0))),
+                        Box("shank_r", (2, 5, 2), "hide", place=Place("thigh_r", anchor=(0.0, -1.0, 0.0), align=(0.0, 1.0, 0.0))),
+                        Box("wing_l", (8, 1, 6), "hide", place=Place("torso", anchor=(1.0, 0.8, 0.2), align=(-1.0, 0.0, 0.0))),
+                    ],
+                ),
+            )
+        )
+        orig_sc = compile_geometry(flat_draft)
+        loop_res = run_looped_artist_enhancement(flat_draft, max_iterations=6)
+        upgraded: Program = loop_res["final_program"]
+        up_sc = compile_geometry(upgraded)
+
+        for bx in orig_sc.boxes:
+            err = float(np.max(np.linalg.norm(bx.corners(include_inflate=False) - up_sc.box_by_name[bx.name].corners(include_inflate=False), axis=-1)))
+            self.assertLess(err, 1e-9, f"Articulation shifted rest vertices of {bx.name} by {err}")
+
+        self.assertGreaterEqual(len(up_sc.bones), 8)
+        self.assertEqual(len(upgraded.materials), 2)
+        self.assertGreater(len(upgraded.muscles), 0)
+        self.assertIsNotNone(upgraded.kinematics)
+        assert upgraded.kinematics is not None
+        self.assertGreaterEqual(len(upgraded.kinematics.ik_chains), 2)
+        self.assertIsNotNone(upgraded.behavior)
+        assert upgraded.behavior is not None
+        self.assertTrue(audit_scene(up_sc, enforce_physical_contact=True)["passed"])
+        self.assertTrue(audit_behavior_clip(upgraded, upgraded.behavior.clips[0].name, num_frames=12)["passed"])
 
 
 if __name__ == "__main__":

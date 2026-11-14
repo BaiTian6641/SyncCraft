@@ -38,7 +38,7 @@ While keeping unimplemented starter placeholders (`@shade`, `@motion`, `@ergonom
 - **Extended `@materials` Physical & Reaction–Diffusion Parameters**:
   - Optional default-preserving fields: `anisotropy`, `subsurface`, `porosity`, `emissive`, `rd_feed`, `rd_kill`, `film_nm`, `wear`, `oxidation`, `biofilm`, and `weld_group`. Canonical `format_program` emits extended kwargs only when non-default so all existing `v3.0` canonical hashes remain byte-identical.
 - **Typed `@muscles`, `@kinematics`, and `@behavior` Sections**:
-  - `@muscles`: Declares reduced-order Hill-type muscle-tendon units (`origin_bone`, `insertion_bone`, `action_axis`, `moment_arm_deg`, optional biarticular `tendon_coupling: [bone, axis, ratio]`, and optional isochoric `belly_box` + `bulge_inflate` in `[0.0, 0.35]`). Explicitly labeled `reduced_order_hill_tendon_and_isochoric_bulge_model`.
+  - `@muscles`: Declares reduced-order Hill-type muscle-tendon units (`origin_bone`, `insertion_bone`, `action_axis`, `moment_arm_deg`, optional biarticular `tendon_coupling: [bone, axis, ratio]`, and optional isochoric `belly_box` + `bulge_inflate` in `[0.0, 0.35]`). Explicitly labeled `reduced_order_model` in telemetry payloads.
   - `@kinematics`: Declares validated `ik_chain` (`upper`, `lower`, `effector`, `hinge_axis`) and multi-bone `look_chain` (`bones`, `weight_decay`) descriptors.
   - `@behavior`: Declares named `clip` definitions (`track` analytic laws `wave`/`flap`/`hinge`/`impulse`, `muscle_drive` excitations, and closed-loop stance-locked `ik_drive` `foot_cycle` targets achieving $< 0.02$ model-unit horizontal stance slip) and coupled `state` definitions (`pose_bias`, `muscle_tone`, `material_mod` modulating `emissive`, `moisture`, and `wear_delta` in `WorldState`). Allowed only on articulated/editor profiles (`bbmodel_5`, `bedrock_entity`, `geckolib`).
 
@@ -50,15 +50,15 @@ While keeping unimplemented starter placeholders (`@shade`, `@motion`, `@ergonom
 
 ### 3. Closed-Loop Artist Assistant & Apex Complex Entity Suite (`src/synccraft/world/artist_loop.py`, `src/synccraft/data_gen/complex_entity_and_asset_pack.py`)
 
-- Implement a deterministic 6-pillar project analyzer (`analyze_artist_project`), single/multi-step rule-based enhancer (`enhance_artist_project_step`), and 5-stage progressive from-scratch trajectory builder (`build_progressive_from_scratch_trajectory`: `Stage 0` gesture blockout -> `Stage 4` musculoskeletal animated asset).
-- Add a 10-family **Apex Complex Entity & Game-Asset Pack** (`8` Seen + `2` Held-Out Unseen, `32–82` boxes, `8–30` bones) covering Monster Hunter-inspired biomechanical archetypes (Flying Wyvern, Brute Wyvern, Pelagic Leviathan, Fanged Thunder Wyvern, Armored Arthropod Colossus, Elder Calamity Dragon, Morphing Switch-Blade Axe) and Cobblemon-inspired companion rigs & functional healing/scanner blocks, while keeping legacy `SEEN_STATIC_FAMILIES` (`40`) and `UNSEEN_STATIC_FAMILIES` (`15`) untouched for strict regression continuity.
+- Implement a deterministic 5-pillar project analyzer (`analyze_artist_project`), single/multi-step rule-based enhancer (`enhance_artist_project_step`, `run_looped_artist_enhancement` with zero-vertex-drift flat-rig articulation), and 5-stage progressive from-scratch trajectory builder (`build_progressive_from_scratch_trajectory`: `Stage 0` gesture blockout -> `Stage 4` musculoskeletal animated asset).
+- Add a 10-family **Apex Complex Entity & Game-Asset Pack** (`8` Seen + `2` Held-Out Unseen, `32–64` boxes, `8–29` bones) covering Monster Hunter-inspired biomechanical archetypes (Flying Wyvern, Brute Wyvern, Pelagic Leviathan, Fanged Thunder Wyvern, Armored Arthropod Colossus, Elder Calamity Dragon, Morphing Switch-Blade Axe) and Cobblemon-inspired companion rigs & functional healing/scanner blocks, while keeping legacy `SEEN_STATIC_FAMILIES` (`40`) and `UNSEEN_STATIC_FAMILIES` (`15`) untouched for strict regression continuity.
 
 ### 4. Dual-Track `CC-BY-NC` Research Quarantine & Cobblemon Decompiler (`src/synccraft/world/inverse_inference.py`)
 
 - Partition external ingestion into two explicit policies:
   1. `license_policy="clean_room_permissive"` (default): Permits only `CC0-1.0`, `CC-BY-4.0`, `MIT`, `Apache-2.0`, `BSD-3-Clause`; `commercial_weights_eligible=True`.
-  2. `license_policy="research_nc"`: Additionally permits `CC-BY-NC-4.0` and `CC-BY-NC-SA-4.0` (e.g., Cobblemon assets) while permanently tagging `license_track="noncommercial_research_only"` and `commercial_weights_eligible=False`, and continuing to block Mojang vanilla JARs and proprietary/unlicensed sources.
-- Upgrade Bedrock `.geo.json` decompilation to preserve `locators`, exact nested rotated bone transforms, and zero-`eval` `.animation.json` Molang/keyframe harmonic extraction into `@behavior` clips.
+  2. `license_policy="research_nc"`: Additionally permits `CC-BY-NC-4.0` and `CC-BY-NC-SA-4.0` (e.g., Cobblemon assets) while permanently tagging `license_track="research_nc"` and `commercial_weights_eligible=False`, and continuing to block Mojang vanilla JARs and proprietary/unlicensed sources.
+- Upgrade `.bbmodel`, Java `.json`, and Bedrock `.geo.json` decompilation to preserve `locators`, multi-root/per-cube/parent-rotated SE(3) transforms (`< 1e-9` 8-corner vertex error on integer cubes), and zero-`eval` `.animation.json` Molang/keyframe harmonic extraction (including `q.anim_time` angular speeds, `math.clamp`, and global AST identifier deduplication) into `@behavior` clips.
 
 ## Consequences
 

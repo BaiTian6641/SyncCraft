@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 from synccraft.dsl.ast_nodes import (
+    Bone,
     ClipDecl,
     IKChainDecl,
     LookChainDecl,
@@ -36,7 +37,12 @@ from synccraft.dsl.ast_nodes import (
     Program,
     Vec3,
 )
-from synccraft.kinematics.se3_chain import Scene, compile_geometry, compile_posed_geometry
+from synccraft.kinematics.se3_chain import (
+    Scene,
+    _clamp_delta_to_joint_limits,
+    compile_geometry,
+    compile_posed_geometry,
+)
 
 if TYPE_CHECKING:
     from synccraft.data_gen.ik_motion_templates import TwoBoneIKResult
@@ -115,82 +121,58 @@ def _bone_anchor_point_world(scene: Scene, bone_name: str, preferred_box: str | 
     return scene.bone_by_name[bone_name].pivot_world.copy()
 
 
-def evaluate_muscles_at_activations(
-    program: Program,
-    activations: dict[str, float] | None = None,
-    *,
-    base_pose_deltas: dict[str, Vec3] | None = None,
-    root_translation_delta: Vec3 | None = None,
-) -> MusculoskeletalPoseResult:
-    """Compute Hill-type agonist-antagonist joint equilibrium, tendon couplings, and belly bulges."""
-    rest_scene = compile_geometry(program)
-    act_in = activations or {}
-    poses: dict[str, np.ndarray] = {
-        b: np.asarray(v, dtype=np.float64).copy() for b, v in (base_pose_deltas or {}).items()
-    }
-    stiffness_out: dict[str, float] = {}
-    axis_map = {"x": 0, "y": 1, "z": 2}
+def _collect_expanded_joint_limits(program: Program) -> dict[str, tuple[Any, bool]]:
+    """Map expanded bone name -> (joint_limits, mirrored) matching compile_geometry."""
+    out: dict[str, tuple[Any, bool]] = {}
 
-    muscles: tuple[MuscleDecl, ...] = program.muscles
-    act_map: dict[str, float] = {}
-    by_insertion: dict[str, list[MuscleDecl]] = {}
-    for m in muscles:
-        a_val = float(np.clip(act_in.get(m.name, 0.0), 0.0, 1.0))
-        act_map[m.name] = a_val
-        by_insertion.setdefault(m.insertion_bone, []).append(m)
+    def _walk(
+        bone: Bone,
+        *,
+        mirrored: bool = False,
+        prefix: str | None = None,
+        renamed_root: str | None = None,
+    ) -> None:
+        name = renamed_root or (f"{prefix}__{bone.name}" if prefix else bone.name)
+        if bone.joint_limits is not None:
+            out[name] = (bone.joint_limits, mirrored)
+        for item in bone.items:
+            if isinstance(item, Bone):
+                _walk(item, mirrored=mirrored, prefix=prefix)
+                if item.mirror_name:
+                    m_prefix = f"{prefix}__{item.mirror_name}" if prefix else item.mirror_name
+                    _walk(
+                        item,
+                        mirrored=not mirrored,
+                        prefix=m_prefix,
+                        renamed_root=m_prefix,
+                    )
 
-    # 1. Quasi-static Hill agonist-antagonist joint equilibrium
-    muscle_joint_contrib: dict[str, np.ndarray] = {}
-    for bone_name, m_group in by_insertion.items():
-        max_a = max(act_map[m.name] for m in m_group)
-        k_passive = max(0.0, 1.0 - max_a)
-        k_active = sum(act_map[m.name] for m in m_group)
-        k_total = max(1e-8, k_passive + k_active)
-        net_drive = np.zeros(3, dtype=np.float64)
-        for m in m_group:
-            arm_vec = np.zeros(3, dtype=np.float64)
-            arm_vec[axis_map[m.action_axis]] = float(m.moment_arm_deg)
-            net_drive += act_map[m.name] * arm_vec
-        delta_muscle = net_drive / k_total
-        muscle_joint_contrib[bone_name] = delta_muscle
-        poses[bone_name] = poses.get(bone_name, np.zeros(3, dtype=np.float64)) + delta_muscle
-        stiffness_out[bone_name] = float(k_total)
+    _walk(program.root)
+    return out
 
-    # 2. Biarticular passive tendon pantograph couplings (coupled from primary joint excursion)
-    coupled_counts: dict[tuple[str, str], list[MuscleDecl]] = {}
-    for m in muscles:
-        if m.tendon_coupling is not None:
-            coupled_counts.setdefault((m.insertion_bone, m.action_axis), []).append(m)
 
-    for m in muscles:
-        if m.tendon_coupling is not None:
-            tc = m.tendon_coupling
-            src_vec = poses.get(m.insertion_bone, np.zeros(3, dtype=np.float64))
-            src_angle = float(src_vec[axis_map[m.action_axis]])
-            peer_coupled = coupled_counts[(m.insertion_bone, m.action_axis)]
-            if len(peer_coupled) <= 1:
-                weight = 1.0
-            else:
-                denom = sum(act_map[p.name] for p in peer_coupled)
-                weight = (act_map[m.name] / denom) if denom > 1e-6 else (1.0 / len(peer_coupled))
-            tgt_vec = poses.setdefault(tc.bone, np.zeros(3, dtype=np.float64))
-            tgt_vec[axis_map[tc.axis]] += tc.ratio * src_angle * weight
+def _clamp_pose_vec(
+    bone_name: str,
+    vec: np.ndarray,
+    limits_map: dict[str, tuple[Any, bool]],
+) -> np.ndarray:
+    if bone_name in limits_map:
+        jlim, is_mir = limits_map[bone_name]
+        return _clamp_delta_to_joint_limits(vec, jlim, mirrored=is_mir)
+    return vec
 
-    pose_tuples: dict[str, Vec3] = {
-        b: (float(v[0]), float(v[1]), float(v[2])) for b, v in poses.items()
-    }
 
-    # 3. Pre-bulge posed kinematics to measure exact 3D SE(3) fiber shortening
-    kin_scene = compile_posed_geometry(
-        program,
-        pose_tuples,
-        root_translation_delta=root_translation_delta,
-    )
-
+def _compute_muscle_bulge_and_telemetry(
+    rest_scene: Scene,
+    kin_scene: Scene,
+    muscles: tuple[MuscleDecl, ...],
+    act_map: dict[str, float],
+) -> tuple[dict[str, float], tuple[MuscleTelemetry, ...]]:
+    """Measure exact 3D SE(3) origin-to-insertion fiber shortening and belly_box bulge_inflate."""
     inflate_deltas: dict[str, float] = {}
     telemetry: list[MuscleTelemetry] = []
     for m in muscles:
-        a_val = act_map[m.name]
+        a_val = float(np.clip(act_map.get(m.name, 0.0), 0.0, 1.0))
         p_orig_0 = _bone_anchor_point_world(rest_scene, m.origin_bone)
         p_ins_0 = _bone_anchor_point_world(rest_scene, m.insertion_bone, preferred_box=m.belly_box)
         rest_len = float(np.linalg.norm(p_ins_0 - p_orig_0))
@@ -217,6 +199,90 @@ def evaluate_muscles_at_activations(
                 applied_bulge_inflate=bulge,
             )
         )
+    return inflate_deltas, tuple(telemetry)
+
+
+def evaluate_muscles_at_activations(
+    program: Program,
+    activations: dict[str, float] | None = None,
+    *,
+    base_pose_deltas: dict[str, Vec3] | None = None,
+    root_translation_delta: Vec3 | None = None,
+) -> MusculoskeletalPoseResult:
+    """Compute Hill-type agonist-antagonist joint equilibrium, tendon couplings, and belly bulges."""
+    rest_scene = compile_geometry(program)
+    limits_map = _collect_expanded_joint_limits(program)
+    act_in = activations or {}
+    poses: dict[str, np.ndarray] = {
+        b: np.asarray(v, dtype=np.float64).copy() for b, v in (base_pose_deltas or {}).items()
+    }
+    stiffness_out: dict[str, float] = {}
+    axis_map = {"x": 0, "y": 1, "z": 2}
+
+    muscles: tuple[MuscleDecl, ...] = program.muscles
+    act_map: dict[str, float] = {}
+    by_insertion_axis: dict[tuple[str, str], list[MuscleDecl]] = {}
+    for m in muscles:
+        a_val = float(np.clip(act_in.get(m.name, 0.0), 0.0, 1.0))
+        act_map[m.name] = a_val
+        by_insertion_axis.setdefault((m.insertion_bone, m.action_axis), []).append(m)
+
+    # 1. Per-axis quasi-static Hill agonist-antagonist joint equilibrium
+    for (bone_name, ax_char), m_group in by_insertion_axis.items():
+        ax_i = axis_map[ax_char]
+        max_a = max(act_map[m.name] for m in m_group)
+        k_passive = max(0.0, 1.0 - max_a)
+        k_active = sum(act_map[m.name] for m in m_group)
+        k_total = max(1e-8, k_passive + k_active)
+        net_drive_ax = sum(act_map[m.name] * float(m.moment_arm_deg) for m in m_group)
+        cur_vec = poses.setdefault(bone_name, np.zeros(3, dtype=np.float64))
+        cur_vec[ax_i] += net_drive_ax / k_total
+        stiffness_out[bone_name] = max(stiffness_out.get(bone_name, 0.0), float(k_total))
+
+    # Enforce anatomical joint_limits before propagating passive tendon pantographs
+    for b_name in list(poses):
+        poses[b_name] = _clamp_pose_vec(b_name, poses[b_name], limits_map)
+
+    # 2. Biarticular passive tendon pantograph couplings (coupled from clamped primary excursion)
+    coupled_counts: dict[tuple[str, str], list[MuscleDecl]] = {}
+    for m in muscles:
+        if m.tendon_coupling is not None:
+            coupled_counts.setdefault((m.insertion_bone, m.action_axis), []).append(m)
+
+    for m in muscles:
+        if m.tendon_coupling is not None:
+            tc = m.tendon_coupling
+            src_vec = poses.get(m.insertion_bone, np.zeros(3, dtype=np.float64))
+            src_angle = float(src_vec[axis_map[m.action_axis]])
+            peer_coupled = coupled_counts[(m.insertion_bone, m.action_axis)]
+            if len(peer_coupled) <= 1:
+                weight = 1.0
+            else:
+                denom = sum(act_map[p.name] for p in peer_coupled)
+                weight = (act_map[m.name] / denom) if denom > 1e-6 else (1.0 / len(peer_coupled))
+            tgt_vec = poses.setdefault(tc.bone, np.zeros(3, dtype=np.float64))
+            tgt_vec[axis_map[tc.axis]] += tc.ratio * src_angle * weight
+
+    for b_name in list(poses):
+        poses[b_name] = _clamp_pose_vec(b_name, poses[b_name], limits_map)
+
+    pose_tuples: dict[str, Vec3] = {
+        b: (float(v[0]), float(v[1]), float(v[2])) for b, v in poses.items()
+    }
+
+    # 3. Pre-bulge posed kinematics to measure exact 3D SE(3) fiber shortening
+    kin_scene = compile_posed_geometry(
+        program,
+        pose_tuples,
+        root_translation_delta=root_translation_delta,
+    )
+
+    inflate_deltas, telemetry = _compute_muscle_bulge_and_telemetry(
+        rest_scene,
+        kin_scene,
+        muscles,
+        act_map,
+    )
 
     final_scene = (
         compile_posed_geometry(
@@ -233,7 +299,7 @@ def evaluate_muscles_at_activations(
         pose_euler_deltas=pose_tuples,
         box_inflate_deltas=inflate_deltas,
         joint_stiffness=stiffness_out,
-        muscle_telemetry=tuple(telemetry),
+        muscle_telemetry=telemetry,
         scene=final_scene,
     )
 
@@ -330,6 +396,7 @@ def solve_look_chain(
         )
         delta_vec = np.array([0.0, yaw_deg, pitch_deg], dtype=np.float64)
 
+    limits_map = _collect_expanded_joint_limits(program)
     n_bones = len(look_chain.bones)
     raw_weights = np.array(
         [look_chain.weight_decay ** (n_bones - 1 - idx) for idx in range(n_bones)],
@@ -338,7 +405,7 @@ def solve_look_chain(
     weights = raw_weights / np.sum(raw_weights)
     for b_name, w in zip(look_chain.bones, weights):
         cur = np.asarray(poses.get(b_name, (0.0, 0.0, 0.0)), dtype=np.float64)
-        upd = cur + w * delta_vec
+        upd = _clamp_pose_vec(b_name, cur + w * delta_vec, limits_map)
         poses[b_name] = (float(upd[0]), float(upd[1]), float(upd[2]))
     return poses
 
@@ -556,16 +623,34 @@ def evaluate_behavior_clip(
             eff_stance[ikd.chain] = in_stance
             eff_step_ids[ikd.chain] = step_id
 
-        final_scene = (
-            compile_posed_geometry(
+        if clip.ik_drives:
+            ik_kin_scene = compile_posed_geometry(
                 program,
                 cur_poses,
-                box_inflate_deltas=ms_res.box_inflate_deltas,
                 root_translation_delta=root_delta,
             )
-            if clip.ik_drives
-            else ms_res.scene
-        )
+            if program.muscles:
+                frame_inflate_deltas, _ = _compute_muscle_bulge_and_telemetry(
+                    rest_scene,
+                    ik_kin_scene,
+                    program.muscles,
+                    acts,
+                )
+            else:
+                frame_inflate_deltas = ms_res.box_inflate_deltas
+            final_scene = (
+                compile_posed_geometry(
+                    program,
+                    cur_poses,
+                    box_inflate_deltas=frame_inflate_deltas,
+                    root_translation_delta=root_delta,
+                )
+                if frame_inflate_deltas
+                else ik_kin_scene
+            )
+        else:
+            frame_inflate_deltas = ms_res.box_inflate_deltas
+            final_scene = ms_res.scene
 
         samples.append(
             BehaviorFrameSample(
@@ -573,7 +658,7 @@ def evaluate_behavior_clip(
                 time_s=t_s,
                 phase=phi,
                 pose_euler_deltas=cur_poses,
-                box_inflate_deltas=ms_res.box_inflate_deltas,
+                box_inflate_deltas=frame_inflate_deltas,
                 root_translation_delta=root_delta,
                 muscle_activations=acts,
                 effector_world_positions=eff_positions,

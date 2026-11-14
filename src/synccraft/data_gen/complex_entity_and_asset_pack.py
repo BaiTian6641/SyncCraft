@@ -67,11 +67,6 @@ from synccraft.kinematics.musculoskeletal import (
     evaluate_muscles_at_activations,
 )
 from synccraft.kinematics.se3_chain import compile_geometry
-from synccraft.world.artist_loop import (
-    analyze_artist_project,
-    build_progressive_from_scratch_trajectory,
-    run_looped_artist_enhancement,
-)
 
 APEX_SEEN_FAMILIES: tuple[str, ...] = (
     "apex_flying_wyvern",
@@ -2061,6 +2056,12 @@ def generate_apex_complex_dataset(
     3. `apex_artist_critique_and_enhance`: Takes an incomplete draft, emits quantitative 5-pillar critique,
        and upgrades it into a 100% SAT- & stance-IK-verified asset.
     """
+    from synccraft.world.artist_loop import (
+        analyze_artist_project,
+        build_progressive_from_scratch_trajectory,
+        run_looped_artist_enhancement,
+    )
+
     rows: list[dict[str, Any]] = []
     family_plan = [
         *((fam, "seen_train", samples_per_seen_family) for fam in APEX_SEEN_FAMILIES),
@@ -2108,13 +2109,17 @@ def generate_apex_complex_dataset(
                     "sample_id": f"apex_{sid_full}",
                     "task_mode": "apex_full_masterwork",
                     **base_meta,
+                    "source_stage": None,
+                    "target_stage": None,
+                    "initial_readiness_score": None,
+                    "readiness_score": round(crit_full.readiness_score, 4),
+                    "critique_json": None,
                     "user_prompt": (
                         f"Design a complete rule-grounded Block-DSL v3.1 {fam.replace('_', ' ')} "
                         f"with articulated bone hierarchy, semantic locators, welded scientific @materials, "
                         f"Hill-type @muscles tendon couplings, @kinematics IK, and swept-SAT @behavior."
                     ),
                     "assistant_dsl": dsl_full,
-                    "readiness_score": round(crit_full.readiness_score, 4),
                 }
             )
 
@@ -2130,13 +2135,15 @@ def generate_apex_complex_dataset(
                     **base_meta,
                     "source_stage": st_src.stage_name,
                     "target_stage": st_dst.stage_name,
+                    "initial_readiness_score": None,
+                    "readiness_score": round(st_dst.readiness_score, 4),
+                    "critique_json": None,
                     "user_prompt": (
                         f"Advance this {fam.replace('_', ' ')} project from {st_src.stage_name} "
                         f"({st_src.box_count} boxes) to {st_dst.stage_name}: {st_dst.description}\n\n"
                         f"```blockdsl\n{st_src.program_dsl}\n```"
                     ),
                     "assistant_dsl": st_dst.program_dsl,
-                    "readiness_score": round(st_dst.readiness_score, 4),
                 }
             )
 
@@ -2149,14 +2156,16 @@ def generate_apex_complex_dataset(
                     "sample_id": f"apex_{sid_loop}",
                     "task_mode": "apex_artist_critique_and_enhance",
                     **base_meta,
+                    "source_stage": None,
+                    "target_stage": None,
                     "initial_readiness_score": loop_res["initial_readiness_score"],
                     "readiness_score": loop_res["final_readiness_score"],
+                    "critique_json": json.dumps(loop_res["history"][0]["critique"], sort_keys=True),
                     "user_prompt": (
                         f"Audit this artist's {fam.replace('_', ' ')} rig across geometry, skeletal limits, "
                         f"surface materials, musculoskeletal tendons, and stance-locked motion, then apply "
                         f"rule-verified upgrades:\n\n```blockdsl\n{stages[2].program_dsl}\n```"
                     ),
-                    "critique_json": json.dumps(loop_res["history"][0]["critique"], sort_keys=True),
                     "assistant_dsl": loop_res["final_program_dsl"],
                 }
             )
@@ -2187,13 +2196,46 @@ def generate_apex_complex_dataset(
             json.dumps(summary, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
-        # Write parquet mirror as well if pyarrow is available
+        # Write unified + train/test_unseen Parquet splits with explicit 23-column schema if pyarrow is available
         try:
             import pyarrow as pa
             import pyarrow.parquet as pq
+        except ImportError:
+            pa = None
+            pq = None
 
-            pq.write_table(pa.Table.from_pylist(rows), out_p / "apex_complex_entities_v3_1.parquet")
-        except Exception:
-            pass
+        if pa is not None and pq is not None:
+            apex_schema = pa.schema(
+                [
+                    ("sample_id", pa.string()),
+                    ("task_mode", pa.string()),
+                    ("family_id", pa.string()),
+                    ("split", pa.string()),
+                    ("seed", pa.int64()),
+                    ("license_spdx", pa.string()),
+                    ("license_track", pa.string()),
+                    ("commercial_weights_eligible", pa.bool_()),
+                    ("default_target_llm", pa.string()),
+                    ("box_count", pa.int64()),
+                    ("bone_count", pa.int64()),
+                    ("locator_count", pa.int64()),
+                    ("muscle_count", pa.int64()),
+                    ("static_audit_passed", pa.bool_()),
+                    ("dynamic_clip_passed", pa.bool_()),
+                    ("max_stance_slip_units", pa.float64()),
+                    ("source_stage", pa.string()),
+                    ("target_stage", pa.string()),
+                    ("initial_readiness_score", pa.float64()),
+                    ("readiness_score", pa.float64()),
+                    ("critique_json", pa.string()),
+                    ("user_prompt", pa.string()),
+                    ("assistant_dsl", pa.string()),
+                ]
+            )
+            train_rows = [r for r in rows if r["split"] == "seen_train"]
+            unseen_rows = [r for r in rows if r["split"] == "unseen_complex_holdout"]
+            pq.write_table(pa.Table.from_pylist(rows, schema=apex_schema), out_p / "apex_complex_entities_v3_1.parquet")
+            pq.write_table(pa.Table.from_pylist(train_rows, schema=apex_schema), out_p / "train.parquet")
+            pq.write_table(pa.Table.from_pylist(unseen_rows, schema=apex_schema), out_p / "test_unseen.parquet")
 
     return {"summary": summary, "rows": rows}

@@ -39,32 +39,39 @@ def _components(scene: Scene) -> list[list[str]]:
 
 
 def _count_authorized_detached_bones(scene: Scene) -> int:
-    """Count child bones explicitly compiled without an attach adjacency edge (detached=true)."""
-    if not scene.bones:
+    """Count box-bearing bones lacking an attach edge to an ancestor box beyond the primary root component."""
+    if not scene.bones or not scene.boxes:
         return 0
+    bone_by_name = {bone.name: bone for bone in scene.bones}
     boxes_by_bone: dict[str, set[str]] = {bone.name: set() for bone in scene.bones}
     for box in scene.boxes:
         if box.bone_name in boxes_by_bone:
             boxes_by_bone[box.bone_name].add(box.name)
-    detached_count = 0
+
+    independent_box_roots = 0
     for bone in scene.bones:
-        if bone.parent_name is None:
-            continue
         child_boxes = boxes_by_bone.get(bone.name, set())
-        parent_boxes = boxes_by_bone.get(bone.parent_name, set())
         if not child_boxes:
+            continue
+        ancestor_boxes: set[str] = set()
+        curr_parent = bone.parent_name
+        while curr_parent is not None and curr_parent in bone_by_name:
+            ancestor_boxes |= boxes_by_bone.get(curr_parent, set())
+            curr_parent = bone_by_name[curr_parent].parent_name
+        if not ancestor_boxes:
+            independent_box_roots += 1
             continue
         has_attach_edge = False
         for pair, reason in scene.adjacency_reasons.items():
             if reason != "attach":
                 continue
             a, b = pair
-            if (a in parent_boxes and b in child_boxes) or (b in parent_boxes and a in child_boxes):
+            if (a in ancestor_boxes and b in child_boxes) or (b in ancestor_boxes and a in child_boxes):
                 has_attach_edge = True
                 break
         if not has_attach_edge:
-            detached_count += 1
-    return detached_count
+            independent_box_roots += 1
+    return max(0, independent_box_roots - 1)
 
 
 def _evaluate_declared_contact(
