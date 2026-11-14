@@ -36,11 +36,20 @@ def oklch_to_srgb(lch):
     return tuple(encode(v) for v in linear)
 
 
-def build_atlas(program, scene, *, max_width=512, padding=1):
-    """Return (descriptor, PNG bytes). Every box face gets a unique padded island.
+def allocate_uv_layout(
+    program,
+    scene,
+    *,
+    max_width=512,
+    padding=1,
+    box_order=None,
+    face_order=None,
+):
+    """Allocate integer padded per-face UV rectangles without baking color.
 
-    texel_density means pixels per 16 model units. Fractional per-face dimensions
-    fail explicitly rather than silently changing texture scale.
+    Keeping layout allocation separate from material evaluation allows repacking
+    UVs (changing island order, max_width, or padding) without altering the
+    underlying rest-space material pattern.
     """
     if type(max_width) is not int or max_width < 8:
         raise ValueError("max_width must be an integer >= 8")
@@ -50,18 +59,34 @@ def build_atlas(program, scene, *, max_width=512, padding=1):
         density = program.meta.texel_density / 16
     except OverflowError as exc:
         raise ValueError("texel_density exceeds the atlas numeric range") from exc
-    colors = {p.name: oklch_to_srgb(p.base_lch) for p in program.palettes}
+
+    boxes_by_name = {b.name: b for b in scene.boxes}
+    if box_order is None:
+        ordered_boxes = list(scene.boxes)
+    else:
+        if set(box_order) != set(boxes_by_name) or len(box_order) != len(boxes_by_name):
+            raise ValueError("box_order must be an exact permutation of scene box names")
+        ordered_boxes = [boxes_by_name[name] for name in box_order]
+
+    default_faces = ("north", "south", "east", "west", "up", "down")
+    if face_order is None:
+        ordered_faces = default_faces
+    else:
+        if set(face_order) != set(default_faces) or len(face_order) != 6:
+            raise ValueError("face_order must be an exact permutation of the six cuboid faces")
+        ordered_faces = tuple(face_order)
+
     x = y = padding
     row_height = 0
     occupied_width = 1
     placements = []
-    faces = {}
-    for box in scene.boxes:
+    faces = {b.name: {} for b in scene.boxes}
+    for box in ordered_boxes:
         sx, sy, sz = map(int, box.size)
         sizes = {"north": (sx, sy), "south": (sx, sy), "east": (sz, sy),
                  "west": (sz, sy), "up": (sx, sz), "down": (sx, sz)}
-        faces[box.name] = {}
-        for face, (u, v) in sizes.items():
+        for face in ordered_faces:
+            u, v = sizes[face]
             fw, fh = u * density, v * density
             if not math.isclose(fw, round(fw)) or not math.isclose(fh, round(fh)):
                 raise ValueError("texel_density produces fractional texels; integer atlas required")
@@ -73,20 +98,42 @@ def build_atlas(program, scene, *, max_width=512, padding=1):
                 y += row_height + 2 * padding
                 row_height = 0
             faces[box.name][face] = [x, y, x + w, y + h]
-            placements.append((x, y, w, h, colors[box.material]))
+            placements.append((box.name, face, x, y, w, h, box.material))
             row_height = max(row_height, h)
             occupied_width = max(occupied_width, x + w + padding)
             x += w + 2 * padding
     if not placements:
         raise ValueError("cannot pack an empty scene")
+
     def pow2(v):
         return 1 << (int(v) - 1).bit_length()
+
     width, height = pow2(occupied_width), pow2(y + row_height + padding)
     if max(width, height) > 8192:
         raise ValueError("diagnostic atlas exceeds 8192-pixel limit; use production packer")
+    return {
+        "width": width,
+        "height": height,
+        "padding": padding,
+        "faces": faces,
+        "placements": placements,
+    }
+
+
+def build_atlas(program, scene, *, max_width=512, padding=1):
+    """Return (descriptor, PNG bytes). Every box face gets a unique padded island.
+
+    texel_density means pixels per 16 model units. Fractional per-face dimensions
+    fail explicitly rather than silently changing texture scale.
+    """
+    layout = allocate_uv_layout(program, scene, max_width=max_width, padding=padding)
+    colors = {p.name: oklch_to_srgb(p.base_lch) for p in program.palettes}
+    width, height = layout["width"], layout["height"]
+    faces = layout["faces"]
     image = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
-    for u, v, w, h, color in placements:
+    for _, _, u, v, w, h, mat_name in layout["placements"]:
+        color = colors[mat_name]
         draw.rectangle((u-padding, v-padding, u+w+padding-1, v+h+padding-1), fill=(*color, 255))
     stream = io.BytesIO()
     image.save(stream, format="PNG", optimize=False)
