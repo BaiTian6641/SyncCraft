@@ -1,14 +1,29 @@
-schema: synccraft.data-policy/0.1
-status: specification_no_dataset_bundled
+schema: synccraft.data-policy/0.2
+status: categorized_assistant_world_model_p1_08_r3
 source_plan_scale_targets:
   static_train: 60000
   dynamic_train: 15000
   synthetic_unseen_total: 1200
   external_gold_total: 50
 pilot_samples_before_scale: 200
-seeds: [17, 29, 43]
+seeds: [17, 29, 43, 2026]
 split_by: family_and_body_plan_before_parameter_sampling
+curriculum_policy:
+  train_val_complexity_tiers:
+    tier_1_simple: [4, 8]
+    tier_2_medium: [9, 15]
+    tier_3_complex: [16, 24]
+    tier_4_masterwork: [25, 42]
+  test_unseen_min_boxes_gate_g2: 16
+  controlled_defect_repair_ratio_train: 0.05
+  batch_statistical_qc_required: true
+reserved_extension_tracks:
+  human_gathered_real_corpus:
+    status: gathering_external_permissive_assets_deferred
+    macro_domain: humanoid
+    notes: Reserved for second-stage real human model dataset after permissive corpus gathering completes.
 seen_static_families:
+  # Artificial (9)
   - straight_blade_sword
   - single_edge_blade
   - battle_axe
@@ -16,27 +31,85 @@ seen_static_families:
   - war_hammer
   - simple_wood_bow
   - furniture_table_chair_chest_cabinet
+  - clockwork_pendulum_clock
+  - alchemical_workbench_apparatus
+  # Industrial, Mechanical Engineering & Vehicles (11)
   - gearbox
+  - articulated_robotic_arm
+  - industrial_turbine_generator
+  - piston_crank_engine
+  - cnc_milling_press
+  - centrifugal_pump_valve_skid
+  - wheeled_haul_truck
+  - tracked_excavator
+  - steam_rail_locomotive
+  - twin_rotor_helicopter_drone
+  - cargo_tugboat_vessel
+  # Natural (4)
   - ancient_canopy_tree
   - crystalline_geode_outcrop
   - coral_fungal_colony
-  - articulated_robotic_arm
-  - industrial_turbine_generator
+  - pine_conifer_evergreen
+  # Building / Architecture (4)
   - modular_timber_stone_building
   - tiered_pagoda_watchtower
   - arched_stone_bridge_gate
+  - waterwheel_millhouse
+  # Humanoid (1)
+  - humanoid_biped
+  # Animal (3)
+  - dog_horse_quadruped
+  - bird
+  - articulated_manta_shark
+  # Dragon / Mythic & Prehistoric Draconic Creatures (8)
+  - winged_western_dragon
+  - quadruped_armored_drake
+  - eastern_lung_dragon
+  - bipedal_wyvern
+  - forelimb_lindworm
+  - feathered_raptor
+  - winged_amphithere
+  - multi_headed_hydra
 unseen_static_families:
+  # Artificial (3)
   - mechanical_crossbow
   - hand_lantern
-  - tripod_telescope
-  - folding_windmill
-  - anvil_forge
   - floating_ring_staff
+  # Natural (1)
   - weeping_bonsai_arch
+  # Industrial & Vehicles (5)
+  - tripod_telescope
+  - anvil_forge
   - hydraulic_gantry_crane
+  - articulated_forklift_loader
+  - submersible_rov_craft
+  # Building / Architecture (2)
+  - folding_windmill
   - coastal_lighthouse_keep
-seen_body_plans: [humanoid_biped, dog_horse_quadruped, bird, winged_western_dragon]
-unseen_body_plans: [hexapod_beetle, heavy_tail_tyrannosaur, segmented_sea_dragon]
+  # Animal (2)
+  - hexapod_beetle
+  - heavy_tail_tyrannosaur
+  # Dragon (2)
+  - segmented_sea_dragon
+  - crowned_zilant
+seen_body_plans:
+  - humanoid_biped
+  - dog_horse_quadruped
+  - bird
+  - articulated_manta_shark
+  - winged_western_dragon
+  - quadruped_armored_drake
+  - eastern_lung_dragon
+  - bipedal_wyvern
+  - forelimb_lindworm
+  - feathered_raptor
+  - winged_amphithere
+  - multi_headed_hydra
+unseen_body_plans:
+  - hexapod_beetle
+  - heavy_tail_tyrannosaur
+  - segmented_sea_dragon
+  - crowned_zilant
 prohibited_training_sources:
   - original_mojang_models_and_textures
   - third_party_ip_derivatives_without_suitable_rights
@@ -57,7 +130,7 @@ required_row_fields:
   - target_profile_and_version
   - seed
 shard_target_megabytes: 500
-shard_format: choose_after_pilot_parquet_or_arrow
+shard_format: zstd_parquet_and_jsonl_batches
 # 800 reviewed CC0 icons is a source-plan ambition, not an existing collection.
 reviewed_icon_inventory_present: false
 external_gold_inventory_present: false

@@ -69,6 +69,8 @@ GEOMETRY_FAMILIES: tuple[str, ...] = (
     "canopy_branch_tree",
     "pagoda_eave_roof",
     "dragon_wing_rig",
+    "articulated_vehicle_truck",
+    "serpentine_lung_dragon",
 )
 
 ACTION_FAMILIES: tuple[str, ...] = (
@@ -92,6 +94,8 @@ COMPOSITIONAL_HELDOUT_TRIPLES: frozenset[tuple[str, str, str]] = frozenset({
     ("canopy_branch_tree", "lichen_biofilm", "pose_ik_reposition"),
     ("pagoda_eave_roof", "weathered_stone", "biofilm_damp_colonization"),
     ("dragon_wing_rig", "keratin_scales", "sliding_hinge_wear"),
+    ("articulated_vehicle_truck", "painted_metal", "sliding_hinge_wear"),
+    ("serpentine_lung_dragon", "thin_film_iridescence", "pose_ik_reposition"),
 })
 
 ALL_TEN_MATERIALS: tuple[str, ...] = (
@@ -124,7 +128,7 @@ def _build_family_world(
     base_l = float(rng.uniform(0.42, 0.72))
     base_c = float(rng.uniform(0.04, 0.16))
 
-    is_entity = geo_family in ("quadruped_creature", "winged_sentinel", "dragon_wing_rig")
+    is_entity = geo_family in ("quadruped_creature", "winged_sentinel", "dragon_wing_rig", "serpentine_lung_dragon")
     archetype = "entity" if is_entity else "block_multipart"
     profile = "bedrock_entity" if is_entity else "bbmodel_5"
 
@@ -273,6 +277,49 @@ def _build_family_world(
             ],
         )
         target_box = "thorax_armor"
+    elif geo_family == "articulated_vehicle_truck":
+        root = Bone(
+            "chassis_root",
+            pivot_local=(0.0, 4.0, 0.0),
+            items=[
+                Box("chassis_frame", (sx + 1, 3, sz + 3), "primary_mat"),
+                Box("cab_hull", (sx, sy, 4), "secondary_mat", place=Place("chassis_frame", (0.0, 1.0, -0.6), (0.0, -1.0, 0.0))),
+                Bone(
+                    "joint_upper",
+                    attach=Attach("chassis_frame", (0.0, 1.0, 0.8), (0.0, -1.0, 0.6)),
+                    items=[
+                        Box("dump_bed", (sx + 1, max(3, sy - 1), limb_len + 2), "primary_mat"),
+                        Bone(
+                            "joint_lower",
+                            attach=Attach("dump_bed", (0.0, 0.5, 1.0), (0.0, 1.0, -1.0)),
+                            items=[Box("tailgate_plate", (sx, 2, 1), "secondary_mat")],
+                        ),
+                    ],
+                ),
+            ],
+        )
+        target_box = "chassis_frame"
+    elif geo_family == "serpentine_lung_dragon":
+        root = Bone(
+            "lung_spine_root",
+            pivot_local=(0.0, 14.0, 0.0),
+            items=[
+                Box("anterior_coil", (sx, sy, sz + 3), "primary_mat"),
+                Bone(
+                    "joint_upper",
+                    attach=Attach("anterior_coil", (0.0, 0.0, 1.0), (0.0, 0.0, -1.0)),
+                    items=[
+                        Box("mid_coil", (max(3, sx - 1), max(3, sy - 1), limb_len + 2), "primary_mat"),
+                        Bone(
+                            "joint_lower",
+                            attach=Attach("mid_coil", (0.0, 0.0, 1.0), (0.0, 0.0, -1.0)),
+                            items=[Box("plume_tail", (max(2, sx - 2), max(2, sy - 2), limb_len + 2), "secondary_mat")],
+                        ),
+                    ],
+                ),
+            ],
+        )
+        target_box = "anterior_coil"
     else:  # turret_gantry
         root = Bone(
             "gantry_root",

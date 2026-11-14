@@ -1,14 +1,14 @@
-"""Combinatorial multi-domain Block-DSL v3 procedural asset generators & shard builder (P1-08 / ADR 0004).
+"""Categorized multi-domain Block-DSL v3 assistant world-model dataset generators (P1-08-r3 / ADR 0005).
 
 Builds 100% original, typed-AST, SE(3)-compiled, 15-axis SAT + P1-02 physical-contact
-verified 3D articulated block models across 7 macro-domains and 32 disjoint families:
-- 20 Seen families (Artificial, Natural, Industrial, Building, Humanoid, Animal, Dragon;
-  12-28 lowered boxes, 3-13 bones per asset)
-- 12 Unseen held-out families (>= 16 lowered boxes per asset for Gate G2)
+verified 3D articulated block models across 7 macro-domains, 21 categories, and 55 disjoint families:
+- 40 Seen families (Artificial, Natural, Industrial & Vehicles, Building, Humanoid, Animal,
+  and Fancy Mythic/Prehistoric Dragon Pantheon; 4-tier simple-to-complex curriculum 4-35 boxes)
+- 15 Unseen held-out families (strictly >= 16 lowered boxes per asset for Gate G2)
 
-Applies Halton low-discrepancy sampling, 6-register bijective identifier remapping,
-valid DAG topological declaration permutation, stateful @materials/@style PBR/RD binding,
-and Text2CAD-style 4-level multi-granularity prompts to prevent template overfitting.
+Couples typed Block-DSL geometry with concise stateful @materials/@style PBR/Gray-Scott Turing
+programs, swept-SAT verified @animation_plan bone channels, 4 assistant task modes, and a ~5%
+controlled defect-diagnosis-and-repair supervision mix.
 """
 
 from __future__ import annotations
@@ -43,6 +43,13 @@ from synccraft.dsl.ast_nodes import (
 )
 from synccraft.dsl.parser import DSLParseError, format_program, parse_program
 from synccraft.kinematics.se3_chain import Scene, compile_geometry
+from .curriculum_and_assistant import (
+    build_assistant_supervision_turn,
+    build_controlled_defect_repair_pair,
+    coarsen_program_to_tier,
+    ensure_concise_texture_program,
+    synthesize_verified_animation_spec,
+)
 from .diversity_engine import (
     MACRO_DOMAINS,
     NAMING_REGISTERS,
@@ -51,64 +58,23 @@ from .diversity_engine import (
     diversify_program_ast,
     summarize_corpus_diversity,
 )
-from .multi_domain_taxonomy import (
-    ENTITY_BODY_PLANS,
-    FAMILY_DOMAINS,
-    MULTI_DOMAIN_DISPATCH,
+from .dragon_and_fauna_expansion import DRAGON_AND_FAUNA_DISPATCH
+from .industrial_and_vehicle_expansion import INDUSTRIAL_AND_VEHICLE_DISPATCH
+from .multi_domain_taxonomy import MULTI_DOMAIN_DISPATCH
+from .taxonomy_catalog import (
+    ALL_CATEGORIES,
+    CATALOG_ENTITY_BODY_PLANS,
+    CATALOG_FAMILY_DOMAINS,
+    CATALOG_SEEN_FAMILIES,
+    CATALOG_UNSEEN_FAMILIES,
+    RESERVED_EXTENSION_TRACKS,
+    get_taxonomy_metadata,
 )
 
-GENERATOR_REVISION = "synccraft-v3.0-multidomain-p1-08-r2"
+GENERATOR_REVISION = "synccraft-v3.0-assistant-world-p1-08-r3"
 
-SEEN_STATIC_FAMILIES: tuple[str, ...] = (
-    # Artificial (7)
-    "straight_blade_sword",
-    "single_edge_blade",
-    "battle_axe",
-    "spear",
-    "war_hammer",
-    "simple_wood_bow",
-    "furniture_table_chair_chest_cabinet",
-    # Industrial (3)
-    "gearbox",
-    "articulated_robotic_arm",
-    "industrial_turbine_generator",
-    # Natural (3)
-    "ancient_canopy_tree",
-    "crystalline_geode_outcrop",
-    "coral_fungal_colony",
-    # Building / Architecture (3)
-    "modular_timber_stone_building",
-    "tiered_pagoda_watchtower",
-    "arched_stone_bridge_gate",
-    # Humanoid (1)
-    "humanoid_biped",
-    # Animal (2)
-    "dog_horse_quadruped",
-    "bird",
-    # Dragon (1)
-    "winged_western_dragon",
-)
-
-UNSEEN_STATIC_FAMILIES: tuple[str, ...] = (
-    # Artificial (3)
-    "mechanical_crossbow",
-    "hand_lantern",
-    "floating_ring_staff",
-    # Natural (1)
-    "weeping_bonsai_arch",
-    # Industrial (3)
-    "tripod_telescope",
-    "anvil_forge",
-    "hydraulic_gantry_crane",
-    # Building / Architecture (2)
-    "folding_windmill",
-    "coastal_lighthouse_keep",
-    # Animal (2)
-    "hexapod_beetle",
-    "heavy_tail_tyrannosaur",
-    # Dragon (1)
-    "segmented_sea_dragon",
-)
+SEEN_STATIC_FAMILIES: tuple[str, ...] = CATALOG_SEEN_FAMILIES
+UNSEEN_STATIC_FAMILIES: tuple[str, ...] = CATALOG_UNSEEN_FAMILIES
 
 SEEN_FAMILIES: tuple[str, ...] = SEEN_STATIC_FAMILIES
 UNSEEN_FAMILIES: tuple[str, ...] = UNSEEN_STATIC_FAMILIES
@@ -178,30 +144,30 @@ DATASET_PRESETS: dict[str, DatasetPreset] = {
     ),
     "pilot_200": DatasetPreset(
         name="pilot_200",
-        train_per_seen_family=9,
+        train_per_seen_family=4,
         val_per_seen_family=1,
-        test_per_unseen_family=5,
+        test_per_unseen_family=4,
         hf_size_category="n<1K",
     ),
     "bakeoff_8k": DatasetPreset(
         name="bakeoff_8k",
-        train_per_seen_family=360,
-        val_per_seen_family=40,
-        test_per_unseen_family=50,
+        train_per_seen_family=180,
+        val_per_seen_family=20,
+        test_per_unseen_family=40,
         hf_size_category="1K<n<10K",
     ),
     "full_60k": DatasetPreset(
         name="full_60k",
-        train_per_seen_family=2700,
-        val_per_seen_family=300,
-        test_per_unseen_family=100,
+        train_per_seen_family=1350,
+        val_per_seen_family=150,
+        test_per_unseen_family=80,
         hf_size_category="10K<n<100K",
     ),
     "full_75k": DatasetPreset(
         name="full_75k",
-        train_per_seen_family=3375,
-        val_per_seen_family=375,
-        test_per_unseen_family=200,
+        train_per_seen_family=1685,
+        val_per_seen_family=190,
+        test_per_unseen_family=160,
         hf_size_category="10K<n<100K",
     ),
 }
@@ -1771,6 +1737,8 @@ _FAMILY_DISPATCH = {
     "anvil_forge": _gen_anvil_forge,
     "floating_ring_staff": _gen_floating_ring_staff,
     **MULTI_DOMAIN_DISPATCH,
+    **DRAGON_AND_FAUNA_DISPATCH,
+    **INDUSTRIAL_AND_VEHICLE_DISPATCH,
 }
 
 _IDENT_SCAN_RE = re.compile(r"\b(?:box|bone)\s+([A-Za-z_][A-Za-z0-9_]*)")
@@ -1802,9 +1770,23 @@ def verify_and_package_candidate(
     run_exporter_check: bool = False,
 ) -> dict[str, Any]:
     """Generate, diversify, compile, 15-axis SAT + P1-02 contact-audit, and package a verified row."""
-    min_boxes = require_min_boxes if require_min_boxes is not None else (16 if split == "test_unseen" else 12)
-    domain = FAMILY_DOMAINS.get(family_id, "artificial")
-    body_plan_id = ENTITY_BODY_PLANS.get(family_id)
+    tier_slot = int(variant_index) % 5
+    curriculum_tier_request: str | None = None
+    if require_min_boxes is not None:
+        min_boxes = require_min_boxes
+    elif split == "test_unseen":
+        min_boxes = 16
+    elif tier_slot == 3:
+        curriculum_tier_request = "tier_1_simple"
+        min_boxes = 4
+    elif tier_slot == 4:
+        curriculum_tier_request = "tier_2_medium"
+        min_boxes = 4
+    else:
+        min_boxes = 12
+
+    domain = CATALOG_FAMILY_DOMAINS.get(family_id, "artificial")
+    body_plan_id = CATALOG_ENTITY_BODY_PLANS.get(family_id)
     last_error = "uninitialized"
 
     for attempt in range(max_attempts):
@@ -1820,6 +1802,9 @@ def verify_and_package_candidate(
                 domain=domain,
                 variant_index=variant_index,
             )
+            if curriculum_tier_request is not None:
+                program = coarsen_program_to_tier(program, curriculum_tier_request)
+
             validate_program(program)
             canonical_dsl = format_program(program)
             # Round-trip parse guarantee on the canonical serialized program
@@ -1890,6 +1875,41 @@ def verify_and_package_candidate(
                 prompt_style=prompt_style,
             )
 
+            tax_meta = get_taxonomy_metadata(family_id, box_count=len(scene.boxes))
+            assist_rng = random.Random(numeric_seed ^ 0x2B4D_8899)
+            textured_prog, tex_recipe = ensure_concise_texture_program(
+                reparsed, family_id=family_id, rng=assist_rng
+            )
+            anim_spec = synthesize_verified_animation_spec(
+                reparsed, scene, family_id=family_id, rng=assist_rng
+            )
+
+            fam_salt = SEEN_STATIC_FAMILIES.index(family_id) if family_id in SEEN_STATIC_FAMILIES else 0
+            coarse_prog: Program | None = None
+            defect_bundle: dict[str, Any] | None = None
+            quality_label = "verified_clean"
+            task_mode = "create_full_asset"
+
+            if split == "train" and (int(variant_index) * 7 + fam_salt) % 20 == 19:
+                task_mode = "diagnose_and_repair_defect"
+                quality_label = "controlled_defect_with_repair"
+                defect_bundle = build_controlled_defect_repair_pair(textured_prog, rng=assist_rng)
+            elif split in ("train", "val") and tier_slot == 1 and len(scene.boxes) >= 12:
+                task_mode = "coarse_to_fine_upgrade"
+                coarse_prog = coarsen_program_to_tier(textured_prog, "tier_1_simple")
+            elif split in ("train", "val") and tier_slot == 2:
+                task_mode = "texture_and_animate_rig"
+
+            sup_turn = build_assistant_supervision_turn(
+                task_mode=task_mode,
+                base_prompt=prompt_text,
+                clean_program=textured_prog,
+                coarse_program=coarse_prog,
+                animation_spec=anim_spec,
+                texture_recipe=tex_recipe,
+                defect_bundle=defect_bundle,
+            )
+
             dsl_sha256 = hashlib.sha256(canonical_dsl.encode("utf-8")).hexdigest()
             asset_id = f"{family_id}_{split}_{variant_index:05d}_s{numeric_seed % 100000:05d}"
             profile_version_tag = (
@@ -1905,6 +1925,12 @@ def verify_and_package_candidate(
                 "generator_revision": GENERATOR_REVISION,
                 "generator_parameters": {
                     "domain": domain,
+                    "category": str(tax_meta["category"]),
+                    "sub_category": str(tax_meta["sub_category"]),
+                    "complexity_tier": str(tax_meta["complexity_tier"]),
+                    "motion_archetype": str(tax_meta["motion_archetype"]),
+                    "assistant_task_mode": task_mode,
+                    "quality_label": quality_label,
                     "preset_substyle": str(meta_info["substyle"]),
                     "archetype": str(reparsed.meta.archetype),
                     "target_profile": str(reparsed.meta.target_profile),
@@ -1915,7 +1941,7 @@ def verify_and_package_candidate(
                     "joint_angle_deg": float(meta_info["joint_angle_deg"]),
                     "has_mirror_x": bool(meta_info["has_mirror_x"]),
                     "has_detached_bone": bool(meta_info["has_detached_bone"]),
-                    "material_theme": str(meta_info["material_theme"]),
+                    "material_theme": "+".join(p.name for p in reparsed.palettes[:3]) or str(meta_info["material_theme"]),
                     "naming_register": str(div_info["naming_register"]),
                     "declarations_permuted": bool(div_info["declarations_permuted"]),
                     "has_materials_block": bool(div_info["has_materials_block"]),
@@ -1929,7 +1955,15 @@ def verify_and_package_candidate(
                 "prompt_and_provenance": {
                     "prompt": prompt_text,
                     "prompt_style": prompt_style,
+                    "assistant_prompt": sup_turn["assistant_prompt"],
+                    "assistant_completion": sup_turn["assistant_completion"],
+                    "animation_plan_json": json.dumps(anim_spec, sort_keys=True),
+                    "texture_recipe_json": json.dumps(tex_recipe, sort_keys=True),
+                    "defect_type": defect_bundle["defect_type"] if defect_bundle is not None else "none",
                     "domain": domain,
+                    "category": str(tax_meta["category"]),
+                    "sub_category": str(tax_meta["sub_category"]),
+                    "complexity_tier": str(tax_meta["complexity_tier"]),
                     "origin": "synccraft_procedural_ast_grammar_generator",
                     "repository": "https://github.com/BaiTian6641/SyncCraft",
                     "authors": "SyncCraft Contributors (BaiTian6641)",
@@ -1952,6 +1986,8 @@ def verify_and_package_candidate(
                     "physical_components": int(len(audit_res["physical_connected_components"])),
                     "boxes": int(len(scene.boxes)),
                     "bones": int(len(scene.bones)),
+                    "animation_swept_sat_passed": True,
+                    "animation_channels": int(len(anim_spec["channels"])),
                     "java_bounds_verified": bool(not is_entity),
                 },
                 "target_profile_and_version": profile_version_tag,
@@ -2095,6 +2131,10 @@ def build_verified_dataset(
 
     split_counts = {"train": 0, "val": 0, "test_unseen": 0}
     family_counts: dict[str, int] = {}
+    category_counts: dict[str, int] = {}
+    tier_counts: dict[str, int] = {}
+    task_mode_counts: dict[str, int] = {}
+    quality_label_counts: dict[str, int] = {}
     box_counts: list[int] = []
     bone_counts: list[int] = []
     domains_seen: list[str] = []
@@ -2135,6 +2175,14 @@ def build_verified_dataset(
 
             gp = row["generator_parameters"]
             domains_seen.append(gp["domain"])
+            cat = gp["category"]
+            tier = gp["complexity_tier"]
+            mode = gp["assistant_task_mode"]
+            q_lbl = gp["quality_label"]
+            category_counts[cat] = category_counts.get(cat, 0) + 1
+            tier_counts[tier] = tier_counts.get(tier, 0) + 1
+            task_mode_counts[mode] = task_mode_counts.get(mode, 0) + 1
+            quality_label_counts[q_lbl] = quality_label_counts.get(q_lbl, 0) + 1
             prompt_styles_seen.append(row["prompt_and_provenance"]["prompt_style"])
             registers_seen.append(gp["naming_register"])
             qd_cells_seen.append(gp["qd_cell"])
@@ -2206,7 +2254,7 @@ def build_verified_dataset(
     )
 
     manifest_payload: dict[str, Any] = {
-        "schema": "synccraft.dataset-manifest/1.2",
+        "schema": "synccraft.dataset-manifest/1.3",
         "preset": preset.name,
         "hf_size_category": preset.hf_size_category,
         "generator_revision": GENERATOR_REVISION,
@@ -2215,8 +2263,14 @@ def build_verified_dataset(
         "total_records": total_records,
         "split_counts": split_counts,
         "family_counts": family_counts,
+        "category_counts": dict(sorted(category_counts.items())),
+        "complexity_tier_counts": dict(sorted(tier_counts.items())),
+        "assistant_task_mode_counts": dict(sorted(task_mode_counts.items())),
+        "quality_label_counts": dict(sorted(quality_label_counts.items())),
         "macro_domains": list(MACRO_DOMAINS),
+        "categories": list(ALL_CATEGORIES),
         "naming_registers": list(NAMING_REGISTERS),
+        "reserved_extension_tracks": RESERVED_EXTENSION_TRACKS,
         "complexity_stats": complexity_stats,
         "diversity_stats": diversity_stats,
         "shard_file": "train.jsonl",

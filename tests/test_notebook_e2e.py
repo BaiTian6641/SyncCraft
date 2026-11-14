@@ -51,34 +51,57 @@ SEEN_STATIC_FAMILIES = [
     "war_hammer",
     "simple_wood_bow",
     "furniture_table_chair_chest_cabinet",
+    "clockwork_pendulum_clock",
+    "alchemical_workbench_apparatus",
     "gearbox",
+    "articulated_robotic_arm",
+    "industrial_turbine_generator",
+    "piston_crank_engine",
+    "cnc_milling_press",
+    "centrifugal_pump_valve_skid",
+    "wheeled_haul_truck",
+    "tracked_excavator",
+    "steam_rail_locomotive",
+    "twin_rotor_helicopter_drone",
+    "cargo_tugboat_vessel",
     "ancient_canopy_tree",
     "crystalline_geode_outcrop",
     "coral_fungal_colony",
-    "articulated_robotic_arm",
-    "industrial_turbine_generator",
+    "pine_conifer_evergreen",
     "modular_timber_stone_building",
     "tiered_pagoda_watchtower",
     "arched_stone_bridge_gate",
+    "waterwheel_millhouse",
     "humanoid_biped",
     "dog_horse_quadruped",
     "bird",
+    "articulated_manta_shark",
     "winged_western_dragon",
+    "quadruped_armored_drake",
+    "eastern_lung_dragon",
+    "bipedal_wyvern",
+    "forelimb_lindworm",
+    "feathered_raptor",
+    "winged_amphithere",
+    "multi_headed_hydra",
 ]
 
 UNSEEN_STATIC_FAMILIES = [
     "mechanical_crossbow",
     "hand_lantern",
-    "tripod_telescope",
-    "folding_windmill",
-    "anvil_forge",
     "floating_ring_staff",
     "weeping_bonsai_arch",
+    "tripod_telescope",
+    "anvil_forge",
     "hydraulic_gantry_crane",
+    "articulated_forklift_loader",
+    "submersible_rov_craft",
+    "folding_windmill",
     "coastal_lighthouse_keep",
     "hexapod_beetle",
     "heavy_tail_tyrannosaur",
     "segmented_sea_dragon",
+    "crowned_zilant",
 ]
 
 MANDATORY_ROW_FIELDS = [
@@ -1314,8 +1337,10 @@ class TestNotebookTier4RealWorldScenarios(unittest.TestCase):
                     self.assertIn(expected_trap, rejected_ids)
 
                 c_stats = manifest_json.get("complexity_stats", {})
-                self.assertGreaterEqual(c_stats.get("min_boxes", 0), 12)
-                self.assertGreaterEqual(c_stats.get("min_bones", 0), 3)
+                self.assertGreaterEqual(c_stats.get("min_boxes", 0), 4)
+                self.assertGreaterEqual(c_stats.get("max_boxes", 0), 25)
+                self.assertGreaterEqual(c_stats.get("min_bones", 0), 1)
+                self.assertGreaterEqual(c_stats.get("max_bones", 0), 8)
                 for row in manifest_json.get("rows", []):
                     prov = row.get("prompt_and_provenance", {})
                     self.assertIsInstance(prov, dict)

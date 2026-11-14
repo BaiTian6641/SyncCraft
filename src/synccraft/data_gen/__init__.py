@@ -1,5 +1,21 @@
-"""Procedural multi-domain Block-DSL v3 dataset generation and multi-core SAT/P1-02 shard builder."""
+"""Procedural multi-domain Block-DSL v3 dataset generation, batch QC, and multi-core SAT/P1-02 shard builder."""
 
+from .batch_pipeline import (
+    compute_batch_statistical_qc,
+    extract_animation_spec_from_row,
+    generate_dataset_batches,
+    render_batch_inspection_sheet,
+    render_row_visual_triptych,
+)
+from .curriculum_and_assistant import (
+    ASSISTANT_TASK_MODES,
+    apply_animation_keyframe,
+    build_assistant_supervision_turn,
+    build_controlled_defect_repair_pair,
+    coarsen_program_to_tier,
+    ensure_concise_texture_program,
+    synthesize_verified_animation_spec,
+)
 from .diversity_engine import (
     MACRO_DOMAINS,
     NAMING_REGISTERS,
@@ -10,7 +26,6 @@ from .diversity_engine import (
     halton_vector,
     summarize_corpus_diversity,
 )
-from .multi_domain_taxonomy import ENTITY_BODY_PLANS, FAMILY_DOMAINS
 from .static_families import (
     DATASET_PRESETS,
     GENERATOR_REVISION,
@@ -25,8 +40,23 @@ from .static_families import (
     generate_candidate_for_family,
     verify_and_package_candidate,
 )
+from .taxonomy_catalog import (
+    ALL_CATEGORIES,
+    CATALOG_ENTITY_BODY_PLANS as ENTITY_BODY_PLANS,
+    CATALOG_FAMILY_DOMAINS as FAMILY_DOMAINS,
+    COMPLEXITY_TIERS,
+    RESERVED_EXTENSION_TRACKS,
+    TAXONOMY_BY_FAMILY,
+    TAXONOMY_ENTRIES,
+    TaxonomyEntry,
+    classify_complexity_tier,
+    get_taxonomy_metadata,
+)
 
 __all__ = [
+    "ALL_CATEGORIES",
+    "ASSISTANT_TASK_MODES",
+    "COMPLEXITY_TIERS",
     "DATASET_PRESETS",
     "ENTITY_BODY_PLANS",
     "FAMILY_DOMAINS",
@@ -34,19 +64,36 @@ __all__ = [
     "MACRO_DOMAINS",
     "MANDATORY_ROW_FIELDS",
     "NAMING_REGISTERS",
+    "RESERVED_EXTENSION_TRACKS",
     "SEEN_FAMILIES",
     "SEEN_STATIC_FAMILIES",
     "SYNCCRAFT_ATTRIBUTION",
+    "TAXONOMY_BY_FAMILY",
+    "TAXONOMY_ENTRIES",
     "UNSEEN_FAMILIES",
     "UNSEEN_STATIC_FAMILIES",
     "DatasetPreset",
+    "TaxonomyEntry",
+    "apply_animation_keyframe",
+    "build_assistant_supervision_turn",
+    "build_controlled_defect_repair_pair",
     "build_verified_dataset",
+    "classify_complexity_tier",
+    "coarsen_program_to_tier",
     "compose_multilevel_prompt",
+    "compute_batch_statistical_qc",
     "compute_qd_signature",
     "diversify_program_ast",
+    "ensure_concise_texture_program",
+    "extract_animation_spec_from_row",
     "generate_candidate_for_family",
+    "generate_dataset_batches",
+    "get_taxonomy_metadata",
     "halton_scalar",
     "halton_vector",
+    "render_batch_inspection_sheet",
+    "render_row_visual_triptych",
     "summarize_corpus_diversity",
+    "synthesize_verified_animation_spec",
     "verify_and_package_candidate",
 ]

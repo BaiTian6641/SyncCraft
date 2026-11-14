@@ -187,25 +187,38 @@ class TestP102PhysicalContactAudit(unittest.TestCase):
 
 
 class TestP108ComplexStaticGenerators(unittest.TestCase):
-    """Verify P1-08 / ADR 0004 7-domain complex asset generators, diversity engine, and sharded builder."""
+    """Verify P1-08-r3 / ADR 0005 55-family categorized generators, curriculum, and batch QC."""
 
-    def test_all_32_families_meet_complexity_export_and_feature_contracts(self):
-        """Every seen family (20) has >=12 boxes & >=3 bones; every unseen family (12) has >=16 boxes."""
-        self.assertEqual(len(SEEN_STATIC_FAMILIES), 20)
-        self.assertEqual(len(UNSEEN_STATIC_FAMILIES), 12)
+    def test_all_55_families_meet_complexity_export_and_feature_contracts(self):
+        """Every seen family (40) covers simple-to-complex tiers; every unseen family (15) has >=16 boxes."""
+        self.assertEqual(len(SEEN_STATIC_FAMILIES), 40)
+        self.assertEqual(len(UNSEEN_STATIC_FAMILIES), 15)
         observed_mirror = False
         observed_detached = False
         observed_java_profile = False
         observed_entity_body_plan = False
         observed_domains: set[str] = set()
+        observed_tiers: set[str] = set()
 
         for fam in SEEN_STATIC_FAMILIES:
-            for v_idx in range(3):
+            for v_idx in range(5):
                 row = verify_and_package_candidate(fam, split="train", variant_index=v_idx, run_exporter_check=(v_idx == 0))
                 boxes = row["audit_version_and_results"]["boxes"]
                 bones = row["audit_version_and_results"]["bones"]
-                self.assertGreaterEqual(boxes, 12, f"{fam} v{v_idx} had only {boxes} boxes")
-                self.assertGreaterEqual(bones, 3, f"{fam} v{v_idx} had only {bones} bones")
+                tier = row["generator_parameters"]["complexity_tier"]
+                observed_tiers.add(tier)
+                if v_idx < 3:
+                    self.assertGreaterEqual(boxes, 12, f"{fam} v{v_idx} had only {boxes} boxes")
+                    self.assertGreaterEqual(bones, 3, f"{fam} v{v_idx} had only {bones} bones")
+                elif v_idx == 3:
+                    self.assertGreaterEqual(boxes, 4, f"{fam} tier_1_simple v{v_idx} had {boxes} < 4 boxes")
+                    self.assertLessEqual(boxes, 10, f"{fam} tier_1_simple v{v_idx} had {boxes} > 10 boxes")
+                else:
+                    self.assertGreaterEqual(boxes, 6, f"{fam} tier_2_medium v{v_idx} had {boxes} < 6 boxes")
+                    self.assertLessEqual(boxes, 16, f"{fam} tier_2_medium v{v_idx} had {boxes} > 16 boxes")
+                # Assistant completion (including trailing @animation_plan comment & repair header) must parse cleanly
+                parsed_assist = parse_program(row["prompt_and_provenance"]["assistant_completion"])
+                self.assertEqual(len(compile_geometry(parsed_assist).boxes), boxes)
                 observed_domains.add(row["generator_parameters"]["domain"])
                 if row["generator_parameters"]["has_mirror_x"]:
                     observed_mirror = True
@@ -219,6 +232,7 @@ class TestP108ComplexStaticGenerators(unittest.TestCase):
                 row = verify_and_package_candidate(fam, split="test_unseen", variant_index=v_idx, run_exporter_check=(v_idx == 0))
                 boxes = row["audit_version_and_results"]["boxes"]
                 self.assertGreaterEqual(boxes, 16, f"Unseen {fam} v{v_idx} had {boxes} < 16 boxes")
+                self.assertEqual(row["generator_parameters"]["quality_label"], "verified_clean")
                 observed_domains.add(row["generator_parameters"]["domain"])
                 if row["generator_parameters"]["has_detached_bone"]:
                     observed_detached = True
@@ -230,13 +244,16 @@ class TestP108ComplexStaticGenerators(unittest.TestCase):
                     self.assertGreaterEqual(len(export_java(sc, profile="java_modern", atlas=atlas)["elements"]), 16)
 
         self.assertEqual(observed_domains, set(MACRO_DOMAINS))
+        self.assertEqual(observed_tiers, {"tier_1_simple", "tier_2_medium", "tier_3_complex", "tier_4_masterwork"})
         self.assertTrue(observed_mirror)
         self.assertTrue(observed_detached)
         self.assertTrue(observed_java_profile)
         self.assertTrue(observed_entity_body_plan)
 
     def test_pilot_200_preset_deduplication_isolation_diversity_and_uniform_schema(self):
-        """Verify 260-row pilot_200 preset produces 100% unique hashes, 7-domain diversity, and uniform nested keys."""
+        """Verify 260-row pilot_200 preset produces 100% unique hashes, 21 categories, 4 tiers, 5% repair mix, and uniform keys."""
+        from synccraft.data_gen.taxonomy_catalog import ALL_CATEGORIES
+
         self.assertEqual(DATASET_PRESETS["full_60k"].total_seen, 60_000)
         self.assertEqual(DATASET_PRESETS["full_60k"].total_unseen, 1_200)
         self.assertEqual(DATASET_PRESETS["full_60k"].total_rows, 61_200)
@@ -249,7 +266,22 @@ class TestP108ComplexStaticGenerators(unittest.TestCase):
             manifest = build_verified_dataset(out_dir, preset_name="pilot_200", max_workers=2)
             self.assertEqual(manifest["total_records"], 260)
             self.assertEqual(manifest["complexity_stats"]["unique_canonical_dsl_hashes"], 260)
-            self.assertGreaterEqual(manifest["complexity_stats"]["min_boxes"], 12)
+            self.assertGreaterEqual(manifest["complexity_stats"]["min_boxes"], 4)
+            self.assertLessEqual(manifest["complexity_stats"]["min_boxes"], 8)
+            self.assertGreaterEqual(manifest["complexity_stats"]["max_boxes"], 25)
+
+            self.assertEqual(len(ALL_CATEGORIES), 21)
+            self.assertEqual(len(manifest["category_counts"]), len(ALL_CATEGORIES))
+            self.assertEqual(
+                set(manifest["complexity_tier_counts"].keys()),
+                {"tier_1_simple", "tier_2_medium", "tier_3_complex", "tier_4_masterwork"},
+            )
+            self.assertEqual(
+                set(manifest["assistant_task_mode_counts"].keys()),
+                {"create_full_asset", "coarse_to_fine_upgrade", "texture_and_animate_rig", "diagnose_and_repair_defect"},
+            )
+            self.assertGreater(manifest["quality_label_counts"].get("controlled_defect_with_repair", 0), 0)
+            self.assertIn("human_gathered_real_corpus", manifest["reserved_extension_tracks"])
 
             div = manifest["diversity_stats"]
             self.assertEqual(set(div["domain_counts"].keys()), set(MACRO_DOMAINS))
@@ -264,17 +296,47 @@ class TestP108ComplexStaticGenerators(unittest.TestCase):
             self.assertEqual(len(rows), 260)
             expected_gen_keys = set(rows[0]["generator_parameters"].keys())
             expected_audit_keys = set(rows[0]["audit_version_and_results"].keys())
+            expected_prov_keys = set(rows[0]["prompt_and_provenance"].keys())
 
             for row in rows:
                 for field in MANDATORY_ROW_FIELDS:
                     self.assertIn(field, row)
                 self.assertEqual(set(row["generator_parameters"].keys()), expected_gen_keys)
                 self.assertEqual(set(row["audit_version_and_results"].keys()), expected_audit_keys)
+                self.assertEqual(set(row["prompt_and_provenance"].keys()), expected_prov_keys)
                 if row["split"] in ("train", "val"):
                     self.assertIn(row["family_id"], SEEN_STATIC_FAMILIES)
                 else:
                     self.assertIn(row["family_id"], UNSEEN_STATIC_FAMILIES)
                     self.assertGreaterEqual(row["audit_version_and_results"]["boxes"], 16)
+
+    def test_batch_statistical_qc_and_visual_contact_sheet_pipeline(self):
+        """Verify batch-by-batch SPC gates and 3D+2D visual inspection sheet rendering."""
+        from PIL import Image
+        from synccraft.data_gen.batch_pipeline import generate_dataset_batches
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp) / "batched_ds"
+            summary = generate_dataset_batches(
+                out_dir,
+                num_batches=2,
+                train_per_seen_per_batch=1,
+                val_per_seen_per_batch=1,
+                test_per_unseen_per_batch=1,
+                samples_to_render_per_batch=4,
+            )
+            self.assertTrue(summary["all_batches_accepted"])
+            self.assertEqual(summary["total_records"], 2 * (40 * 2 + 15 * 1))
+            self.assertEqual(len(summary["batches"]), 2)
+            for b_rep in summary["batches"]:
+                self.assertTrue(b_rep["batch_accepted"])
+                self.assertEqual(b_rep["clean_sat_pass_rate"], 1.0)
+                self.assertEqual(b_rep["animation_swept_sat_pass_rate"], 1.0)
+                sheet_file = out_dir / b_rep["inspection_sheet"]
+                self.assertTrue(sheet_file.is_file())
+                with Image.open(sheet_file) as im:
+                    self.assertGreater(im.size[0], 600)
+                    self.assertGreater(im.size[1], 300)
 
 
 if __name__ == "__main__":
