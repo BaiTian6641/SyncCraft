@@ -1,0 +1,308 @@
+{
+  "schema": "synccraft.scene/0.1",
+  "coordinate_system": "right_handed_y_up_column_vectors",
+  "angle_units": "degrees",
+  "meta": {
+    "archetype": "weapon_3d",
+    "target_profile": "bbmodel_5",
+    "texel_density": 16
+  },
+  "boxes": [
+    {
+      "name": "handle",
+      "bone_name": "grip",
+      "center": [
+        8.0,
+        8.0,
+        8.0
+      ],
+      "rotation": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "size": [
+        2.0,
+        6.0,
+        2.0
+      ],
+      "inflate": 0.0,
+      "local_center": [
+        -0.0,
+        -0.0,
+        -0.0
+      ],
+      "material": "charcoal",
+      "cullface": [],
+      "mirrored": false
+    },
+    {
+      "name": "pommel",
+      "bone_name": "grip",
+      "center": [
+        8.0,
+        4.0,
+        8.0
+      ],
+      "rotation": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "size": [
+        3.0,
+        2.0,
+        3.0
+      ],
+      "inflate": 0.0,
+      "local_center": [
+        0.0,
+        -4.0,
+        0.0
+      ],
+      "material": "brass",
+      "cullface": [],
+      "mirrored": false
+    },
+    {
+      "name": "crosspiece",
+      "bone_name": "guard",
+      "center": [
+        8.0,
+        12.0,
+        8.0
+      ],
+      "rotation": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "size": [
+        8.0,
+        2.0,
+        2.0
+      ],
+      "inflate": 0.0,
+      "local_center": [
+        -0.0,
+        1.0,
+        -0.0
+      ],
+      "material": "brass",
+      "cullface": [],
+      "mirrored": false
+    },
+    {
+      "name": "edge",
+      "bone_name": "blade",
+      "center": [
+        8.0,
+        19.0,
+        8.0
+      ],
+      "rotation": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "size": [
+        2.0,
+        12.0,
+        1.0
+      ],
+      "inflate": 0.0,
+      "local_center": [
+        -0.0,
+        6.0,
+        -0.0
+      ],
+      "material": "steel",
+      "cullface": [],
+      "mirrored": false
+    }
+  ],
+  "bones": [
+    {
+      "name": "grip",
+      "parent_name": null,
+      "pivot_world": [
+        8.0,
+        8.0,
+        8.0
+      ],
+      "rotation": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "local_translation": [
+        8.0,
+        8.0,
+        8.0
+      ],
+      "local_euler": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "mirrored": false
+    },
+    {
+      "name": "guard",
+      "parent_name": "grip",
+      "pivot_world": [
+        8.0,
+        11.0,
+        8.0
+      ],
+      "rotation": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "local_translation": [
+        0.0,
+        3.0,
+        0.0
+      ],
+      "local_euler": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "mirrored": false
+    },
+    {
+      "name": "blade",
+      "parent_name": "guard",
+      "pivot_world": [
+        8.0,
+        13.0,
+        8.0
+      ],
+      "rotation": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "local_translation": [
+        0.0,
+        2.0,
+        0.0
+      ],
+      "local_euler": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "mirrored": false
+    }
+  ],
+  "adjacency": [
+    {
+      "pair": [
+        "crosspiece",
+        "edge"
+      ],
+      "reason": "attach"
+    },
+    {
+      "pair": [
+        "crosspiece",
+        "handle"
+      ],
+      "reason": "attach"
+    },
+    {
+      "pair": [
+        "handle",
+        "pommel"
+      ],
+      "reason": "place"
+    }
+  ]
+}

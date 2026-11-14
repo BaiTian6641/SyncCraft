@@ -1,0 +1,126 @@
+{
+  "meta": {
+    "archetype": "block_multipart",
+    "target_profile": "bbmodel_5",
+    "texel_density": 16
+  },
+  "palettes": [
+    {
+      "name": "stone",
+      "base_lch": [
+        0.65,
+        0.02,
+        250.0
+      ],
+      "steps": 4,
+      "hue_shift": [
+        0.0,
+        0.0
+      ],
+      "emissive": false
+    },
+    {
+      "name": "accent",
+      "base_lch": [
+        0.75,
+        0.08,
+        150.0
+      ],
+      "steps": 4,
+      "hue_shift": [
+        0.0,
+        0.0
+      ],
+      "emissive": false
+    }
+  ],
+  "root": {
+    "name": "pedestal",
+    "pivot_local": [
+      8.0,
+      4.0,
+      8.0
+    ],
+    "rest_euler": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "attach": null,
+    "mirror_name": null,
+    "items": [
+      {
+        "name": "base",
+        "size": [
+          12,
+          4,
+          12
+        ],
+        "material": "stone",
+        "place": null,
+        "inflate": 0.0,
+        "cullface": []
+      },
+      {
+        "name": "stem",
+        "size": [
+          6,
+          6,
+          6
+        ],
+        "material": "accent",
+        "place": {
+          "base_box": "base",
+          "anchor": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "align": [
+            0.0,
+            -1.0,
+            0.0
+          ],
+          "offset": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "inflate": 0.0,
+        "cullface": []
+      },
+      {
+        "name": "cap",
+        "size": [
+          10,
+          2,
+          10
+        ],
+        "material": "stone",
+        "place": {
+          "base_box": "stem",
+          "anchor": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "align": [
+            0.0,
+            -1.0,
+            0.0
+          ],
+          "offset": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "inflate": 0.0,
+        "cullface": []
+      }
+    ]
+  },
+  "shade": [],
+  "ergonomics": null
+}

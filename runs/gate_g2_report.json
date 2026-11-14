@@ -1,0 +1,24 @@
+{
+  "evidence": {
+    "status": "colab_pipeline_evaluated",
+    "total": 6,
+    "passed": 0,
+    "dataset_manifest_sha256": "a1e301fc94e4932f8c1902baaed10e40be02823ac19151933fa57df83825299b",
+    "evaluation_manifest_sha256": "4ab8b971c624a4136de88afc7401b6e12533d66dce6447f0cccc48ffb49ffa6f",
+    "full_static_audit_implemented": true,
+    "heldout_split_frozen_before_training": true,
+    "all_samples_have_at_least_16_parts": false,
+    "repair_pgd_policy_preregistered": true,
+    "matched_raw_budgets_enforced": true,
+    "at_most_three_reaudits_per_sample": true,
+    "failures_and_timeouts_counted": true,
+    "baseline_implementations_verified": true
+  },
+  "result": {
+    "decision": "blocked",
+    "learned_refiner_enabled": false,
+    "missing_or_invalid_evidence": [
+      "all_samples_have_at_least_16_parts"
+    ]
+  }
+}

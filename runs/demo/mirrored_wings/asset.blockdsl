@@ -1,0 +1,16 @@
+@meta { archetype: weapon_3d, target_profile: bbmodel_5, texel_density: 16 }
+@palette {
+  slate: ramp(base_lch=[0.55, 0.04, 250.0], steps=5, hue_shift=[0.0, 0.0], emissive=false)
+  copper: ramp(base_lch=[0.72, 0.12, 45.0], steps=4, hue_shift=[0.0, 0.0], emissive=false)
+}
+@rig {
+  root bone assembly {
+    pivot_local: [8.0, 8.0, 8.0]
+    box hub { size: [4, 4, 4], material: slate, inflate: 0.0 }
+    bone left_wing attach(parent_box=hub, anchor=[1.0, 0.0, 0.0], align=[-1.0, 0.0, 0.0], offset=[0.0, 0.0, 0.0], detached=false) mirror_x(right_wing) {
+      rest_euler: [0.0, 0.0, 22.5]
+      box left_panel { size: [6, 2, 2], material: copper, inflate: 0.0 }
+      box left_tip place(base_box=left_panel, anchor=[1.0, 0.0, 0.0], align=[-1.0, 0.0, 0.0], offset=[0.0, 0.0, 0.0]) { size: [2, 2, 2], material: slate, inflate: 0.0 }
+    }
+  }
+}

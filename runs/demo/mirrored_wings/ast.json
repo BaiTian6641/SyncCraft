@@ -1,0 +1,144 @@
+{
+  "meta": {
+    "archetype": "weapon_3d",
+    "target_profile": "bbmodel_5",
+    "texel_density": 16
+  },
+  "palettes": [
+    {
+      "name": "slate",
+      "base_lch": [
+        0.55,
+        0.04,
+        250.0
+      ],
+      "steps": 5,
+      "hue_shift": [
+        0.0,
+        0.0
+      ],
+      "emissive": false
+    },
+    {
+      "name": "copper",
+      "base_lch": [
+        0.72,
+        0.12,
+        45.0
+      ],
+      "steps": 4,
+      "hue_shift": [
+        0.0,
+        0.0
+      ],
+      "emissive": false
+    }
+  ],
+  "root": {
+    "name": "assembly",
+    "pivot_local": [
+      8.0,
+      8.0,
+      8.0
+    ],
+    "rest_euler": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "attach": null,
+    "mirror_name": null,
+    "items": [
+      {
+        "name": "hub",
+        "size": [
+          4,
+          4,
+          4
+        ],
+        "material": "slate",
+        "place": null,
+        "inflate": 0.0,
+        "cullface": []
+      },
+      {
+        "name": "left_wing",
+        "pivot_local": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rest_euler": [
+          0.0,
+          0.0,
+          22.5
+        ],
+        "attach": {
+          "parent_box": "hub",
+          "anchor": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "align": [
+            -1.0,
+            0.0,
+            0.0
+          ],
+          "offset": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "detached": false
+        },
+        "mirror_name": "right_wing",
+        "items": [
+          {
+            "name": "left_panel",
+            "size": [
+              6,
+              2,
+              2
+            ],
+            "material": "copper",
+            "place": null,
+            "inflate": 0.0,
+            "cullface": []
+          },
+          {
+            "name": "left_tip",
+            "size": [
+              2,
+              2,
+              2
+            ],
+            "material": "slate",
+            "place": {
+              "base_box": "left_panel",
+              "anchor": [
+                1.0,
+                0.0,
+                0.0
+              ],
+              "align": [
+                -1.0,
+                0.0,
+                0.0
+              ],
+              "offset": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "inflate": 0.0,
+            "cullface": []
+          }
+        ]
+      }
+    ]
+  },
+  "shade": [],
+  "ergonomics": null
+}

@@ -1,0 +1,355 @@
+{
+  "schema": "synccraft.scene/0.1",
+  "coordinate_system": "right_handed_y_up_column_vectors",
+  "angle_units": "degrees",
+  "meta": {
+    "archetype": "weapon_3d",
+    "target_profile": "bbmodel_5",
+    "texel_density": 16
+  },
+  "boxes": [
+    {
+      "name": "hub",
+      "bone_name": "assembly",
+      "center": [
+        8.0,
+        8.0,
+        8.0
+      ],
+      "rotation": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "size": [
+        4.0,
+        4.0,
+        4.0
+      ],
+      "inflate": 0.0,
+      "local_center": [
+        -0.0,
+        -0.0,
+        -0.0
+      ],
+      "material": "slate",
+      "cullface": [],
+      "mirrored": false
+    },
+    {
+      "name": "left_panel",
+      "bone_name": "left_wing",
+      "center": [
+        12.77163859753386,
+        9.148050297095269,
+        8.0
+      ],
+      "rotation": [
+        [
+          0.9238795325112867,
+          -0.3826834323650898,
+          0.0
+        ],
+        [
+          0.3826834323650898,
+          0.9238795325112867,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "size": [
+        6.0,
+        2.0,
+        2.0
+      ],
+      "inflate": 0.0,
+      "local_center": [
+        3.0,
+        -0.0,
+        -0.0
+      ],
+      "material": "copper",
+      "cullface": [],
+      "mirrored": false
+    },
+    {
+      "name": "left_tip",
+      "bone_name": "left_wing",
+      "center": [
+        16.467156727579006,
+        10.678784026555629,
+        8.0
+      ],
+      "rotation": [
+        [
+          0.9238795325112867,
+          -0.3826834323650898,
+          0.0
+        ],
+        [
+          0.3826834323650898,
+          0.9238795325112867,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "size": [
+        2.0,
+        2.0,
+        2.0
+      ],
+      "inflate": 0.0,
+      "local_center": [
+        7.0,
+        0.0,
+        0.0
+      ],
+      "material": "slate",
+      "cullface": [],
+      "mirrored": false
+    },
+    {
+      "name": "right_wing__left_panel",
+      "bone_name": "right_wing",
+      "center": [
+        3.22836140246614,
+        9.148050297095269,
+        8.0
+      ],
+      "rotation": [
+        [
+          0.9238795325112867,
+          0.3826834323650898,
+          0.0
+        ],
+        [
+          -0.3826834323650898,
+          0.9238795325112867,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "size": [
+        6.0,
+        2.0,
+        2.0
+      ],
+      "inflate": 0.0,
+      "local_center": [
+        -3.0,
+        -0.0,
+        -0.0
+      ],
+      "material": "copper",
+      "cullface": [],
+      "mirrored": true
+    },
+    {
+      "name": "right_wing__left_tip",
+      "bone_name": "right_wing",
+      "center": [
+        -0.46715672757900695,
+        10.678784026555629,
+        8.0
+      ],
+      "rotation": [
+        [
+          0.9238795325112867,
+          0.3826834323650898,
+          0.0
+        ],
+        [
+          -0.3826834323650898,
+          0.9238795325112867,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "size": [
+        2.0,
+        2.0,
+        2.0
+      ],
+      "inflate": 0.0,
+      "local_center": [
+        -7.0,
+        0.0,
+        0.0
+      ],
+      "material": "slate",
+      "cullface": [],
+      "mirrored": true
+    }
+  ],
+  "bones": [
+    {
+      "name": "assembly",
+      "parent_name": null,
+      "pivot_world": [
+        8.0,
+        8.0,
+        8.0
+      ],
+      "rotation": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "local_translation": [
+        8.0,
+        8.0,
+        8.0
+      ],
+      "local_euler": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "mirrored": false
+    },
+    {
+      "name": "left_wing",
+      "parent_name": "assembly",
+      "pivot_world": [
+        10.0,
+        8.0,
+        8.0
+      ],
+      "rotation": [
+        [
+          0.9238795325112867,
+          -0.3826834323650898,
+          0.0
+        ],
+        [
+          0.3826834323650898,
+          0.9238795325112867,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "local_translation": [
+        2.0,
+        0.0,
+        0.0
+      ],
+      "local_euler": [
+        0.0,
+        0.0,
+        22.5
+      ],
+      "mirrored": false
+    },
+    {
+      "name": "right_wing",
+      "parent_name": "assembly",
+      "pivot_world": [
+        6.0,
+        8.0,
+        8.0
+      ],
+      "rotation": [
+        [
+          0.9238795325112867,
+          0.3826834323650898,
+          0.0
+        ],
+        [
+          -0.3826834323650898,
+          0.9238795325112867,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "local_translation": [
+        -2.0,
+        0.0,
+        0.0
+      ],
+      "local_euler": [
+        0.0,
+        -0.0,
+        -22.5
+      ],
+      "mirrored": true
+    }
+  ],
+  "adjacency": [
+    {
+      "pair": [
+        "hub",
+        "left_panel"
+      ],
+      "reason": "attach"
+    },
+    {
+      "pair": [
+        "hub",
+        "right_wing__left_panel"
+      ],
+      "reason": "attach"
+    },
+    {
+      "pair": [
+        "left_panel",
+        "left_tip"
+      ],
+      "reason": "place"
+    },
+    {
+      "pair": [
+        "right_wing__left_panel",
+        "right_wing__left_tip"
+      ],
+      "reason": "place"
+    }
+  ]
+}
