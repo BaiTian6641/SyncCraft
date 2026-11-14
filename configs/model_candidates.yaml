@@ -3,6 +3,14 @@ status: unverified_candidates_from_source_report
 selected_model: null
 selection_task: P0-03
 candidates:
+  - label: LFM3-VL-2B
+    repository_id: LiquidAI/LFM3-VL-2B
+    immutable_revision: null
+    license_evidence_sha256: null
+    expected_license_from_model_card: LFM Open License v1.0
+    requires_transformers_minimum: "5.21.0"
+    suggested_memory_strategy: BF16_LoRA_on_RTX_PRO_6000
+    smoke_status: not_run
   - label: Qwen3-4B
     repository_id: null
     immutable_revision: null

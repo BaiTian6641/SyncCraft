@@ -1,10 +1,10 @@
 # TEST_READY: SyncCraft Hardened End-to-End Notebook Test Suite
 
-**Status**: READY & VERIFIED (28/28 E2E Passing, 153/153 Total Repo Tests + 14 Subtests Passing)  
+**Status**: READY & VERIFIED (29/29 E2E Passing, 154/154 Total Repo Tests + 14 Subtests Passing)  
 **Test Suite Path**: `tests/test_notebook_e2e.py` (+ `tests/test_surface_and_pbr.py`, `tests/test_world_interventions_and_inference.py`, `tests/test_data_gen_and_contact.py`)  
 **Test Infrastructure Path**: `TEST_INFRA.md`  
 **Target Notebook**: `notebooks/synccraft_end_to_end.ipynb`  
-**Target Hardware Profile**: Google Colab NVIDIA RTX PRO 6000 (Full-Precision BF16 PEFT LoRA, `full_60k` = 60,000 + 1,200 Complex Dataset)  
+**Target Hardware Profile**: Google Colab NVIDIA RTX PRO 6000 (Default `LiquidAI/LFM3-VL-2B` Full-Precision BF16 PEFT LoRA, `full_60k` = 60,000 + 1,200 Complex Dataset)  
 
 ---
 

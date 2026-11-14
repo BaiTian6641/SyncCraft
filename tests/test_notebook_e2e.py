@@ -445,6 +445,81 @@ class TestNotebookTier1FeatureCoverage(unittest.TestCase):
             "it must tokenize genuine Block-DSL dataset samples.",
         )
 
+    def test_07b_lfm3_vl_2b_default_and_colab_torchao_guard(self):
+        """
+        Verify Section 1 & Section 4 default to LiquidAI/LFM3-VL-2B, dispatch VLMs via
+        AutoModelForImageTextToText + AutoProcessor with dtype=..., resolve language-backbone
+        tri-hybrid LoRA target_modules while freezing vision_tower, and remediate Colab's
+        incompatible preinstalled torchao < 0.16.0.
+        """
+        import torch.nn as nn
+
+        nb = load_notebook()
+        sec1_code = "\n".join(get_section_code_cells(nb, 1))
+        sec4_code = "\n".join(get_section_code_cells(nb, 4))
+
+        self.assertIn("LiquidAI/LFM3-VL-2B", sec4_code)
+        self.assertIn("AutoModelForImageTextToText", sec4_code)
+        self.assertIn("AutoProcessor", sec4_code)
+        self.assertIn("dtype=compute_dtype", sec4_code)
+        self.assertIn("torchao", sec1_code)
+        self.assertIn("torchao", sec4_code)
+        self.assertIn("transformers>=5.21.0", sec1_code)
+
+        # Execute resolve_lora_target_modules directly from Cell 11 source on synthetic LFM3-VL-2B & Transformer modules
+        cell11_src = "".join(nb.cells[11].source)
+        tree = ast.parse(cell11_src)
+        extracted_nodes = [
+            node for node in tree.body
+            if (isinstance(node, ast.Assign) and any(getattr(t, "id", "") == "CANDIDATE_LORA_LINEAR_SUFFIXES" for t in node.targets))
+            or (isinstance(node, ast.FunctionDef) and node.name == "resolve_lora_target_modules")
+        ]
+        mod_ast = ast.Module(body=extracted_nodes, type_ignores=[])
+        ns = {"nn": nn, "re": re}
+        exec(compile(mod_ast, "<cell11_resolver>", "exec"), ns)
+        resolver = ns["resolve_lora_target_modules"]
+
+        class MockLfm3Vl(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.vision_tower = nn.ModuleDict({"q_proj": nn.Linear(8, 8), "out_proj": nn.Linear(8, 8)})
+                self.multi_modal_projector = nn.ModuleDict({"linear": nn.Linear(8, 8)})
+                self.language_model = nn.ModuleDict({
+                    "q_proj": nn.Linear(8, 8),
+                    "k_proj": nn.Linear(8, 8),
+                    "v_proj": nn.Linear(8, 8),
+                    "o_proj": nn.Linear(8, 8),
+                    "gate_proj": nn.Linear(8, 8),
+                    "in_proj": nn.Linear(8, 8),
+                    "out_proj": nn.Linear(8, 8),
+                    "w1": nn.Linear(8, 8),
+                    "w2": nn.Linear(8, 8),
+                    "w3": nn.Linear(8, 8),
+                    "lm_head": nn.Linear(8, 16),
+                })
+
+        vlm_pattern = resolver(MockLfm3Vl())
+        self.assertIsInstance(vlm_pattern, str)
+        self.assertIsNone(re.fullmatch(vlm_pattern, "vision_tower.q_proj"))
+        self.assertIsNone(re.fullmatch(vlm_pattern, "vision_tower.out_proj"))
+        self.assertIsNone(re.fullmatch(vlm_pattern, "language_model.lm_head"))
+        for lf in ("q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "in_proj", "out_proj", "w1", "w2", "w3"):
+            self.assertIsNotNone(re.fullmatch(vlm_pattern, f"model.language_model.layers.0.{lf}"))
+
+        class MockTextCausalLM(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.layers = nn.ModuleDict({
+                    "q_proj": nn.Linear(8, 8),
+                    "v_proj": nn.Linear(8, 8),
+                    "up_proj": nn.Linear(8, 8),
+                    "down_proj": nn.Linear(8, 8),
+                    "lm_head": nn.Linear(8, 16),
+                })
+
+        text_targets = resolver(MockTextCausalLM())
+        self.assertEqual(text_targets, ["q_proj", "v_proj", "up_proj", "down_proj"])
+
     def test_08_checkpoint_structure_contract(self):
         """Verify Section 4 implements periodic/atomic checkpointing saving manifest and adapters."""
         nb = load_notebook()
