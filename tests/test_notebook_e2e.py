@@ -52,6 +52,18 @@ SEEN_STATIC_FAMILIES = [
     "simple_wood_bow",
     "furniture_table_chair_chest_cabinet",
     "gearbox",
+    "ancient_canopy_tree",
+    "crystalline_geode_outcrop",
+    "coral_fungal_colony",
+    "articulated_robotic_arm",
+    "industrial_turbine_generator",
+    "modular_timber_stone_building",
+    "tiered_pagoda_watchtower",
+    "arched_stone_bridge_gate",
+    "humanoid_biped",
+    "dog_horse_quadruped",
+    "bird",
+    "winged_western_dragon",
 ]
 
 UNSEEN_STATIC_FAMILIES = [
@@ -61,6 +73,12 @@ UNSEEN_STATIC_FAMILIES = [
     "folding_windmill",
     "anvil_forge",
     "floating_ring_staff",
+    "weeping_bonsai_arch",
+    "hydraulic_gantry_crane",
+    "coastal_lighthouse_keep",
+    "hexapod_beetle",
+    "heavy_tail_tyrannosaur",
+    "segmented_sea_dragon",
 ]
 
 MANDATORY_ROW_FIELDS = [
@@ -519,6 +537,33 @@ class TestNotebookTier1FeatureCoverage(unittest.TestCase):
 
         text_targets = resolver(MockTextCausalLM())
         self.assertEqual(text_targets, ["q_proj", "v_proj", "up_proj", "down_proj"])
+
+    def test_07c_anti_overfit_multidomain_and_val_loss_contracts(self):
+        """
+        Verify ADR 0004 multi-domain anti-overfitting contracts across Section 3, 4, and 6:
+        - 'full_75k' default GPU preset + 'world_1200' causal trajectory preset + diversity_stats logging.
+        - Response-masked label_smoothing, weight_decay=0.05, lora_dropout=0.10, and epochs=1 default.
+        - Fixed global_sample_idx % 5 == 4 20% world-trajectory interleaving (not broken b_idx % 4 == 3).
+        - Stratified held-out ValLoss evaluation (evaluate_validation_loss & val_loss_history).
+        - All 12 multi-domain unseen families probed in Section 6.
+        """
+        nb = load_notebook()
+        sec3_code = "\n".join(get_section_code_cells(nb, 3))
+        sec4_code = "\n".join(get_section_code_cells(nb, 4))
+        sec6_code = "\n".join(get_section_code_cells(nb, 6))
+
+        self.assertIn('"full_75k"', sec3_code)
+        self.assertIn('"world_1200"', sec3_code)
+        self.assertIn("diversity_stats", sec3_code)
+
+        self.assertIn("label_smoothing", sec4_code)
+        self.assertIn("evaluate_validation_loss", sec4_code)
+        self.assertIn("val_loss_history", sec4_code)
+        self.assertIn("global_sample_idx % 5 == 4", sec4_code)
+        self.assertNotIn("b_idx % 4 == 3", sec4_code)
+
+        for unseen_fam in UNSEEN_STATIC_FAMILIES:
+            self.assertIn(unseen_fam, sec6_code, f"Section 6 must probe unseen family '{unseen_fam}'")
 
     def test_08_checkpoint_structure_contract(self):
         """Verify Section 4 implements periodic/atomic checkpointing saving manifest and adapters."""

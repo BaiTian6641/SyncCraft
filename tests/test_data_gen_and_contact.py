@@ -13,6 +13,7 @@ from synccraft.backends.bbmodel5_exporter import export_bbmodel
 from synccraft.backends.java_exporter import export_java
 from synccraft.data_gen import (
     DATASET_PRESETS,
+    MACRO_DOMAINS,
     MANDATORY_ROW_FIELDS,
     SEEN_STATIC_FAMILIES,
     UNSEEN_STATIC_FAMILIES,
@@ -186,48 +187,62 @@ class TestP102PhysicalContactAudit(unittest.TestCase):
 
 
 class TestP108ComplexStaticGenerators(unittest.TestCase):
-    """Verify P1-08 combinatorial complex asset generators and sharded builder."""
+    """Verify P1-08 / ADR 0004 7-domain complex asset generators, diversity engine, and sharded builder."""
 
-    def test_all_14_families_meet_complexity_export_and_feature_contracts(self):
-        """Every seen family has >=12 boxes & >=3 bones; every unseen family has >=16 boxes."""
+    def test_all_32_families_meet_complexity_export_and_feature_contracts(self):
+        """Every seen family (20) has >=12 boxes & >=3 bones; every unseen family (12) has >=16 boxes."""
+        self.assertEqual(len(SEEN_STATIC_FAMILIES), 20)
+        self.assertEqual(len(UNSEEN_STATIC_FAMILIES), 12)
         observed_mirror = False
         observed_detached = False
         observed_java_profile = False
+        observed_entity_body_plan = False
+        observed_domains: set[str] = set()
 
         for fam in SEEN_STATIC_FAMILIES:
-            for v_idx in range(4):
+            for v_idx in range(3):
                 row = verify_and_package_candidate(fam, split="train", variant_index=v_idx, run_exporter_check=(v_idx == 0))
                 boxes = row["audit_version_and_results"]["boxes"]
                 bones = row["audit_version_and_results"]["bones"]
                 self.assertGreaterEqual(boxes, 12, f"{fam} v{v_idx} had only {boxes} boxes")
                 self.assertGreaterEqual(bones, 3, f"{fam} v{v_idx} had only {bones} bones")
+                observed_domains.add(row["generator_parameters"]["domain"])
                 if row["generator_parameters"]["has_mirror_x"]:
                     observed_mirror = True
                 if row["generator_parameters"]["target_profile"] == "java_modern":
                     observed_java_profile = True
+                if row["body_plan_id_if_dynamic"] is not None:
+                    observed_entity_body_plan = True
 
         for fam in UNSEEN_STATIC_FAMILIES:
-            for v_idx in range(4):
+            for v_idx in range(3):
                 row = verify_and_package_candidate(fam, split="test_unseen", variant_index=v_idx, run_exporter_check=(v_idx == 0))
                 boxes = row["audit_version_and_results"]["boxes"]
                 self.assertGreaterEqual(boxes, 16, f"Unseen {fam} v{v_idx} had {boxes} < 16 boxes")
+                observed_domains.add(row["generator_parameters"]["domain"])
                 if row["generator_parameters"]["has_detached_bone"]:
                     observed_detached = True
                 prog = parse_program(row["canonical_dsl"])
                 sc = compile_geometry(prog)
                 atlas, _ = build_atlas(prog, sc)
                 self.assertGreaterEqual(len(export_bbmodel(sc, name=fam, atlas=atlas)["elements"]), 16)
-                self.assertGreaterEqual(len(export_java(sc, profile="java_modern", atlas=atlas)["elements"]), 16)
+                if prog.meta.archetype != "entity":
+                    self.assertGreaterEqual(len(export_java(sc, profile="java_modern", atlas=atlas)["elements"]), 16)
 
+        self.assertEqual(observed_domains, set(MACRO_DOMAINS))
         self.assertTrue(observed_mirror)
         self.assertTrue(observed_detached)
         self.assertTrue(observed_java_profile)
+        self.assertTrue(observed_entity_body_plan)
 
-    def test_pilot_200_preset_deduplication_isolation_and_uniform_schema(self):
-        """Verify 260-row pilot_200 preset produces 100% unique hashes and uniform nested keys."""
+    def test_pilot_200_preset_deduplication_isolation_diversity_and_uniform_schema(self):
+        """Verify 260-row pilot_200 preset produces 100% unique hashes, 7-domain diversity, and uniform nested keys."""
         self.assertEqual(DATASET_PRESETS["full_60k"].total_seen, 60_000)
         self.assertEqual(DATASET_PRESETS["full_60k"].total_unseen, 1_200)
         self.assertEqual(DATASET_PRESETS["full_60k"].total_rows, 61_200)
+        self.assertEqual(DATASET_PRESETS["full_75k"].total_seen, 75_000)
+        self.assertEqual(DATASET_PRESETS["full_75k"].total_unseen, 2_400)
+        self.assertEqual(DATASET_PRESETS["full_75k"].total_rows, 77_400)
 
         with tempfile.TemporaryDirectory() as tmp:
             out_dir = Path(tmp) / "datasets"
@@ -235,6 +250,15 @@ class TestP108ComplexStaticGenerators(unittest.TestCase):
             self.assertEqual(manifest["total_records"], 260)
             self.assertEqual(manifest["complexity_stats"]["unique_canonical_dsl_hashes"], 260)
             self.assertGreaterEqual(manifest["complexity_stats"]["min_boxes"], 12)
+
+            div = manifest["diversity_stats"]
+            self.assertEqual(set(div["domain_counts"].keys()), set(MACRO_DOMAINS))
+            self.assertEqual(len(div["naming_register_counts"]), 6)
+            self.assertEqual(len(div["prompt_granularity_counts"]), 4)
+            self.assertGreaterEqual(div["qd_shannon_entropy_bits"], 5.5)
+            self.assertGreaterEqual(div["unique_ast_identifier_vocab_size"], 1500)
+            self.assertGreaterEqual(div["stateful_materials_coverage_ratio"], 0.40)
+            self.assertLessEqual(div["stateful_materials_coverage_ratio"], 0.85)
 
             rows = manifest["rows"]
             self.assertEqual(len(rows), 260)

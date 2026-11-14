@@ -57,6 +57,7 @@ from .transitions import (
 WORLD_DATASET_PRESETS: dict[str, int] = {
     "smoke_24": 24,
     "pilot_200": 210,
+    "world_1200": 1200,
     "scale_2k": 2000,
 }
 
@@ -65,6 +66,9 @@ GEOMETRY_FAMILIES: tuple[str, ...] = (
     "quadruped_creature",
     "winged_sentinel",
     "turret_gantry",
+    "canopy_branch_tree",
+    "pagoda_eave_roof",
+    "dragon_wing_rig",
 )
 
 ACTION_FAMILIES: tuple[str, ...] = (
@@ -85,6 +89,9 @@ COMPOSITIONAL_HELDOUT_TRIPLES: frozenset[tuple[str, str, str]] = frozenset({
     ("turret_gantry", "thin_film_iridescence", "sliding_hinge_wear"),
     ("quadruped_creature", "weathered_stone", "lighting_invariance_shift"),
     ("winged_sentinel", "painted_metal", "sliding_hinge_wear"),
+    ("canopy_branch_tree", "lichen_biofilm", "pose_ik_reposition"),
+    ("pagoda_eave_roof", "weathered_stone", "biofilm_damp_colonization"),
+    ("dragon_wing_rig", "keratin_scales", "sliding_hinge_wear"),
 })
 
 ALL_TEN_MATERIALS: tuple[str, ...] = (
@@ -117,7 +124,7 @@ def _build_family_world(
     base_l = float(rng.uniform(0.42, 0.72))
     base_c = float(rng.uniform(0.04, 0.16))
 
-    is_entity = geo_family in ("quadruped_creature", "winged_sentinel")
+    is_entity = geo_family in ("quadruped_creature", "winged_sentinel", "dragon_wing_rig")
     archetype = "entity" if is_entity else "block_multipart"
     profile = "bedrock_entity" if is_entity else "bbmodel_5"
 
@@ -199,6 +206,73 @@ def _build_family_world(
             ],
         )
         target_box = "core_chest"
+    elif geo_family == "canopy_branch_tree":
+        root = Bone(
+            "trunk_root",
+            pivot_local=(0.0, 1.0, 0.0),
+            items=[
+                Box("root_bole", (sx + 2, 2, sz + 2), "secondary_mat"),
+                Box("trunk_core", (sx, sy + 2, sz), "primary_mat", place=Place("root_bole", (0.0, 1.0, 0.0), (0.0, -1.0, 0.0))),
+                Bone(
+                    "joint_upper",
+                    attach=Attach("trunk_core", (0.0, 1.0, 0.0), (0.0, -1.0, 0.0)),
+                    items=[
+                        Box("bough_seg", (2, limb_len, 2), "primary_mat"),
+                        Bone(
+                            "joint_lower",
+                            attach=Attach("bough_seg", (0.0, 1.0, 0.0), (0.0, -1.0, 0.0)),
+                            items=[Box("foliage_crown", (4, 3, 4), "secondary_mat")],
+                        ),
+                    ],
+                ),
+            ],
+        )
+        target_box = "trunk_core"
+    elif geo_family == "pagoda_eave_roof":
+        root = Bone(
+            "pagoda_root",
+            pivot_local=(0.0, 1.0, 0.0),
+            items=[
+                Box("stone_plinth", (sx, 2, sz), "secondary_mat"),
+                Box("timber_hall", (sx, sy, sz), "primary_mat", place=Place("stone_plinth", (0.0, 1.0, 0.0), (0.0, -1.0, 0.0))),
+                Bone(
+                    "joint_upper",
+                    attach=Attach("timber_hall", (-1.0, 0.8, 0.0), (1.0, 0.0, 0.0)),
+                    mirror_name="right_eave_upper",
+                    items=[
+                        Box("eave_rafter", (limb_len, 1, sz), "primary_mat"),
+                        Bone(
+                            "joint_lower",
+                            attach=Attach("eave_rafter", (-1.0, 0.0, 0.0), (1.0, 0.0, 0.0)),
+                            items=[Box("upturned_tip", (max(2, limb_len - 2), 1, max(2, sz - 1)), "secondary_mat")],
+                        ),
+                    ],
+                ),
+            ],
+        )
+        target_box = "timber_hall"
+    elif geo_family == "dragon_wing_rig":
+        root = Bone(
+            "dragon_root",
+            pivot_local=(0.0, 12.0, 0.0),
+            items=[
+                Box("thorax_armor", (sx, sy + 1, sz + 2), "primary_mat"),
+                Bone(
+                    "joint_upper",
+                    attach=Attach("thorax_armor", (-1.0, 0.6, 0.0), (1.0, 0.0, 0.0)),
+                    mirror_name="right_dragon_wing",
+                    items=[
+                        Box("wing_spar", (limb_len + 1, 1, sz), "primary_mat"),
+                        Bone(
+                            "joint_lower",
+                            attach=Attach("wing_spar", (-1.0, 0.0, 0.0), (1.0, 0.0, 0.0)),
+                            items=[Box("wing_membrane", (limb_len + 1, 1, max(3, sz - 1)), "secondary_mat")],
+                        ),
+                    ],
+                ),
+            ],
+        )
+        target_box = "thorax_armor"
     else:  # turret_gantry
         root = Bone(
             "gantry_root",

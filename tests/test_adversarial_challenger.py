@@ -27,32 +27,18 @@ from typing import Any, Dict, List, Set
 
 import nbformat
 
+from synccraft.data_gen import (
+    SEEN_STATIC_FAMILIES as _CANONICAL_SEEN_FAMILIES,
+    UNSEEN_STATIC_FAMILIES as _CANONICAL_UNSEEN_FAMILIES,
+)
 from synccraft.evaluation.budget import CostLedger
 from synccraft.evaluation.gate_g2 import REQUIRED_CHECKS, decide_gate
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 NOTEBOOK_PATH = REPO_ROOT / "notebooks" / "synccraft_end_to_end.ipynb"
 
-SEEN_STATIC_FAMILIES: Set[str] = {
-    "straight_blade_sword",
-    "single_edge_blade",
-    "battle_axe",
-    "spear",
-    "war_hammer",
-    "simple_wood_bow",
-    "furniture_table_chair_chest_cabinet",
-    "gearbox",
-    "weapon_3d",  # archetype family fallback from examples
-}
-
-UNSEEN_STATIC_FAMILIES: Set[str] = {
-    "mechanical_crossbow",
-    "hand_lantern",
-    "tripod_telescope",
-    "folding_windmill",
-    "anvil_forge",
-    "floating_ring_staff",
-}
+SEEN_STATIC_FAMILIES: Set[str] = set(_CANONICAL_SEEN_FAMILIES) | {"weapon_3d"}
+UNSEEN_STATIC_FAMILIES: Set[str] = set(_CANONICAL_UNSEEN_FAMILIES)
 
 MANDATORY_MANIFEST_FIELDS = [
     "asset_id",
@@ -800,8 +786,9 @@ class TestChallengerNotebookEndToEndArtifactAudits(unittest.TestCase):
         ledger = self.global_scope.get("cost_ledger")
         self.assertIsInstance(ledger, CostLedger)
         self.assertGreater(ledger.accepted_tokens, 0)
-        self.assertEqual(ledger.compiler_calls, 6)
-        self.assertEqual(ledger.initial_audit_calls, 6)
+        expected_unseen_probes = len(UNSEEN_STATIC_FAMILIES)
+        self.assertEqual(ledger.compiler_calls, expected_unseen_probes)
+        self.assertEqual(ledger.initial_audit_calls, expected_unseen_probes)
         self.assertEqual(ledger.discarded_tokens, 0)
         self.assertEqual(ledger.repair_tokens, 0)
         self.assertEqual(ledger.total_generated_tokens, ledger.accepted_tokens)
@@ -819,11 +806,12 @@ class TestChallengerNotebookEndToEndArtifactAudits(unittest.TestCase):
         evidence = data["evidence"]
         result = data["result"]
 
-        self.assertEqual(evidence["total"], 6)
+        expected_total = len(UNSEEN_STATIC_FAMILIES)
+        self.assertEqual(evidence["total"], expected_total)
         self.assertIsInstance(evidence["passed"], int)
         self.assertTrue(
-            0 <= evidence["passed"] <= 6,
-            f"evidence['passed'] ({evidence.get('passed')}) must be an integer between 0 and 6",
+            0 <= evidence["passed"] <= expected_total,
+            f"evidence['passed'] ({evidence.get('passed')}) must be an integer between 0 and {expected_total}",
         )
         self.assertRegex(evidence["dataset_manifest_sha256"], r"^[a-fA-F0-9]{64}$")
         self.assertRegex(evidence["evaluation_manifest_sha256"], r"^[a-fA-F0-9]{64}$")

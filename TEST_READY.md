@@ -1,20 +1,20 @@
 # TEST_READY: SyncCraft Hardened End-to-End Notebook Test Suite
 
-**Status**: READY & VERIFIED (29/29 E2E Passing, 154/154 Total Repo Tests + 14 Subtests Passing)  
+**Status**: READY & VERIFIED (30/30 E2E Passing, 155/155 Total Repo Tests + 14 Subtests Passing)  
 **Test Suite Path**: `tests/test_notebook_e2e.py` (+ `tests/test_surface_and_pbr.py`, `tests/test_world_interventions_and_inference.py`, `tests/test_data_gen_and_contact.py`)  
 **Test Infrastructure Path**: `TEST_INFRA.md`  
 **Target Notebook**: `notebooks/synccraft_end_to_end.ipynb`  
-**Target Hardware Profile**: Google Colab NVIDIA RTX PRO 6000 (Default `LiquidAI/LFM3-VL-2B` Full-Precision BF16 PEFT LoRA, `full_60k` = 60,000 + 1,200 Complex Dataset)  
+**Target Hardware Profile**: Google Colab NVIDIA RTX PRO 6000 (Default `LiquidAI/LFM3-VL-2B` Full-Precision BF16 PEFT LoRA, `full_75k` = 75,000 + 2,400 7-Domain Anti-Overfitting Dataset + `world_1200` World Trajectories)  
 
 ---
 
 ## 1. Readiness Declaration
 
-The hardened, zero-facade E2E test suite for `notebooks/synccraft_end_to_end.ipynb` is implemented in `tests/test_notebook_e2e.py` (with `P1-02` + `P1-08` dataset/contact unit tests in `tests/test_data_gen_and_contact.py` and adversarial challenger/stress suites in `tests/test_adversarial_challenger.py` and `tests/test_adversarial_stress.py`). The E2E suite enforces 28 tests across Tiers 1–4, covering standalone Google Colab repository bootstrap (`git clone` + `pip install` preventing `ModuleNotFoundError: No module named 'synccraft'` and `sys.path` anti-shadowing of Hugging Face `datasets`), complex `60,000 + 1,200` (`full_60k`) combinatorial multi-bone dataset synthesis (`15–23` boxes, `3–6` bones) with `P1-02` physical contact/connectivity enforcement, dataset-first Hugging Face Dataset Hub publishing (`repo_type="dataset"`, JSONL + ZSTD Parquet shards, `datasets/README.md` Dataset Card & `NOTICE` with full open-source credits, attributions, and BibTeX citation), AST structural verification of native `bfloat16` PEFT LoRA (`r=32`, `alpha=64`, `quantization="none"`, banning 4-bit `BitsAndBytesConfig` / `load_in_4bit` QLoRA), binary safetensors header decoding (`struct.unpack("<Q", payload[:8])[0] < 100MB`), genuine model probing query verification, dynamic Gate G2 prerequisite evaluation, and complete 8-seen + 6-unseen static family dataset coverage.
+The hardened, zero-facade E2E test suite for `notebooks/synccraft_end_to_end.ipynb` is implemented in `tests/test_notebook_e2e.py` (with `P1-02` + `P1-08-r2` / `ADR 0004` multi-domain dataset/diversity/contact unit tests in `tests/test_data_gen_and_contact.py` and adversarial challenger/stress suites in `tests/test_adversarial_challenger.py` and `tests/test_adversarial_stress.py`). The E2E suite enforces 30 tests across Tiers 1–4, covering standalone Google Colab repository bootstrap (`git clone` + `pip install` preventing `ModuleNotFoundError: No module named 'synccraft'` and `sys.path` anti-shadowing of Hugging Face `datasets`), `75,000 + 2,400` (`full_75k`) 7-domain multi-bone dataset synthesis (`artificial`, `natural`, `industrial`, `building`, `humanoid`, `animal`, `dragon`: `20` seen + `12` unseen families, `12–34` boxes, `3–16` bones) diversified via Halton sampling, 6-register bijective identifier remapping, DAG declaration permutation, stateful `@materials`/`@style` PBR/RD blocks, and 4-level Text2CAD prompts, dataset-first Hugging Face Dataset Hub publishing (`repo_type="dataset"`, JSONL + ZSTD Parquet shards, `datasets/README.md` Dataset Card & `NOTICE`), AST structural verification of native `LiquidAI/LFM3-VL-2B` `bfloat16` PEFT LoRA (`r=32`, `alpha=64`, `dropout=0.10`, `weight_decay=0.05`, `label_smoothing=0.03`, `epochs=1`, `quantization="none"`, fixed 20% global-cursor `world_1200` trajectory interleaving, online stratified `ValLoss` / `GenGap` evaluation), binary safetensors header decoding, genuine 12-family unseen probing, and dynamic Gate G2 prerequisite evaluation.
 
 ---
 
-## 2. Test Architecture & Coverage Matrix (Tiers 1–4, 28 Tests)
+## 2. Test Architecture & Coverage Matrix (Tiers 1–4, 30 Tests)
 
 | Tier | Test Identifier | Scope / Contract Tested | Status |
 |---|---|---|---|

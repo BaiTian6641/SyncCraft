@@ -1,13 +1,14 @@
-"""Combinatorial complex Block-DSL v3 static asset generators & multi-core shard builder (P1-08).
+"""Combinatorial multi-domain Block-DSL v3 procedural asset generators & shard builder (P1-08 / ADR 0004).
 
 Builds 100% original, typed-AST, SE(3)-compiled, 15-axis SAT + P1-02 physical-contact
-and [-16, 32] bounds-verified 3D articulated block models across:
-- All 8 seen static families (12-28 lowered boxes, 3-9 bones per asset)
-- All 6 unseen held-out static families (>= 16 lowered boxes per asset for Gate G2)
+verified 3D articulated block models across 7 macro-domains and 32 disjoint families:
+- 20 Seen families (Artificial, Natural, Industrial, Building, Humanoid, Animal, Dragon;
+  12-28 lowered boxes, 3-13 bones per asset)
+- 12 Unseen held-out families (>= 16 lowered boxes per asset for Gate G2)
 
-Supports deterministic presets from rapid CPU smoke checks (`smoke`, 30 rows) up to the
-full Colab production corpus (`full_60k`: 60,000 seen + 1,200 unseen = 61,200 unique rows),
-serialized to both JSONL splits and compressed Apache Parquet shards.
+Applies Halton low-discrepancy sampling, 6-register bijective identifier remapping,
+valid DAG topological declaration permutation, stateful @materials/@style PBR/RD binding,
+and Text2CAD-style 4-level multi-granularity prompts to prevent template overfitting.
 """
 
 from __future__ import annotations
@@ -18,9 +19,12 @@ from dataclasses import dataclass
 import hashlib
 import importlib.util
 import json
+import multiprocessing
 import os
 from pathlib import Path
 import random
+import re
+import sys
 from typing import Any
 
 import numpy as np
@@ -39,10 +43,24 @@ from synccraft.dsl.ast_nodes import (
 )
 from synccraft.dsl.parser import DSLParseError, format_program, parse_program
 from synccraft.kinematics.se3_chain import Scene, compile_geometry
+from .diversity_engine import (
+    MACRO_DOMAINS,
+    NAMING_REGISTERS,
+    compose_multilevel_prompt,
+    compute_qd_signature,
+    diversify_program_ast,
+    summarize_corpus_diversity,
+)
+from .multi_domain_taxonomy import (
+    ENTITY_BODY_PLANS,
+    FAMILY_DOMAINS,
+    MULTI_DOMAIN_DISPATCH,
+)
 
-GENERATOR_REVISION = "synccraft-v3.0-complex-p1-08-r1"
+GENERATOR_REVISION = "synccraft-v3.0-multidomain-p1-08-r2"
 
 SEEN_STATIC_FAMILIES: tuple[str, ...] = (
+    # Artificial (7)
     "straight_blade_sword",
     "single_edge_blade",
     "battle_axe",
@@ -50,17 +68,50 @@ SEEN_STATIC_FAMILIES: tuple[str, ...] = (
     "war_hammer",
     "simple_wood_bow",
     "furniture_table_chair_chest_cabinet",
+    # Industrial (3)
     "gearbox",
+    "articulated_robotic_arm",
+    "industrial_turbine_generator",
+    # Natural (3)
+    "ancient_canopy_tree",
+    "crystalline_geode_outcrop",
+    "coral_fungal_colony",
+    # Building / Architecture (3)
+    "modular_timber_stone_building",
+    "tiered_pagoda_watchtower",
+    "arched_stone_bridge_gate",
+    # Humanoid (1)
+    "humanoid_biped",
+    # Animal (2)
+    "dog_horse_quadruped",
+    "bird",
+    # Dragon (1)
+    "winged_western_dragon",
 )
 
 UNSEEN_STATIC_FAMILIES: tuple[str, ...] = (
+    # Artificial (3)
     "mechanical_crossbow",
     "hand_lantern",
-    "tripod_telescope",
-    "folding_windmill",
-    "anvil_forge",
     "floating_ring_staff",
+    # Natural (1)
+    "weeping_bonsai_arch",
+    # Industrial (3)
+    "tripod_telescope",
+    "anvil_forge",
+    "hydraulic_gantry_crane",
+    # Building / Architecture (2)
+    "folding_windmill",
+    "coastal_lighthouse_keep",
+    # Animal (2)
+    "hexapod_beetle",
+    "heavy_tail_tyrannosaur",
+    # Dragon (1)
+    "segmented_sea_dragon",
 )
+
+SEEN_FAMILIES: tuple[str, ...] = SEEN_STATIC_FAMILIES
+UNSEEN_FAMILIES: tuple[str, ...] = UNSEEN_STATIC_FAMILIES
 
 MANDATORY_ROW_FIELDS: tuple[str, ...] = (
     "asset_id",
@@ -120,29 +171,36 @@ class DatasetPreset:
 DATASET_PRESETS: dict[str, DatasetPreset] = {
     "smoke": DatasetPreset(
         name="smoke",
-        train_per_seen_family=2,
+        train_per_seen_family=1,
         val_per_seen_family=1,
         test_per_unseen_family=1,
         hf_size_category="n<1K",
     ),
     "pilot_200": DatasetPreset(
         name="pilot_200",
-        train_per_seen_family=22,
-        val_per_seen_family=3,
-        test_per_unseen_family=10,
+        train_per_seen_family=9,
+        val_per_seen_family=1,
+        test_per_unseen_family=5,
         hf_size_category="n<1K",
     ),
     "bakeoff_8k": DatasetPreset(
         name="bakeoff_8k",
-        train_per_seen_family=900,
-        val_per_seen_family=100,
-        test_per_unseen_family=100,
+        train_per_seen_family=360,
+        val_per_seen_family=40,
+        test_per_unseen_family=50,
         hf_size_category="1K<n<10K",
     ),
     "full_60k": DatasetPreset(
         name="full_60k",
-        train_per_seen_family=6750,
-        val_per_seen_family=750,
+        train_per_seen_family=2700,
+        val_per_seen_family=300,
+        test_per_unseen_family=100,
+        hf_size_category="10K<n<100K",
+    ),
+    "full_75k": DatasetPreset(
+        name="full_75k",
+        train_per_seen_family=3375,
+        val_per_seen_family=375,
         test_per_unseen_family=200,
         hf_size_category="10K<n<100K",
     ),
@@ -233,6 +291,15 @@ def _check_java_envelope(scene: Scene) -> bool:
         to = np.asarray(box.center, dtype=np.float64) + half
         coords = np.concatenate((from_, to, np.asarray(box.corners(), dtype=np.float64).reshape(-1)))
         if not np.isfinite(coords).all() or (coords < -16.0 - 1e-8).any() or (coords > 32.0 + 1e-8).any():
+            return False
+    return True
+
+
+def _check_entity_envelope(scene: Scene) -> bool:
+    """Verify entity scenes remain finite and well-bounded in [-48, 64] Blockbench/GeckoLib/glTF space."""
+    for box in scene.boxes:
+        coords = np.asarray(box.corners(), dtype=np.float64).reshape(-1)
+        if not np.isfinite(coords).all() or (coords < -48.0 - 1e-8).any() or (coords > 64.0 + 1e-8).any():
             return False
     return True
 
@@ -1703,7 +1770,10 @@ _FAMILY_DISPATCH = {
     "folding_windmill": _gen_folding_windmill,
     "anvil_forge": _gen_anvil_forge,
     "floating_ring_staff": _gen_floating_ring_staff,
+    **MULTI_DOMAIN_DISPATCH,
 }
+
+_IDENT_SCAN_RE = re.compile(r"\b(?:box|bone)\s+([A-Za-z_][A-Za-z0-9_]*)")
 
 
 def generate_candidate_for_family(
@@ -1731,15 +1801,24 @@ def verify_and_package_candidate(
     require_min_boxes: int | None = None,
     run_exporter_check: bool = False,
 ) -> dict[str, Any]:
-    """Generate, compile, 15-axis SAT + P1-02 contact-audit, and package a verified row."""
+    """Generate, diversify, compile, 15-axis SAT + P1-02 contact-audit, and package a verified row."""
     min_boxes = require_min_boxes if require_min_boxes is not None else (16 if split == "test_unseen" else 12)
+    domain = FAMILY_DOMAINS.get(family_id, "artificial")
+    body_plan_id = ENTITY_BODY_PLANS.get(family_id)
     last_error = "uninitialized"
 
     for attempt in range(max_attempts):
         effective_seed = base_seed + attempt * 104_729
         try:
-            program, meta_info, numeric_seed = generate_candidate_for_family(
+            raw_program, meta_info, numeric_seed = generate_candidate_for_family(
                 family_id, split=split, variant_index=variant_index, base_seed=effective_seed
+            )
+            div_rng = random.Random(numeric_seed ^ 0x3C3C_7171)
+            program, div_info = diversify_program_ast(
+                raw_program,
+                rng=div_rng,
+                domain=domain,
+                variant_index=variant_index,
             )
             validate_program(program)
             canonical_dsl = format_program(program)
@@ -1749,9 +1828,16 @@ def verify_and_package_candidate(
             if len(scene.boxes) < min_boxes:
                 last_error = f"box_count {len(scene.boxes)} < {min_boxes}"
                 continue
-            if not _check_java_envelope(scene):
-                last_error = "exceeded_java_[-16,32]_envelope"
-                continue
+
+            is_entity = reparsed.meta.archetype == "entity"
+            if is_entity:
+                if not _check_entity_envelope(scene):
+                    last_error = "exceeded_entity_[-48,64]_envelope"
+                    continue
+            else:
+                if not _check_java_envelope(scene):
+                    last_error = "exceeded_java_[-16,32]_envelope"
+                    continue
 
             audit_res = audit_scene(
                 scene,
@@ -1774,11 +1860,14 @@ def verify_and_package_candidate(
 
                 atlas, _ = build_atlas(reparsed, scene)
                 export_bbmodel(scene, name=f"{family_id}_{variant_index}", atlas=atlas)
-                export_java(scene, profile="java_modern", atlas=atlas)
+                if not is_entity:
+                    export_java(scene, profile="java_modern", atlas=atlas)
 
             prompt_rng = random.Random(numeric_seed ^ 0x5A5A_1234)
-            prompt_text, prompt_style = _compose_prompt(
+            prompt_text, prompt_style = compose_multilevel_prompt(
                 prompt_rng,
+                variant_index=variant_index,
+                domain=domain,
                 family_id=family_id,
                 substyle=meta_info["substyle"],
                 archetype=reparsed.meta.archetype,
@@ -1789,19 +1878,33 @@ def verify_and_package_candidate(
                 has_mirror_x=bool(meta_info["has_mirror_x"]),
                 has_detached=bool(meta_info["has_detached_bone"]),
                 joint_angle_deg=float(meta_info["joint_angle_deg"]),
-                material_names=[p.name for p in reparsed.palettes],
+                palettes=reparsed.palettes,
+                material_families=div_info["material_families"],
+                style_encoding=div_info["style_encoding"],
                 structural_notes=meta_info["notes"],
+            )
+            qd_sig = compute_qd_signature(
+                reparsed,
+                scene,
+                domain=domain,
+                prompt_style=prompt_style,
             )
 
             dsl_sha256 = hashlib.sha256(canonical_dsl.encode("utf-8")).hexdigest()
             asset_id = f"{family_id}_{split}_{variant_index:05d}_s{numeric_seed % 100000:05d}"
+            profile_version_tag = (
+                f"{reparsed.meta.target_profile}:entity_rig_v3.0"
+                if is_entity
+                else f"{reparsed.meta.target_profile}:java_modern_1.21.11+"
+            )
 
             return {
                 "asset_id": asset_id,
                 "family_id": family_id,
-                "body_plan_id_if_dynamic": None,
+                "body_plan_id_if_dynamic": body_plan_id,
                 "generator_revision": GENERATOR_REVISION,
                 "generator_parameters": {
+                    "domain": domain,
                     "preset_substyle": str(meta_info["substyle"]),
                     "archetype": str(reparsed.meta.archetype),
                     "target_profile": str(reparsed.meta.target_profile),
@@ -1813,6 +1916,11 @@ def verify_and_package_candidate(
                     "has_mirror_x": bool(meta_info["has_mirror_x"]),
                     "has_detached_bone": bool(meta_info["has_detached_bone"]),
                     "material_theme": str(meta_info["material_theme"]),
+                    "naming_register": str(div_info["naming_register"]),
+                    "declarations_permuted": bool(div_info["declarations_permuted"]),
+                    "has_materials_block": bool(div_info["has_materials_block"]),
+                    "style_encoding": str(div_info["style_encoding"]),
+                    "qd_cell": str(qd_sig["qd_cell"]),
                     "inflate_detail": float(meta_info["inflate_detail"]),
                     "structural_spec_json": json.dumps(meta_info["extra"], sort_keys=True),
                 },
@@ -1821,6 +1929,7 @@ def verify_and_package_candidate(
                 "prompt_and_provenance": {
                     "prompt": prompt_text,
                     "prompt_style": prompt_style,
+                    "domain": domain,
                     "origin": "synccraft_procedural_ast_grammar_generator",
                     "repository": "https://github.com/BaiTian6641/SyncCraft",
                     "authors": "SyncCraft Contributors (BaiTian6641)",
@@ -1843,9 +1952,9 @@ def verify_and_package_candidate(
                     "physical_components": int(len(audit_res["physical_connected_components"])),
                     "boxes": int(len(scene.boxes)),
                     "bones": int(len(scene.bones)),
-                    "java_bounds_verified": True,
+                    "java_bounds_verified": bool(not is_entity),
                 },
-                "target_profile_and_version": f"{reparsed.meta.target_profile}:java_modern_1.21.11+",
+                "target_profile_and_version": profile_version_tag,
                 "seed": int(numeric_seed),
             }
         except (DSLParseError, DSLValidationError, ValueError) as exc:
@@ -1880,6 +1989,17 @@ def _write_parquet_splits_if_available(datasets_dir: Path, split_paths: dict[str
     import pyarrow as pa
     import pyarrow.parquet as pq
 
+    def _batch_to_uniform_table(batch_rows: list[dict[str, Any]]) -> Any:
+        tbl = pa.Table.from_pylist(batch_rows)
+        bp_idx = tbl.schema.get_field_index("body_plan_id_if_dynamic")
+        if bp_idx >= 0 and tbl.schema.field(bp_idx).type != pa.string():
+            tbl = tbl.set_column(
+                bp_idx,
+                "body_plan_id_if_dynamic",
+                pa.array([r.get("body_plan_id_if_dynamic") for r in batch_rows], type=pa.string()),
+            )
+        return tbl
+
     parquet_dir = datasets_dir / "parquet"
     parquet_dir.mkdir(parents=True, exist_ok=True)
     written: dict[str, str] = {}
@@ -1897,13 +2017,13 @@ def _write_parquet_splits_if_available(datasets_dir: Path, split_paths: dict[str
                         continue
                     batch.append(json.loads(line))
                     if len(batch) >= batch_size:
-                        table = pa.Table.from_pylist(batch)
+                        table = _batch_to_uniform_table(batch)
                         if writer is None:
                             writer = pq.ParquetWriter(pq_path, table.schema, compression="zstd")
                         writer.write_table(table)
                         batch.clear()
                 if batch:
-                    table = pa.Table.from_pylist(batch)
+                    table = _batch_to_uniform_table(batch)
                     if writer is None:
                         writer = pq.ParquetWriter(pq_path, table.schema, compression="zstd")
                     writer.write_table(table)
@@ -1919,7 +2039,7 @@ def _write_parquet_splits_if_available(datasets_dir: Path, split_paths: dict[str
 def build_verified_dataset(
     datasets_dir: Path | str,
     *,
-    preset_name: str = "full_60k",
+    preset_name: str = "full_75k",
     base_seed: int = 2026,
     max_workers: int | None = None,
     include_full_rows_threshold: int = 2000,
@@ -1955,7 +2075,9 @@ def build_verified_dataset(
             tasks.append((fam, "test_unseen", start, cnt, base_seed + 31, start == 0))
 
     cpu_workers = max_workers if max_workers is not None else min(os.cpu_count() or 1, 12)
-    use_multiprocess = preset.total_rows >= 200 and cpu_workers > 1
+    main_file = getattr(sys.modules.get("__main__"), "__file__", None)
+    spawn_safe = not (multiprocessing.get_start_method(allow_none=True) != "fork" and main_file == "<stdin>")
+    use_multiprocess = preset.total_rows >= 200 and cpu_workers > 1 and spawn_safe
 
     split_paths = {
         "train": out_dir / "train.jsonl",
@@ -1975,10 +2097,16 @@ def build_verified_dataset(
     family_counts: dict[str, int] = {}
     box_counts: list[int] = []
     bone_counts: list[int] = []
+    domains_seen: list[str] = []
+    prompt_styles_seen: list[str] = []
+    registers_seen: list[str] = []
+    qd_cells_seen: list[str] = []
+    unique_ast_identifiers: set[str] = set()
+    materials_block_count = 0
     collision_resamples = 0
 
     def _consume_chunk(chunk_rows: list[dict[str, Any]]) -> None:
-        nonlocal collision_resamples
+        nonlocal collision_resamples, materials_block_count
         for row in chunk_rows:
             fam = row["family_id"]
             sp = row["split"]
@@ -2004,6 +2132,15 @@ def build_verified_dataset(
             family_counts[fam] = family_counts.get(fam, 0) + 1
             box_counts.append(row["audit_version_and_results"]["boxes"])
             bone_counts.append(row["audit_version_and_results"]["bones"])
+
+            gp = row["generator_parameters"]
+            domains_seen.append(gp["domain"])
+            prompt_styles_seen.append(row["prompt_and_provenance"]["prompt_style"])
+            registers_seen.append(gp["naming_register"])
+            qd_cells_seen.append(gp["qd_cell"])
+            if gp["has_materials_block"]:
+                materials_block_count += 1
+            unique_ast_identifiers.update(_IDENT_SCAN_RE.findall(row["canonical_dsl"]))
 
             if embed_full_rows:
                 manifest_rows.append(row)
@@ -2059,9 +2196,17 @@ def build_verified_dataset(
         "unique_canonical_dsl_hashes": len(seen_dsl_hashes),
         "hash_collision_resamples": collision_resamples,
     }
+    diversity_stats = summarize_corpus_diversity(
+        domains=domains_seen,
+        prompt_styles=prompt_styles_seen,
+        naming_registers=registers_seen,
+        qd_cells=qd_cells_seen,
+        unique_identifiers=unique_ast_identifiers,
+        materials_block_count=materials_block_count,
+    )
 
     manifest_payload: dict[str, Any] = {
-        "schema": "synccraft.dataset-manifest/1.1",
+        "schema": "synccraft.dataset-manifest/1.2",
         "preset": preset.name,
         "hf_size_category": preset.hf_size_category,
         "generator_revision": GENERATOR_REVISION,
@@ -2070,7 +2215,10 @@ def build_verified_dataset(
         "total_records": total_records,
         "split_counts": split_counts,
         "family_counts": family_counts,
+        "macro_domains": list(MACRO_DOMAINS),
+        "naming_registers": list(NAMING_REGISTERS),
         "complexity_stats": complexity_stats,
+        "diversity_stats": diversity_stats,
         "shard_file": "train.jsonl",
         "shard_bytes": split_paths["train"].stat().st_size,
         "parquet_shards": parquet_files,
