@@ -645,7 +645,13 @@ class TestApexComplexEntityAndAssetPack(unittest.TestCase):
                 self.assertEqual(row["license_spdx"], "Apache-2.0")
                 self.assertTrue(row["commercial_weights_eligible"])
                 parsed = parse_program(row["assistant_dsl"])
-                self.assertTrue(audit_scene(compile_geometry(parsed), enforce_physical_contact=True)["passed"])
+                compiled_row = compile_geometry(parsed)
+                self.assertTrue(audit_scene(compiled_row, enforce_physical_contact=True)["passed"])
+                # Row metadata must reflect each row's actual assistant_dsl target AST/Scene (not Stage 4 splatting)
+                self.assertEqual(row["box_count"], len(compiled_row.boxes))
+                self.assertEqual(row["bone_count"], len(compiled_row.bones))
+                self.assertEqual(row["locator_count"], len(compiled_row.locators))
+                self.assertEqual(row["muscle_count"], len(parsed.muscles))
 
 
 class TestAdversarialRegressionGuardsV31(unittest.TestCase):
@@ -1225,6 +1231,181 @@ class TestCobblemonRealWorldIdiomsAndClosedLoopRoundtrip(unittest.TestCase):
             self.assertTrue(exp["static_audit_passed"])
             self.assertLess(exp["roundtrip_vertex_max_error"], 1e-8)
             self.assertGreaterEqual(exp["roundtrip_clip_count"], 1)
+
+    def test_cobblemon_empty_grouping_hierarchy_progressive_trajectory_affine_molang_and_antiphase_keyframes(self) -> None:
+        from synccraft.world.inverse_inference import (
+            _parse_molang_channel_zero_eval,
+            decompile_bedrock_animation_to_behavior,
+        )
+
+        # 1. Authentic Cobblemon empty-grouping-bone + rotated planar wing hierarchy -> 5-stage progressive trajectory
+        cobble_geo = {
+            "format_version": "1.12.0",
+            "minecraft:geometry": [
+                {
+                    "description": {"identifier": "geometry.cobblemon.aerodragon", "texture_width": 128, "texture_height": 128},
+                    "bones": [
+                        {"name": "aerodragon", "pivot": [0, 0, 0]},
+                        {"name": "body", "parent": "aerodragon", "pivot": [0, 14, 0]},
+                        {
+                            "name": "torso",
+                            "parent": "body",
+                            "pivot": [0, 14, 0],
+                            "cubes": [
+                                {"origin": [-5, 10, -8], "size": [10, 8, 16], "uv": [0, 0]},
+                                {"origin": [0, 18, -6], "size": [0, 6, 12], "uv": [20, 10]},
+                            ],
+                            "locators": {"seat_1": [0, 18, 0]},
+                        },
+                        {"name": "wings", "parent": "torso", "pivot": [0, 17, -2]},
+                        {
+                            "name": "wing_left",
+                            "parent": "wings",
+                            "pivot": [5, 17, -2],
+                            "rotation": [0, 0, 12],
+                            "cubes": [
+                                {
+                                    "origin": [5, 17, -8],
+                                    "size": [16, 0, 12],
+                                    "pivot": [5, 17, -2],
+                                    "rotation": [5, -10, 0],
+                                    "uv": [0, 32],
+                                }
+                            ],
+                        },
+                        {
+                            "name": "wing_right",
+                            "parent": "wings",
+                            "pivot": [-5, 17, -2],
+                            "rotation": [0, 0, -12],
+                            "cubes": [
+                                {
+                                    "origin": [-21, 17, -8],
+                                    "size": [16, 0, 12],
+                                    "pivot": [-5, 17, -2],
+                                    "rotation": [5, 10, 0],
+                                    "uv": [0, 32],
+                                    "mirror": True,
+                                }
+                            ],
+                        },
+                    ],
+                }
+            ],
+        }
+        cobble_anim = {
+            "format_version": "1.8.0",
+            "animations": {
+                "animation.aerodragon.ground_idle": {
+                    "loop": True,
+                    "animation_length": 2.0,
+                    "bones": {
+                        "wing_left": {
+                            "rotation": [
+                                "(1 - math.cos(q.anim_time * 180)) * 12",
+                                0,
+                                "math.sin((q.anim_time - 0.25) * 180) * 24",
+                            ]
+                        },
+                        "wing_right": {
+                            "rotation": [
+                                "(1 - math.cos(q.anim_time * 180)) * 12",
+                                0,
+                                "-math.sin((q.anim_time - 0.25) * 180) * 24",
+                            ]
+                        },
+                    },
+                }
+            },
+        }
+        prov = AssetProvenance(
+            "cobblemon_aerodragon",
+            "https://gitlab.com/cable-mc/cobblemon",
+            "Cobblemon Contributors",
+            "CC-BY-NC-4.0",
+            "Cobblemon Assets (CC-BY-NC-4.0)",
+        )
+        rec = ingest_external_asset(
+            cobble_geo,
+            "bedrock_geojson",
+            prov,
+            license_policy="research_nc",
+            animation_payload=cobble_anim,
+        )
+        self.assertLess(rec.vertex_reconstruction_error, 1e-8)
+        assert rec.program.behavior is not None
+        self.assertEqual(len(rec.program.behavior.clips[0].tracks), 4)
+        stages = build_progressive_from_scratch_trajectory(rec.program)
+        self.assertEqual(len(stages), 5)
+        for st in stages:
+            self.assertTrue(st.static_audit_passed)
+
+        # 2. Affine-on-trig, q.life_time, ternary guards, math.abs, and leading-minus bias sign preservation
+        self.assertEqual(
+            _parse_molang_channel_zero_eval("(1 - math.cos(q.anim_time * 360)) * 15", "tail"),
+            ("wave", -15.0, 0.25, 15.0, 1.0),
+        )
+        self.assertEqual(
+            _parse_molang_channel_zero_eval("(math.sin(q.anim_time * 360) + 1) * 10", "tail"),
+            ("wave", 10.0, 0.0, 10.0, 1.0),
+        )
+        self.assertEqual(
+            _parse_molang_channel_zero_eval("0.5 * (math.sin((q.anim_time - 0.25) * 360) * 12 + 8)", "tail"),
+            ("wave", 6.0, 0.75, 4.0, 1.0),
+        )
+        self.assertEqual(
+            _parse_molang_channel_zero_eval("math.sin(q.life_time * 180) * 6", "tail"),
+            ("wave", 6.0, 0.0, 0.0, 0.5),
+        )
+        self.assertEqual(
+            _parse_molang_channel_zero_eval("q.is_moving ? math.sin(q.anim_time * 360) * 14 : 0", "tail"),
+            ("wave", 14.0, 0.0, 0.0, 1.0),
+        )
+        self.assertEqual(
+            _parse_molang_channel_zero_eval("-math.abs(math.sin(q.anim_time * 180)) * 20 + 5", "tail"),
+            ("hinge", -20.0, 0.0, 5.0, 1.0),
+        )
+        self.assertEqual(
+            _parse_molang_channel_zero_eval("-math.sin(q.anim_time * 360) * 10 + 5", "tail"),
+            ("wave", -10.0, 0.0, 5.0, 1.0),
+        )
+
+        # 3. Anti-phase keyframe walk timelines preserve 180 deg phase opposition
+        walk_anim = {
+            "format_version": "1.8.0",
+            "animations": {
+                "animation.aerodragon.walk": {
+                    "loop": True,
+                    "animation_length": 1.0,
+                    "bones": {
+                        "wing_left": {
+                            "rotation": {
+                                "0.0": [0, 0, 0],
+                                "0.25": [25, 0, 0],
+                                "0.5": [0, 0, 0],
+                                "0.75": [-25, 0, 0],
+                                "1.0": [0, 0, 0],
+                            }
+                        },
+                        "wing_right": {
+                            "rotation": {
+                                "0.0": [0, 0, 0],
+                                "0.25": [-25, 0, 0],
+                                "0.5": [0, 0, 0],
+                                "0.75": [25, 0, 0],
+                                "1.0": [0, 0, 0],
+                            }
+                        },
+                    },
+                }
+            },
+        }
+        beh_walk = decompile_bedrock_animation_to_behavior(walk_anim, rec.program)
+        tr_l = [t for t in beh_walk.clips[0].tracks if t.bone == "wing_left"][0]
+        tr_r = [t for t in beh_walk.clips[0].tracks if t.bone == "wing_right"][0]
+        self.assertAlmostEqual(tr_l.amp_deg, 25.0, places=2)
+        self.assertAlmostEqual(tr_r.amp_deg, 25.0, places=2)
+        self.assertAlmostEqual(abs(tr_r.phase_deg - tr_l.phase_deg), 180.0, places=2)
 
 
 if __name__ == "__main__":

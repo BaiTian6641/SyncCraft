@@ -2076,32 +2076,33 @@ def generate_apex_complex_dataset(
             sample_counter += 1
             prog = build_apex_complex_program(fam, seed=sample_seed)
             dsl_full = format_program(prog)
-            sc = compile_geometry(prog)
-            static_aud = audit_scene(sc, enforce_physical_contact=True)
-            clip_aud = (
-                audit_behavior_clip(prog, prog.behavior.clips[0].name, num_frames=12)
-                if prog.behavior and prog.behavior.clips
-                else None
-            )
             stages = build_progressive_from_scratch_trajectory(prog)
             full_readiness_score = stages[-1].readiness_score
 
-            base_meta = {
-                "family_id": fam,
-                "split": split_tag,
-                "seed": sample_seed,
-                "license_spdx": "Apache-2.0",
-                "license_track": "clean_room_permissive",
-                "commercial_weights_eligible": True,
-                "default_target_llm": "LiquidAI/LFM3-VL-2B",
-                "box_count": len(sc.boxes),
-                "bone_count": len(sc.bones),
-                "locator_count": len(sc.locators),
-                "muscle_count": len(prog.muscles),
-                "static_audit_passed": bool(static_aud["passed"]),
-                "dynamic_clip_passed": bool(clip_aud["passed"]) if clip_aud else True,
-                "max_stance_slip_units": clip_aud["max_stance_slip_units"] if clip_aud else 0.0,
-            }
+            def _row_meta_for_program(target_prog: Program) -> dict[str, Any]:
+                t_sc = compile_geometry(target_prog)
+                t_static = audit_scene(t_sc, enforce_physical_contact=True)
+                t_clip = (
+                    audit_behavior_clip(target_prog, target_prog.behavior.clips[0].name, num_frames=12)
+                    if target_prog.behavior and target_prog.behavior.clips
+                    else None
+                )
+                return {
+                    "family_id": fam,
+                    "split": split_tag,
+                    "seed": sample_seed,
+                    "license_spdx": "Apache-2.0",
+                    "license_track": "clean_room_permissive",
+                    "commercial_weights_eligible": True,
+                    "default_target_llm": "LiquidAI/LFM3-VL-2B",
+                    "box_count": len(t_sc.boxes),
+                    "bone_count": len(t_sc.bones),
+                    "locator_count": len(t_sc.locators),
+                    "muscle_count": len(target_prog.muscles),
+                    "static_audit_passed": bool(t_static["passed"]),
+                    "dynamic_clip_passed": bool(t_clip["passed"]) if t_clip else True,
+                    "max_stance_slip_units": t_clip["max_stance_slip_units"] if t_clip else 0.0,
+                }
 
             # 1. Full Masterwork Creation Turn
             sid_full = hashlib.sha256(f"{fam}:{sample_seed}:full".encode()).hexdigest()[:16]
@@ -2109,7 +2110,7 @@ def generate_apex_complex_dataset(
                 {
                     "sample_id": f"apex_{sid_full}",
                     "task_mode": "apex_full_masterwork",
-                    **base_meta,
+                    **_row_meta_for_program(prog),
                     "source_stage": None,
                     "target_stage": None,
                     "initial_readiness_score": None,
@@ -2133,7 +2134,7 @@ def generate_apex_complex_dataset(
                 {
                     "sample_id": f"apex_{sid_prog}",
                     "task_mode": "apex_progressive_stage_upgrade",
-                    **base_meta,
+                    **_row_meta_for_program(st_dst.program),
                     "source_stage": st_src.stage_name,
                     "target_stage": st_dst.stage_name,
                     "initial_readiness_score": None,
@@ -2156,7 +2157,7 @@ def generate_apex_complex_dataset(
                 {
                     "sample_id": f"apex_{sid_loop}",
                     "task_mode": "apex_artist_critique_and_enhance",
-                    **base_meta,
+                    **_row_meta_for_program(loop_res["final_program"]),
                     "source_stage": None,
                     "target_stage": None,
                     "initial_readiness_score": loop_res["initial_readiness_score"],
@@ -2171,6 +2172,7 @@ def generate_apex_complex_dataset(
                 }
             )
 
+    masterwork_rows = [r for r in rows if r["task_mode"] == "apex_full_masterwork"]
     summary = {
         "schema": "synccraft.apex_complex_dataset/1.0",
         "adr": "ADR-0006",
@@ -2181,6 +2183,9 @@ def generate_apex_complex_dataset(
         "static_sat_pass_rate": sum(1 for r in rows if r["static_audit_passed"]) / max(1, len(rows)),
         "dynamic_clip_pass_rate": sum(1 for r in rows if r["dynamic_clip_passed"]) / max(1, len(rows)),
         "mean_box_count": round(sum(r["box_count"] for r in rows) / max(1, len(rows)), 2),
+        "mean_masterwork_box_count": round(
+            sum(r["box_count"] for r in masterwork_rows) / max(1, len(masterwork_rows)), 2
+        ),
         "max_box_count": max((r["box_count"] for r in rows), default=0),
         "mean_bone_count": round(sum(r["bone_count"] for r in rows) / max(1, len(rows)), 2),
         "max_stance_slip_observed": round(max((r["max_stance_slip_units"] for r in rows), default=0.0), 6),

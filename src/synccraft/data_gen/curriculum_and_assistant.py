@@ -22,6 +22,7 @@ from synccraft.dsl.ast_nodes import (
     Attach,
     Bone,
     Box,
+    Locator,
     MaterialDecl,
     Meta,
     Palette,
@@ -151,14 +152,17 @@ def _trim_bone_recursive(
     max_depth: int,
     cur_depth: int = 0,
 ) -> Bone | None:
-    """Keep largest silhouette-defining boxes & child bones while preserving all base_box/parent_box links."""
+    """Keep largest silhouette-defining boxes & child bones while preserving all base_box/parent_box/locator links."""
     boxes_in_bone = [it for it in bone.items if isinstance(it, Box)]
+    locators_in_bone = [it for it in bone.items if isinstance(it, Locator)]
     child_bones = [it for it in bone.items if isinstance(it, Bone)]
-    if not boxes_in_bone:
+    if not boxes_in_bone and not child_bones:
         return None
 
     by_name = {bx.name: bx for bx in boxes_in_bone}
+    loc_by_name = {loc.name: loc for loc in locators_in_bone}
     kept_box_names: list[str] = []
+    kept_loc_names: list[str] = []
 
     def _ensure_box(bx_name: str) -> bool:
         if bx_name in kept_box_names:
@@ -172,12 +176,31 @@ def _trim_bone_recursive(
         kept_box_names.append(bx_name)
         return True
 
-    # Always keep the bone's primary anchor box
-    _ensure_box(boxes_in_bone[0].name)
+    def _ensure_anchor(anchor_name: str) -> bool:
+        if _ensure_box(anchor_name):
+            return True
+        if anchor_name in loc_by_name:
+            if anchor_name not in kept_loc_names:
+                kept_loc_names.append(anchor_name)
+            return True
+        return False
+
+    # Always keep the bone's primary anchor box when present
+    if boxes_in_bone:
+        _ensure_box(boxes_in_bone[0].name)
+
+    is_grouping_only = not boxes_in_bone
+    next_depth = cur_depth if is_grouping_only else (cur_depth + 1)
+    next_max_boxes = max_boxes_per_bone if is_grouping_only else max(1, max_boxes_per_bone - 1)
+    next_max_children = (
+        max_child_bones
+        if is_grouping_only
+        else max(1 if cur_depth + 1 < max_depth else 0, max_child_bones - 1)
+    )
 
     # Prioritize child bones with the largest physical silhouette volume, preserving declaration order
     kept_children: list[Bone] = []
-    if cur_depth < max_depth and max_child_bones > 0 and child_bones:
+    if (is_grouping_only or cur_depth < max_depth) and max_child_bones > 0 and child_bones:
         ranked_indices = sorted(
             range(len(child_bones)),
             key=lambda i: (-_subtree_volume(child_bones[i]), i),
@@ -186,31 +209,53 @@ def _trim_bone_recursive(
         selected_children = [child_bones[i] for i in range(len(child_bones)) if i in chosen_set]
         for ch in selected_children:
             if ch.attach is not None:
-                if not _ensure_box(ch.attach.parent_box):
+                if not _ensure_anchor(ch.attach.parent_box):
                     continue
             trimmed_ch = _trim_bone_recursive(
                 ch,
-                max_boxes_per_bone=max(1, max_boxes_per_bone - 1),
-                max_child_bones=max(1 if cur_depth + 1 < max_depth else 0, max_child_bones - 1),
+                max_boxes_per_bone=next_max_boxes,
+                max_child_bones=next_max_children,
                 max_depth=max_depth,
-                cur_depth=cur_depth + 1,
+                cur_depth=next_depth,
             )
             if trimmed_ch is not None:
                 kept_children.append(trimmed_ch)
 
     # Fill up to max_boxes_per_bone prioritizing largest-volume silhouette boxes first
-    remaining_ranked = sorted(
-        enumerate(boxes_in_bone[1:]),
-        key=lambda pair: (-_box_volume(pair[1]), pair[0]),
-    )
-    for _, bx in remaining_ranked:
-        if len(kept_box_names) >= max_boxes_per_bone:
-            break
-        _ensure_box(bx.name)
+    if boxes_in_bone:
+        remaining_ranked = sorted(
+            enumerate(boxes_in_bone[1:]),
+            key=lambda pair: (-_box_volume(pair[1]), pair[0]),
+        )
+        for _, bx in remaining_ranked:
+            if len(kept_box_names) >= max_boxes_per_bone:
+                break
+            _ensure_box(bx.name)
+
+    if not kept_box_names and not kept_children:
+        return None
+    if not kept_box_names and not kept_loc_names:
+        if locators_in_bone:
+            kept_loc_names.append(locators_in_bone[0].name)
+        else:
+            return None
 
     kept_set = set(kept_box_names)
-    ordered_boxes = [bx for bx in boxes_in_bone if bx.name in kept_set]
-    return replace(bone, items=[*ordered_boxes, *kept_children])
+    kept_loc_set = set(kept_loc_names)
+    kept_child_map = {ch.name: ch for ch in kept_children}
+    if not kept_loc_set:
+        ordered_boxes = [bx for bx in boxes_in_bone if bx.name in kept_set]
+        return replace(bone, items=[*ordered_boxes, *kept_children])
+
+    ordered_items: list[Box | Locator | Bone] = []
+    for it in bone.items:
+        if isinstance(it, Box) and it.name in kept_set:
+            ordered_items.append(it)
+        elif isinstance(it, Locator) and it.name in kept_loc_set:
+            ordered_items.append(it)
+        elif isinstance(it, Bone) and it.name in kept_child_map:
+            ordered_items.append(kept_child_map[it.name])
+    return replace(bone, items=ordered_items)
 
 
 def coarsen_program_to_tier(program: Program, target_tier: str) -> Program:

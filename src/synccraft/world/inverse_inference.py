@@ -869,9 +869,14 @@ _ANIM_TIME_IDENTS: frozenset[str] = frozenset({
     "query.anim_time",
     "v.anim_time",
     "variable.anim_time",
+    "q.life_time",
+    "query.life_time",
+    "v.life_time",
+    "variable.life_time",
 })
 _ARITH_TOKEN_RE = re.compile(r"\s*(?:(\d+(?:\.\d+)?|\.\d+)|([A-Za-z_][A-Za-z0-9_.]*)|([+\-*/()]))")
 _TRIG_START_RE = re.compile(r"\bmath\.(sin|cos)\s*\(", re.IGNORECASE)
+_ABS_START_RE = re.compile(r"\bmath\.abs\s*\(", re.IGNORECASE)
 
 
 def _eval_linear_molang_expr(expr_str: str, t_val: float) -> float | None:
@@ -1082,25 +1087,36 @@ def _unwrap_signed_parens(expr_str: str) -> tuple[float, str]:
 
 def _flatten_additive_terms(expr_str: str, outer_sign: float = 1.0, depth: int = 0) -> list[tuple[float, str]]:
     """Flatten nested signed additive groups into (sign, term_core) pairs without eval."""
-    sgn, core = _unwrap_signed_parens(expr_str)
+    raw = expr_str.strip()
+    if not raw:
+        return []
+    if depth < 6:
+        top_parts = _split_top_level_additive_terms(raw)
+        if len(top_parts) > 1:
+            out: list[tuple[float, str]] = []
+            for p in top_parts:
+                out.extend(_flatten_additive_terms(p, outer_sign, depth + 1))
+            return out
+    sgn, core = _unwrap_signed_parens(raw)
     eff_sign = outer_sign * sgn
     if not core:
         return []
-    parts = _split_top_level_additive_terms(core)
-    if len(parts) > 1 and depth < 4:
-        out: list[tuple[float, str]] = []
-        for p in parts:
-            out.extend(_flatten_additive_terms(p, eff_sign, depth + 1))
-        return out
+    if depth < 6:
+        inner_parts = _split_top_level_additive_terms(core)
+        if len(inner_parts) > 1:
+            out = []
+            for p in inner_parts:
+                out.extend(_flatten_additive_terms(p, eff_sign, depth + 1))
+            return out
     return [(eff_sign, core)]
 
 
-def _find_balanced_trig_call(term: str) -> tuple[int, int, str, str] | None:
-    """Locate math.sin(...) or math.cos(...) with nested balanced parentheses."""
-    m = _TRIG_START_RE.search(term)
+def _find_balanced_call(term: str, start_re: re.Pattern[str]) -> tuple[int, int, str, str] | None:
+    """Locate a balanced function call matching ``start_re`` without eval."""
+    m = start_re.search(term)
     if m is None:
         return None
-    trig_fn = m.group(1).lower()
+    fn_name = (m.group(1) if m.lastindex else m.group(0)).lower()
     open_idx = m.end() - 1
     depth = 0
     close_idx = -1
@@ -1116,7 +1132,78 @@ def _find_balanced_trig_call(term: str) -> tuple[int, int, str, str] | None:
     if close_idx < 0 or depth != 0:
         return None
     inside_arg = term[open_idx + 1 : close_idx]
-    return (m.start(), close_idx + 1, trig_fn, inside_arg)
+    return (m.start(), close_idx + 1, fn_name, inside_arg)
+
+
+def _find_balanced_trig_call(term: str) -> tuple[int, int, str, str] | None:
+    """Locate math.sin(...) or math.cos(...) with nested balanced parentheses."""
+    return _find_balanced_call(term, _TRIG_START_RE)
+
+
+def _split_top_level_ternary(expr_str: str) -> tuple[float, list[str]] | None:
+    """Split top-level ``cond ? branch_a : branch_b`` ternary into ``(outer_sign, [branch_a, branch_b])``."""
+    sign = 1.0
+    cur = expr_str.strip()
+    for _ in range(6):
+        if cur.startswith("(") and cur.endswith(")"):
+            _, unwrapped = _unwrap_signed_parens(cur)
+            if unwrapped != cur:
+                cur = unwrapped
+                continue
+        if cur and cur[0] in "+-":
+            rest = cur[1:].strip()
+            if rest.startswith("(") and rest.endswith(")"):
+                _, unwrapped = _unwrap_signed_parens(rest)
+                if unwrapped != rest:
+                    if cur[0] == "-":
+                        sign = -sign
+                    cur = unwrapped
+                    continue
+        break
+    depth = 0
+    q_idx = -1
+    colon_idx = -1
+    for i, ch in enumerate(cur):
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth = max(0, depth - 1)
+        elif depth == 0:
+            if ch == "?" and q_idx < 0:
+                q_idx = i
+            elif ch == ":" and q_idx >= 0 and colon_idx < 0:
+                colon_idx = i
+                break
+    if q_idx >= 0 and colon_idx > q_idx + 1:
+        b_true = cur[q_idx + 1 : colon_idx].strip()
+        b_false = cur[colon_idx + 1 :].strip()
+        branches = [b for b in (b_true, b_false) if b]
+        return (sign, branches) if branches else None
+    return None
+
+
+def _eval_affine_wrapper(term_core: str, span_start: int, span_end: int) -> tuple[float, float] | None:
+    """Evaluate outer affine wrapper ``f(u) = c0 + c1 * u`` around ``term_core[span_start:span_end]``."""
+    prefix = term_core[:span_start]
+    suffix = term_core[span_end:]
+    f0_t0 = _eval_linear_molang_expr(f"{prefix}(0.0){suffix}", 0.0)
+    f0_t1 = _eval_linear_molang_expr(f"{prefix}(0.0){suffix}", 1.0)
+    f1_t0 = _eval_linear_molang_expr(f"{prefix}(1.0){suffix}", 0.0)
+    f1_t1 = _eval_linear_molang_expr(f"{prefix}(1.0){suffix}", 1.0)
+    f2_t0 = _eval_linear_molang_expr(f"{prefix}(2.0){suffix}", 0.0)
+    if (
+        f0_t0 is None
+        or f0_t1 is None
+        or f1_t0 is None
+        or f1_t1 is None
+        or f2_t0 is None
+    ):
+        return None
+    if abs(f0_t1 - f0_t0) > 1e-6 or abs(f1_t1 - f1_t0) > 1e-6:
+        return None
+    if abs((f2_t0 - f1_t0) - (f1_t0 - f0_t0)) > 1e-4:
+        return None
+    return (f0_t0, f1_t0 - f0_t0)
 
 
 def _parse_molang_inside_arg(inside_arg: str) -> tuple[float, float | None, float] | None:
@@ -1141,15 +1228,19 @@ def _parse_molang_inside_arg(inside_arg: str) -> tuple[float, float | None, floa
 def _parse_molang_channel_zero_eval(
     expr: Any,
     bone_name: str,
+    *,
+    _depth: int = 0,
 ) -> tuple[str, float, float, float, float | None] | None:
     """Zero-eval bounded parser translating Bedrock/Cobblemon Molang rotation channel to TrackDecl parameters.
 
     Supports arbitrarily nested parentheses inside trig calls (e.g.
-    ``math.sin((q.anim_time - 0.25) * 90 * 4) * 10``), unary/binary signs,
-    ``0 - math.sin(...)``, multi-harmonic expressions, and ``math.clamp(...)``.
+    ``math.sin((q.anim_time - 0.25) * 90 * 4) * 10``), affine-on-trig wrappers
+    (``(1 - math.cos(q.anim_time * 360)) * 15``), ``q.life_time``, top-level
+    ternary guards (``q.is_moving ? ... : 0``), ``math.abs(math.sin(...))``,
+    unary/binary signs, multi-harmonic expressions, and ``math.clamp(...)``.
     Returns ``(law, amp_deg, phase_offset_unit, bias_deg, freq_hz_override)`` or ``None``.
     """
-    if isinstance(expr, bool) or expr is None:
+    if isinstance(expr, bool) or expr is None or _depth > 3:
         return None
     if isinstance(expr, (int, float)):
         val = float(expr)
@@ -1163,6 +1254,27 @@ def _parse_molang_channel_zero_eval(
         return None
 
     text, clamp_bounds = _unwrap_molang_clamp(raw_text)
+
+    ternary_hit = _split_top_level_ternary(text)
+    if ternary_hit is not None:
+        outer_sign, ternary_branches = ternary_hit
+        parsed_branches: list[tuple[str, float, float, float, float | None]] = []
+        for br in ternary_branches:
+            pb = _parse_molang_channel_zero_eval(br, bone_name, _depth=_depth + 1)
+            if pb is not None:
+                b_law, b_amp, b_ph, b_bs, b_freq = pb
+                b_amp *= outer_sign
+                b_bs *= outer_sign
+                if clamp_bounds is not None:
+                    c_lo, c_hi = clamp_bounds
+                    lo_eff = float(np.clip(b_bs - abs(b_amp), c_lo, c_hi))
+                    hi_eff = float(np.clip(b_bs + abs(b_amp), c_lo, c_hi))
+                    b_bs = 0.5 * (lo_eff + hi_eff)
+                    b_amp = math.copysign(0.5 * (hi_eff - lo_eff), b_amp if abs(b_amp) > 1e-9 else 1.0)
+                parsed_branches.append((b_law, round(b_amp, 4), b_ph, round(b_bs, 4), b_freq))
+        if not parsed_branches:
+            return None
+        return max(parsed_branches, key=lambda item: (abs(item[1]), abs(item[3])))
 
     # Pure constant expression (without anim_time or trig)
     if _TRIG_START_RE.search(text) is None:
@@ -1178,9 +1290,37 @@ def _parse_molang_channel_zero_eval(
         return None
 
     bias_total = 0.0
-    trig_candidates: list[tuple[float, float, float | None, bool]] = []
+    # (amp_deg, phase_deg_effective, freq_hz_override, law_override_or_empty)
+    trig_candidates: list[tuple[float, float, float | None, str]] = []
 
     for term_sign, term_core in _flatten_additive_terms(text):
+        abs_hit = _find_balanced_call(term_core, _ABS_START_RE)
+        if abs_hit is not None:
+            a_start, a_end, _, abs_inner = abs_hit
+            inner_trig = _find_balanced_trig_call(abs_inner)
+            outer_aff = _eval_affine_wrapper(term_core, a_start, a_end)
+            if inner_trig is not None and outer_aff is not None:
+                it_start, it_end, it_fn, it_arg = inner_trig
+                inner_aff = _eval_affine_wrapper(abs_inner, it_start, it_end)
+                parsed_in = _parse_molang_inside_arg(it_arg)
+                if inner_aff is not None and parsed_in is not None and abs(inner_aff[0]) <= 1e-6:
+                    outer_c0, outer_c1 = outer_aff
+                    bias_total += term_sign * outer_c0
+                    arg_phase_deg, freq_override, _ = parsed_in
+                    is_cos = it_fn == "cos"
+                    if freq_override is None:
+                        val_const = abs(
+                            inner_aff[1]
+                            * (math.cos(math.radians(arg_phase_deg)) if is_cos else math.sin(math.radians(arg_phase_deg)))
+                        )
+                        bias_total += term_sign * outer_c1 * val_const
+                    else:
+                        amp_rect = term_sign * outer_c1 * abs(inner_aff[1])
+                        rect_freq = round(float(np.clip(2.0 * freq_override, 0.05, 20.0)), 4)
+                        rect_phase_deg = 2.0 * (arg_phase_deg + (90.0 if is_cos else 0.0))
+                        trig_candidates.append((amp_rect, rect_phase_deg, rect_freq, "hinge"))
+                    continue
+
         trig_hit = _find_balanced_trig_call(term_core)
         if trig_hit is None:
             c0 = _eval_linear_molang_expr(term_core, 0.0)
@@ -1190,12 +1330,12 @@ def _parse_molang_channel_zero_eval(
             continue
 
         t_start, t_end, trig_fn, inside_arg = trig_hit
-        replaced = term_core[:t_start] + "(1.0)" + term_core[t_end:]
-        s0 = _eval_linear_molang_expr(replaced, 0.0)
-        s1 = _eval_linear_molang_expr(replaced, 1.0)
-        if s0 is None or s1 is None or abs(s1 - s0) > 1e-6:
+        aff = _eval_affine_wrapper(term_core, t_start, t_end)
+        if aff is None:
             continue
-        scale = term_sign * s0
+        aff_c0, aff_c1 = aff
+        bias_total += term_sign * aff_c0
+        scale = term_sign * aff_c1
         parsed_in = _parse_molang_inside_arg(inside_arg)
         if parsed_in is None:
             continue
@@ -1205,7 +1345,8 @@ def _parse_molang_channel_zero_eval(
             bias_total += scale * (math.cos(math.radians(arg_phase_deg)) if is_cos else math.sin(math.radians(arg_phase_deg)))
         else:
             amp_i = scale * (1.0 if is_cos else sin_sign)
-            trig_candidates.append((amp_i, arg_phase_deg, freq_override, is_cos))
+            eff_phase_deg = (90.0 if is_cos else 0.0) + arg_phase_deg
+            trig_candidates.append((amp_i, eff_phase_deg, freq_override, ""))
 
     if not trig_candidates:
         if abs(bias_total) >= 0.25:
@@ -1215,24 +1356,35 @@ def _parse_molang_channel_zero_eval(
                 return ("hinge", 0.0, 0.0, round(float(np.clip(bias_total, -180.0, 180.0)), 4), None)
         return None
 
-    amp_raw, arg_phase_deg, freq_override, is_cos = max(trig_candidates, key=lambda item: abs(item[0]))
+    amp_raw, phase_deg, freq_override, law_override = max(trig_candidates, key=lambda item: abs(item[0]))
     amp = float(np.clip(amp_raw, -180.0, 180.0))
     bias = float(np.clip(bias_total, -180.0, 180.0))
 
     if clamp_bounds is not None:
         c_lo, c_hi = clamp_bounds
-        lo_eff = float(np.clip(bias - abs(amp), c_lo, c_hi))
-        hi_eff = float(np.clip(bias + abs(amp), c_lo, c_hi))
-        bias = 0.5 * (lo_eff + hi_eff)
-        half_span = 0.5 * (hi_eff - lo_eff)
-        amp = math.copysign(half_span, amp if abs(amp) > 1e-9 else 1.0)
+        if law_override == "hinge":
+            lo_raw = min(bias, bias + amp)
+            hi_raw = max(bias, bias + amp)
+            lo_eff = float(np.clip(lo_raw, c_lo, c_hi))
+            hi_eff = float(np.clip(hi_raw, c_lo, c_hi))
+            if amp >= 0.0:
+                bias = lo_eff
+                amp = hi_eff - lo_eff
+            else:
+                bias = hi_eff
+                amp = lo_eff - hi_eff
+        else:
+            lo_eff = float(np.clip(bias - abs(amp), c_lo, c_hi))
+            hi_eff = float(np.clip(bias + abs(amp), c_lo, c_hi))
+            bias = 0.5 * (lo_eff + hi_eff)
+            half_span = 0.5 * (hi_eff - lo_eff)
+            amp = math.copysign(half_span, amp if abs(amp) > 1e-9 else 1.0)
 
-    phase_deg = (90.0 if is_cos else 0.0) + arg_phase_deg
     phase_offset = (phase_deg / 360.0) % 1.0
     if phase_offset >= 0.999999:
         phase_offset = 0.0
 
-    wf = "flap" if "wing" in bone_name.lower() else "wave"
+    wf = law_override or ("flap" if "wing" in bone_name.lower() else "wave")
     if abs(amp) < 0.1 and abs(bias) < 0.25:
         return None
     return (wf, round(amp, 4), round(phase_offset, 4), round(bias, 4), freq_override)
@@ -1287,6 +1439,165 @@ def _try_numeric_deg(val: Any) -> float | None:
         except ValueError:
             return None
     return None
+
+
+def _fit_keyframe_channel_track(
+    timed_vals: list[tuple[float, float]],
+    *,
+    dur: float,
+    loop_val: bool,
+    base_freq_hz: float,
+    target_b: str,
+    ax_name: str,
+) -> TrackDecl | None:
+    """Fit a phase-faithful TrackDecl (signed amplitude, phase_deg, bias_deg) to timestamped keyframes."""
+    if not timed_vals:
+        return None
+    if len(timed_vals) == 1:
+        v0 = timed_vals[0][1]
+        if abs(v0) < 0.25:
+            return None
+        return TrackDecl(
+            bone=target_b,
+            law="hinge",
+            axis=ax_name,
+            amp_deg=0.0,
+            freq_hz=base_freq_hz,
+            phase_deg=0.0,
+            bias_deg=round(float(np.clip(v0, -90.0, 90.0)), 4),
+        )
+
+    num_vals = [v for _, v in timed_vals]
+    vmin, vmax = min(num_vals), max(num_vals)
+    span = vmax - vmin
+    if span < 0.25:
+        if abs(num_vals[0]) >= 0.25:
+            return TrackDecl(
+                bone=target_b,
+                law="hinge",
+                axis=ax_name,
+                amp_deg=0.0,
+                freq_hz=base_freq_hz,
+                phase_deg=0.0,
+                bias_deg=round(float(np.clip(num_vals[0], -90.0, 90.0)), 4),
+            )
+        return None
+
+    # Group (pre, post) pairs per distinct timestamp: pre = arriving limit, post = departing limit
+    knots: list[tuple[float, float, float]] = []
+    for t_val, v_val in timed_vals:
+        if knots and abs(t_val - knots[-1][0]) <= 1e-6:
+            t_prev, v_pre_prev, _ = knots[-1]
+            knots[-1] = (t_prev, v_pre_prev, v_val)
+        else:
+            knots.append((t_val, v_val, v_val))
+
+    if len(knots) == 1:
+        bs_single = 0.5 * (vmax + vmin)
+        amp_single = 0.5 * span
+        ph_single = 0.0 if knots[0][2] >= knots[0][1] else 180.0
+        wf_single = "flap" if "wing" in target_b.lower() else "wave"
+        return TrackDecl(
+            bone=target_b,
+            law=wf_single,
+            axis=ax_name,
+            amp_deg=round(float(np.clip(amp_single, -120.0, 120.0)), 4),
+            freq_hz=base_freq_hz,
+            phase_deg=ph_single,
+            bias_deg=round(float(np.clip(bs_single, -90.0, 90.0)), 4),
+        )
+
+    t_first, _, v_depart_start = knots[0]
+    t_last, v_arrive_end, _ = knots[-1]
+    t_span = t_last - t_first
+    t_peak = max(timed_vals, key=lambda pair: pair[1])[0]
+    t_trough = min(timed_vals, key=lambda pair: pair[1])[0]
+    has_step_jump = any(abs(k_post - k_pre) > 0.15 * span for _, k_pre, k_post in knots)
+
+    if not has_step_jump and t_span >= 0.45 * dur:
+        if (
+            abs(v_depart_start - vmin) < 0.15 * span
+            and abs(v_arrive_end - vmin) < 0.15 * span
+            and 0.20 * dur <= (t_peak - t_first) <= 0.80 * dur
+        ):
+            return TrackDecl(
+                bone=target_b,
+                law="hinge",
+                axis=ax_name,
+                amp_deg=round(float(np.clip(span, -120.0, 120.0)), 4),
+                freq_hz=base_freq_hz,
+                phase_deg=0.0,
+                bias_deg=round(float(np.clip(vmin, -90.0, 90.0)), 4),
+            )
+        if (
+            abs(v_depart_start - vmax) < 0.15 * span
+            and abs(v_arrive_end - vmax) < 0.15 * span
+            and 0.20 * dur <= (t_trough - t_first) <= 0.80 * dur
+        ):
+            return TrackDecl(
+                bone=target_b,
+                law="hinge",
+                axis=ax_name,
+                amp_deg=round(float(np.clip(-span, -120.0, 120.0)), 4),
+                freq_hz=base_freq_hz,
+                phase_deg=0.0,
+                bias_deg=round(float(np.clip(vmax, -90.0, 90.0)), 4),
+            )
+
+    wf = "flap" if "wing" in target_b.lower() else "wave"
+    safe_dur = max(1e-6, dur)
+    segments: list[tuple[float, float, float, float]] = []
+    for k_idx in range(len(knots) - 1):
+        t0_s, _, y0_s = knots[k_idx]
+        t1_s, y1_s, _ = knots[k_idx + 1]
+        if t1_s - t0_s > 1e-6:
+            segments.append((t0_s, t1_s, y0_s, y1_s))
+    if loop_val and t_last < t_first + 0.85 * safe_dur and (t_first + safe_dur) - t_last > 1e-6:
+        segments.append((t_last, t_first + safe_dur, knots[-1][2], knots[0][1]))
+
+    if segments:
+        seg_start = segments[0][0]
+        seg_end = segments[-1][1]
+        n_quad = 64
+        s_grid = seg_start + (np.arange(n_quad, dtype=np.float64) + 0.5) * ((seg_end - seg_start) / n_quad)
+        y_grid = np.empty(n_quad, dtype=np.float64)
+        seg_ptr = 0
+        for q_i, s_t in enumerate(s_grid):
+            while seg_ptr + 1 < len(segments) and s_t > segments[seg_ptr][1]:
+                seg_ptr += 1
+            st0, st1, sy0, sy1 = segments[seg_ptr]
+            alpha = float(np.clip((s_t - st0) / max(1e-9, st1 - st0), 0.0, 1.0))
+            y_grid[q_i] = sy0 + alpha * (sy1 - sy0)
+
+        ang = 2.0 * math.pi * (s_grid / safe_dur)
+        design = np.column_stack([np.ones_like(ang), np.sin(ang), np.cos(ang)])
+        coeffs, _, _, _ = np.linalg.lstsq(design, y_grid, rcond=1e-6)
+        c0, cs, cc = float(coeffs[0]), float(coeffs[1]), float(coeffs[2])
+        amp_fit = math.hypot(cs, cc)
+        if amp_fit >= 0.15 * span:
+            bs = c0
+            amp = max(amp_fit, 0.5 * span) if len(knots) <= 5 else amp_fit
+            phase_deg = math.degrees(math.atan2(cc, cs)) % 360.0
+        else:
+            bs = 0.5 * (vmax + vmin)
+            amp = 0.5 * span
+            phase_deg = 0.0 if segments[0][3] >= segments[0][2] else 180.0
+    else:
+        bs = 0.5 * (vmax + vmin)
+        amp = 0.5 * span
+        phase_deg = 0.0
+
+    if phase_deg >= 359.995:
+        phase_deg = 0.0
+    return TrackDecl(
+        bone=target_b,
+        law=wf,
+        axis=ax_name,
+        amp_deg=round(float(np.clip(amp, -120.0, 120.0)), 4),
+        freq_hz=base_freq_hz,
+        phase_deg=round(phase_deg, 2),
+        bias_deg=round(float(np.clip(bs, -90.0, 90.0)), 4),
+    )
 
 
 def decompile_bedrock_animation_to_behavior(
@@ -1381,13 +1692,13 @@ def decompile_bedrock_animation_to_behavior(
                     raw_kf_rows.sort(key=lambda item: (item[0], item[1]))
                     if raw_kf_rows:
                         for ax_idx, ax_name in enumerate(("x", "y", "z")):
-                            ax_items = [row[2][ax_idx] for row in raw_kf_rows]
-                            num_vals: list[float] = []
+                            timed_num_vals: list[tuple[float, float]] = []
                             molang_parsed_list: list[tuple[str, float, float, float, float | None]] = []
-                            for cell in ax_items:
+                            for t_row, _, vec_row in raw_kf_rows:
+                                cell = vec_row[ax_idx]
                                 num_v = _try_numeric_deg(cell)
                                 if num_v is not None:
-                                    num_vals.append(num_v)
+                                    timed_num_vals.append((t_row, num_v))
                                 else:
                                     p_mol = _parse_molang_channel_zero_eval(cell, target_b)
                                     if p_mol is not None:
@@ -1408,55 +1719,17 @@ def decompile_bedrock_animation_to_behavior(
                                         bias_deg=float(np.clip(bs, -90.0, 90.0)),
                                     )
                                 )
-                            elif len(num_vals) >= 2:
-                                vmin, vmax = min(num_vals), max(num_vals)
-                                span = vmax - vmin
-                                if span < 0.25:
-                                    if abs(num_vals[0]) >= 0.25:
-                                        tracks.append(
-                                            TrackDecl(
-                                                bone=target_b,
-                                                law="hinge",
-                                                axis=ax_name,
-                                                amp_deg=0.0,
-                                                freq_hz=base_freq_hz,
-                                                phase_deg=0.0,
-                                                bias_deg=round(float(np.clip(num_vals[0], -90.0, 90.0)), 4),
-                                            )
-                                        )
-                                    continue
-                                v_start, v_end = num_vals[0], num_vals[-1]
-                                if abs(v_start - vmin) < 0.2 * span and abs(v_end - vmin) < 0.2 * span:
-                                    wf = "hinge"
-                                    bs = float(np.clip(vmin, -90.0, 90.0))
-                                    amp = float(np.clip(span, -120.0, 120.0))
-                                else:
-                                    wf = "flap" if "wing" in target_b.lower() else "wave"
-                                    bs = float(np.clip(0.5 * (vmax + vmin), -90.0, 90.0))
-                                    amp = float(np.clip(0.5 * span, -120.0, 120.0))
-                                tracks.append(
-                                    TrackDecl(
-                                        bone=target_b,
-                                        law=wf,
-                                        axis=ax_name,
-                                        amp_deg=round(amp, 4),
-                                        freq_hz=base_freq_hz,
-                                        phase_deg=0.0,
-                                        bias_deg=round(bs, 4),
-                                    )
+                            elif timed_num_vals:
+                                fitted_tr = _fit_keyframe_channel_track(
+                                    timed_num_vals,
+                                    dur=dur,
+                                    loop_val=loop_val,
+                                    base_freq_hz=base_freq_hz,
+                                    target_b=target_b,
+                                    ax_name=ax_name,
                                 )
-                            elif len(num_vals) == 1 and abs(num_vals[0]) >= 0.25:
-                                tracks.append(
-                                    TrackDecl(
-                                        bone=target_b,
-                                        law="hinge",
-                                        axis=ax_name,
-                                        amp_deg=0.0,
-                                        freq_hz=base_freq_hz,
-                                        phase_deg=0.0,
-                                        bias_deg=round(float(np.clip(num_vals[0], -90.0, 90.0)), 4),
-                                    )
-                                )
+                                if fitted_tr is not None:
+                                    tracks.append(fitted_tr)
 
         if not tracks:
             non_root_bones = sorted(valid_bones - {program.root.name})

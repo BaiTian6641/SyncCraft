@@ -1377,6 +1377,14 @@ class TestNotebookTier4RealWorldScenarios(unittest.TestCase):
                 self.assertIn("apex_complex_v3_1", ds_card_text)
                 self.assertGreaterEqual(global_scope["training_cfg"].max_sequence_length, 8192)
                 self.assertGreaterEqual(global_scope.get("apex_interleaved_count", 0), 1)
+                nb_code_all = "\n".join(get_all_code_cells(load_notebook()))
+                self.assertIn('"SYNCCRAFT_APEX_MAX_NEW_TOKENS", "5120"', nb_code_all)
+                for ckpt in checkpoint_dirs:
+                    ta_path = ckpt / "training_args.json"
+                    if ta_path.is_file():
+                        ta_json = json.loads(ta_path.read_text(encoding="utf-8"))
+                        self.assertGreaterEqual(ta_json.get("max_sequence_length", 0), 8192)
+                        self.assertGreaterEqual(ta_json.get("apex_v3_1_interleaved_samples", 0), 1)
                 apex_probed_fams = {r["family_id"] for r in global_scope.get("apex_probed_completions", [])}
                 self.assertEqual(apex_probed_fams, {"elder_calamity_dragon", "relic_automaton_guardian"})
                 apex_eval_file = temp_path / "runs" / "apex_complex_eval_report.json"

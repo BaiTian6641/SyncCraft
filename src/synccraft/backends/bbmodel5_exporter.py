@@ -38,6 +38,7 @@ def _serialize_bbmodel_animations(
     num_animation_frames: int,
 ) -> list[dict[str, Any]]:
     from synccraft.kinematics.musculoskeletal import evaluate_behavior_clip
+    from .bedrock_gecko_exporter import _extract_so3_euler_keyframe_deltas
 
     n_frames = max(4, int(num_animation_frames))
     root_bone_name = scene.bones[0].name
@@ -61,6 +62,16 @@ def _serialize_bbmodel_animations(
                     "color": -1,
                     "interpolation": "linear",
                 })
+            if clip.loop and not any(abs(d.stride) > 1e-6 for d in clip.ik_drives):
+                tx0, ty0, tz0 = samples[0].root_translation_delta
+                pos_kfs.append({
+                    "channel": "position",
+                    "data_points": [{"x": round(float(tx0), 4), "y": round(float(ty0), 4), "z": round(float(tz0), 4)}],
+                    "uuid": stable_uuid("kf_pos", f"{clip.name}:{root_bone_name}:wrap", asset_name),
+                    "time": round(float(clip.duration_s), 4),
+                    "color": -1,
+                    "interpolation": "linear",
+                })
             animators.setdefault(
                 root_uid,
                 {"name": root_bone_name, "type": "bone", "keyframes": []},
@@ -70,7 +81,7 @@ def _serialize_bbmodel_animations(
             bname = bone.name
             if bname == root_bone_name:
                 continue
-            frame_vecs = [s.pose_euler_deltas.get(bname, (0.0, 0.0, 0.0)) for s in samples]
+            frame_vecs = _extract_so3_euler_keyframe_deltas(samples, bone)
             if max(max(abs(v[0]), abs(v[1]), abs(v[2])) for v in frame_vecs) < 1e-4:
                 continue
             b_uid = stable_uuid("bone", bname, asset_name)
@@ -89,13 +100,15 @@ def _serialize_bbmodel_animations(
                     "interpolation": "linear",
                 })
             if clip.loop:
-                v0 = frame_vecs[0]
+                v_last = np.asarray(frame_vecs[-1], dtype=np.float64)
+                v0_arr = np.asarray(frame_vecs[0], dtype=np.float64)
+                v_wrap = v_last + (((v0_arr - v_last) + 180.0) % 360.0 - 180.0)
                 rot_kfs.append({
                     "channel": "rotation",
                     "data_points": [{
-                        "x": round(float(v0[0]), 4),
-                        "y": round(float(v0[1]), 4),
-                        "z": round(float(v0[2]), 4),
+                        "x": round(float(v_wrap[0]), 4),
+                        "y": round(float(v_wrap[1]), 4),
+                        "z": round(float(v_wrap[2]), 4),
                     }],
                     "uuid": stable_uuid("kf_rot", f"{clip.name}:{bname}:wrap", asset_name),
                     "time": round(float(clip.duration_s), 4),

@@ -1139,19 +1139,43 @@ def run_looped_artist_enhancement(
     }
 
 
+def _bone_subtree_has_box(bone: Bone) -> bool:
+    for it in bone.items:
+        if isinstance(it, Box):
+            return True
+        if isinstance(it, Bone) and _bone_subtree_has_box(it):
+            return True
+    return False
+
+
 def _strip_locators_and_limits_from_bone(bone: Bone) -> Bone:
+    boxes_in_bone = [it for it in bone.items if isinstance(it, Box)]
+    locators_in_bone = [it for it in bone.items if isinstance(it, Locator)]
+    stripped_children: dict[str, Bone] = {}
+    for it in bone.items:
+        if isinstance(it, Bone):
+            stripped_child = _strip_locators_and_limits_from_bone(it)
+            if _bone_subtree_has_box(stripped_child):
+                stripped_children[it.name] = stripped_child
+
+    referenced_locators = {
+        ch.attach.parent_box
+        for ch in stripped_children.values()
+        if ch.attach is not None
+    }
+    need_structural_locator = (not boxes_in_bone) and bool(locators_in_bone)
+    preserved_loc_names = set(referenced_locators)
+    if need_structural_locator and not (preserved_loc_names & {loc.name for loc in locators_in_bone}):
+        preserved_loc_names.add(locators_in_bone[0].name)
+
     items: list[Box | Locator | Bone] = []
     for it in bone.items:
         if isinstance(it, Box):
             items.append(it)
-        elif isinstance(it, Bone):
-            stripped_child = _strip_locators_and_limits_from_bone(it)
-            if any(isinstance(x, (Box, Bone)) for x in stripped_child.items):
-                items.append(stripped_child)
-    if not items and any(isinstance(x, Locator) for x in bone.items):
-        # Preserve single structural locator only if bone had zero boxes
-        first_loc = next(x for x in bone.items if isinstance(x, Locator))
-        items.append(first_loc)
+        elif isinstance(it, Locator) and it.name in preserved_loc_names:
+            items.append(it)
+        elif isinstance(it, Bone) and it.name in stripped_children:
+            items.append(stripped_children[it.name])
     return replace(bone, items=items, joint_limits=None)
 
 
@@ -1347,14 +1371,16 @@ def export_artist_project_bundle(
         )
         bundle = {"bbmodel": bb_doc, "runtime_import_verified": False}
         rt_rec = ingest_external_asset(bb_doc, "bbmodel", rt_prov)
-        rt_sc = compile_geometry(rt_rec.program)
         rt_err = float(rt_rec.vertex_reconstruction_error)
-        for bx in scene.boxes:
-            if bx.name in rt_sc.box_by_name:
+
+    rt_sc = compile_geometry(rt_rec.program)
+    for bx in scene.boxes:
+        if bx.name in rt_sc.box_by_name:
+            for inc_inf in (False, True):
                 c_err = float(
                     np.max(
                         np.linalg.norm(
-                            bx.corners(include_inflate=False) - rt_sc.box_by_name[bx.name].corners(include_inflate=False),
+                            bx.corners(include_inflate=inc_inf) - rt_sc.box_by_name[bx.name].corners(include_inflate=inc_inf),
                             axis=-1,
                         )
                     )
@@ -1369,7 +1395,7 @@ def export_artist_project_bundle(
         "behavior_clips_total": clips_total,
         "behavior_clips_passed": clips_passed,
         "roundtrip_vertex_max_error": round(rt_err, 10),
-        "roundtrip_locator_count": len(compile_geometry(rt_rec.program).locators),
+        "roundtrip_locator_count": len(rt_sc.locators),
         "roundtrip_clip_count": rt_clips,
         "payload": bundle,
     }

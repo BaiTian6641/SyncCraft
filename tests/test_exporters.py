@@ -261,6 +261,50 @@ class ExportTests(unittest.TestCase):
         assert rec.program.behavior is not None
         self.assertGreaterEqual(len(rec.program.behavior.clips), 1)
 
+    def test_exported_keyframes_preserve_exact_so3_matrix_composition_and_joint_limits_on_rotated_bones(self):
+        import math
+        from synccraft.backends import export_bedrock
+        from synccraft.dsl.ast_nodes import BehaviorDecl, ClipDecl, TrackDecl
+        from synccraft.kinematics.musculoskeletal import evaluate_behavior_clip
+        from synccraft.kinematics.se3_chain import euler_xyz_matrix
+
+        prog = Program(
+            Meta("entity", "bedrock_entity", 16),
+            [Palette("mat", (0.6, 0.1, 30.0), 4)],
+            Bone(
+                "root_b",
+                pivot_local=(0.0, 10.0, 0.0),
+                items=[
+                    Box("torso", (6, 8, 4), "mat"),
+                    Bone(
+                        "arm_l",
+                        rest_euler=(25.0, 35.0, -20.0),
+                        joint_limits=((-15.0, 15.0), (-15.0, 15.0), (-8.0, 8.0)),
+                        attach=Attach("torso", (1.0, 0.5, 0.0), (-1.0, 0.0, 0.0)),
+                        items=[Box("arm_b", (4, 2, 2), "mat", inflate=0.125)],
+                    ),
+                ],
+            ),
+            behavior=BehaviorDecl(
+                clips=(ClipDecl("sway", 1.0, True, tracks=(TrackDecl("arm_l", "wave", "z", 20.0, 1.0),)),)
+            ),
+        )
+        compiled = compile_geometry(prog)
+        bundle = export_bedrock(compiled, program=prog, num_animation_frames=8, animation_mode="keyframes")
+        samples = evaluate_behavior_clip(prog, "sway", num_frames=8)
+        kfs = bundle["animations"]["animations"]["animation.entity.sway"]["bones"]["arm_l"]["rotation"]
+        rest_e = np.array([25.0, 35.0, -20.0], dtype=np.float64)
+        for s in samples:
+            t_key = f"{round(float(s.time_s), 4):.4f}".rstrip("0").rstrip(".")
+            if "." not in t_key:
+                t_key = f"{t_key}.0"
+            kf = np.asarray(kfs[t_key], dtype=np.float64)
+            r_recon = euler_xyz_matrix(tuple(rest_e + kf))
+            r_exact = s.scene.bone_by_name["arm_l"].rotation
+            cos_t = float(np.clip((np.trace(r_recon.T @ r_exact) - 1.0) * 0.5, -1.0, 1.0))
+            deg_err = math.degrees(math.acos(cos_t))
+            self.assertLess(deg_err, 1e-3)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -67,7 +67,7 @@ def _reaudit_serialized_bedrock_geometry(geo_doc: dict[str, Any], scene: Any) ->
     world_piv_by_bone: dict[str, np.ndarray] = {}
     world_rot_by_bone: dict[str, np.ndarray] = {}
 
-    reconstructed_list: list[np.ndarray] = []
+    reconstructed_list: list[tuple[np.ndarray, np.ndarray]] = []
     for rec in bones_json:
         bname = str(rec["name"])
         parent_name = rec.get("parent")
@@ -89,11 +89,13 @@ def _reaudit_serialized_bedrock_geometry(geo_doc: dict[str, Any], scene: Any) ->
         for cube in rec.get("cubes") or []:
             origin = np.asarray(cube["origin"], dtype=np.float64)
             sz = np.asarray(cube["size"], dtype=np.float64)
+            inf = float(cube.get("inflate", 0.0))
             ctr = origin + 0.5 * sz
             loc_c = ctr - piv
             w_ctr = w_piv + w_rot @ loc_c
-            corners = (_CORNER_SIGNS * (sz * 0.5)) @ w_rot.T + w_ctr
-            reconstructed_list.append(corners)
+            corners_raw = (_CORNER_SIGNS * (sz * 0.5)) @ w_rot.T + w_ctr
+            corners_inf = (_CORNER_SIGNS * (sz * 0.5 + inf)) @ w_rot.T + w_ctr
+            reconstructed_list.append((corners_raw, corners_inf))
 
     # Match scene boxes in bone emission order
     expected_boxes_ordered: list[Any] = []
@@ -109,14 +111,41 @@ def _reaudit_serialized_bedrock_geometry(geo_doc: dict[str, Any], scene: Any) ->
         )
 
     max_err = 0.0
-    for recon_c, w_box in zip(reconstructed_list, expected_boxes_ordered):
-        exp_c = w_box.corners(include_inflate=False)
-        err = float(np.max(np.linalg.norm(recon_c - exp_c, axis=-1)))
-        max_err = max(max_err, err)
+    for (recon_raw, recon_inf), w_box in zip(reconstructed_list, expected_boxes_ordered):
+        exp_raw = w_box.corners(include_inflate=False)
+        exp_inf = w_box.corners(include_inflate=True)
+        err_raw = float(np.max(np.linalg.norm(recon_raw - exp_raw, axis=-1)))
+        err_inf = float(np.max(np.linalg.norm(recon_inf - exp_inf, axis=-1)))
+        max_err = max(max_err, err_raw, err_inf)
 
     if max_err > 1e-6:
         raise ExportError(f"Post-serialization 8-corner re-audit failed: max_err={max_err:.8g} > 1e-6")
     return max_err
+
+
+def _extract_so3_euler_keyframe_deltas(samples: list[Any], rest_bone: Any) -> list[tuple[float, float, float]]:
+    """Recover exact SO(3) matrix-composed Euler deltas ``e_posed - e_rest`` with continuous frame unwrapping.
+
+    Bedrock/GeckoLib/Blockbench evaluate animated bone orientation as ``R_xyz(e_rest + kf)``.
+    Using ``posed_bone.local_euler - rest_bone.local_euler`` guarantees
+    ``R_xyz(e_rest + kf) == R_rest @ R_delta_clamped`` (preserving joint_limits and avoiding
+    Euler-sum cross-axis distortion on rotated bind bones).
+    """
+    bname = rest_bone.name
+    rest_e = np.asarray(rest_bone.local_euler, dtype=np.float64)
+    prev = np.zeros(3, dtype=np.float64)
+    out: list[tuple[float, float, float]] = []
+    for s in samples:
+        raw_delta_req = s.pose_euler_deltas.get(bname)
+        if raw_delta_req is None or np.allclose(raw_delta_req, 0.0, atol=1e-12):
+            cur = prev + (((-prev) + 180.0) % 360.0 - 180.0)
+        else:
+            posed_e = np.asarray(s.scene.bone_by_name[bname].local_euler, dtype=np.float64)
+            raw_d = posed_e - rest_e
+            cur = prev + (((raw_d - prev) + 180.0) % 360.0 - 180.0)
+        prev = cur
+        out.append((float(cur[0]), float(cur[1]), float(cur[2])))
+    return out
 
 
 def _serialize_behavior_animations(
@@ -208,7 +237,7 @@ def _serialize_behavior_animations(
                 continue
 
             # Baked exact SE(3) / Hill-muscle / stance-IK rotation keyframes
-            frame_vecs = [s.pose_euler_deltas.get(bname, (0.0, 0.0, 0.0)) for s in samples]
+            frame_vecs = _extract_so3_euler_keyframe_deltas(samples, bone)
             max_abs = max(max(abs(v[0]), abs(v[1]), abs(v[2])) for v in frame_vecs)
             if max_abs < 1e-4:
                 continue
@@ -224,8 +253,10 @@ def _serialize_behavior_animations(
                 end_key = f"{round(float(clip.duration_s), 4):.4f}".rstrip("0").rstrip(".")
                 if "." not in end_key:
                     end_key = f"{end_key}.0"
-                v0 = frame_vecs[0]
-                rot_kfs[end_key] = vector([round(float(v0[0]), 4), round(float(v0[1]), 4), round(float(v0[2]), 4)])
+                v_last = np.asarray(frame_vecs[-1], dtype=np.float64)
+                v0_arr = np.asarray(frame_vecs[0], dtype=np.float64)
+                v_wrap = v_last + (((v0_arr - v_last) + 180.0) % 360.0 - 180.0)
+                rot_kfs[end_key] = vector([round(float(v_wrap[0]), 4), round(float(v_wrap[1]), 4), round(float(v_wrap[2]), 4)])
 
             bones_payload.setdefault(bname, {})["rotation"] = rot_kfs
 
