@@ -1,20 +1,20 @@
 # TEST_READY: SyncCraft Hardened End-to-End Notebook Test Suite
 
-**Status**: READY & VERIFIED (27/27 E2E Passing, 132/132 Total Repo Tests Passing)  
-**Test Suite Path**: `tests/test_notebook_e2e.py`  
+**Status**: READY & VERIFIED (28/28 E2E Passing, 141/141 Total Repo Tests Passing)  
+**Test Suite Path**: `tests/test_notebook_e2e.py` (+ `tests/test_data_gen_and_contact.py`)  
 **Test Infrastructure Path**: `TEST_INFRA.md`  
 **Target Notebook**: `notebooks/synccraft_end_to_end.ipynb`  
-**Target Hardware Profile**: Google Colab NVIDIA RTX PRO 6000 (Full-Precision BF16 PEFT LoRA)  
+**Target Hardware Profile**: Google Colab NVIDIA RTX PRO 6000 (Full-Precision BF16 PEFT LoRA, `full_60k` = 60,000 + 1,200 Complex Dataset)  
 
 ---
 
 ## 1. Readiness Declaration
 
-The hardened, zero-facade E2E test suite for `notebooks/synccraft_end_to_end.ipynb` is implemented in `tests/test_notebook_e2e.py` (with adversarial challenger and stress suites in `tests/test_adversarial_challenger.py` and `tests/test_adversarial_stress.py`). The E2E suite enforces 27 tests across Tiers 1–4, covering standalone Google Colab repository bootstrap (`git clone` + `pip install` preventing `ModuleNotFoundError: No module named 'synccraft'`), dataset-first Hugging Face Dataset Hub publishing (`repo_type="dataset"`, `datasets/README.md` Dataset Card & `NOTICE` with full open-source credits, attributions, and BibTeX citation), AST structural verification of native `bfloat16` PEFT LoRA (`r=32`, `alpha=64`, `quantization="none"`, banning 4-bit `BitsAndBytesConfig` / `load_in_4bit` QLoRA), binary safetensors header decoding (`struct.unpack("<Q", payload[:8])[0] < 100MB`), genuine model probing query verification, dynamic Gate G2 prerequisite evaluation, and complete 8-seen + 6-unseen static family dataset coverage.
+The hardened, zero-facade E2E test suite for `notebooks/synccraft_end_to_end.ipynb` is implemented in `tests/test_notebook_e2e.py` (with `P1-02` + `P1-08` dataset/contact unit tests in `tests/test_data_gen_and_contact.py` and adversarial challenger/stress suites in `tests/test_adversarial_challenger.py` and `tests/test_adversarial_stress.py`). The E2E suite enforces 28 tests across Tiers 1–4, covering standalone Google Colab repository bootstrap (`git clone` + `pip install` preventing `ModuleNotFoundError: No module named 'synccraft'` and `sys.path` anti-shadowing of Hugging Face `datasets`), complex `60,000 + 1,200` (`full_60k`) combinatorial multi-bone dataset synthesis (`15–23` boxes, `3–6` bones) with `P1-02` physical contact/connectivity enforcement, dataset-first Hugging Face Dataset Hub publishing (`repo_type="dataset"`, JSONL + ZSTD Parquet shards, `datasets/README.md` Dataset Card & `NOTICE` with full open-source credits, attributions, and BibTeX citation), AST structural verification of native `bfloat16` PEFT LoRA (`r=32`, `alpha=64`, `quantization="none"`, banning 4-bit `BitsAndBytesConfig` / `load_in_4bit` QLoRA), binary safetensors header decoding (`struct.unpack("<Q", payload[:8])[0] < 100MB`), genuine model probing query verification, dynamic Gate G2 prerequisite evaluation, and complete 8-seen + 6-unseen static family dataset coverage.
 
 ---
 
-## 2. Test Architecture & Coverage Matrix (Tiers 1–4, 27 Tests)
+## 2. Test Architecture & Coverage Matrix (Tiers 1–4, 28 Tests)
 
 | Tier | Test Identifier | Scope / Contract Tested | Status |
 |---|---|---|---|
@@ -27,6 +27,7 @@ The hardened, zero-facade E2E test suite for `notebooks/synccraft_end_to_end.ipy
 | **Tier 1** | `test_05b_seen_static_families_complete_coverage` | All 8 seen static families defined in Section 3 per data policy | **PASS** |
 | **Tier 1** | `test_06_dataset_manifest_schema_and_hashing` | `dataset_manifest.json` generation with SHA-256 digest | **PASS** |
 | **Tier 1** | `test_06b_dataset_first_hf_hub_publishing_and_attribution` | Dataset-first HF Hub upload (`repo_type="dataset"`), Dataset Card `configs:`, Apache-2.0, Oklab/SyncCraft credits & BibTeX | **PASS** |
+| **Tier 1** | `test_06c_full_60k_preset_and_sys_path_anti_shadowing` | `full_60k` default on GPU, `SRC_DIR`-only `sys.path` anti-shadowing of HF `datasets`, `enforce_physical_contact=True`, Parquet shards | **PASS** |
 | **Tier 1** | `test_07_lora_4b_7b_training_configurations` | AST verification: `AutoModelForCausalLM`, `AutoTokenizer`, `bfloat16`, `peft` / `LoraConfig` (`r=32`, `alpha=64`), real dataset tokenization; ban on 4-bit QLoRA (`BitsAndBytesConfig` / `load_in_4bit`) and `torch.randint` | **PASS** |
 | **Tier 1** | `test_08_checkpoint_structure_contract` | Atomic checkpoint layout (`manifest.json`, adapters); ban on `b"LORA_SAFETENSORS_PAYLOAD"` | **PASS** |
 | **Tier 1** | `test_08b_safetensors_binary_header_contract` | Binary safetensors serialization: unpack `<Q` header length < 100MB, JSON parse, non-mock payload | **PASS** |

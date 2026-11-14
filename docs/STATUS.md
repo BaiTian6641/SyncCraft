@@ -11,7 +11,9 @@ research system.
 | Static box DSL | Typed parsing, validation, canonical formatting; 500 seeded AST roundtrips |
 | Local/world hierarchy | Root, attach, place, Euler composition, reflected subtrees |
 | CPU OBB collision | Degenerate-axis-safe SAT, 1,000 actual flush fixtures, direct-vs-smooth-loss counterexample |
-| Static geometry diagnostics | Non-exempt collision check, reported excluded contacts and declaration components |
+| Static geometry diagnostics | Non-exempt collision check, exact world-AABB broadphase, P1-02 physical contact/co-penetration/gap/connectivity policy (`enforce_physical_contact=True`), authorized `detached=true` bone tracking |
+| Procedural static dataset (`P1-08`) | 14 combinatorial typed-AST family generators (`8` seen + `6` unseen, `15–23` lowered boxes, `3–6` bones), multi-core JSONL/Parquet shard builder (`smoke`, `pilot_200`, `bakeoff_8k`, `full_60k` = `60,000 + 1,200` SHA-256-deduplicated rows) |
+| Colab E2E BF16 LoRA notebook | `notebooks/synccraft_end_to_end.ipynb`: standalone Colab repo bootstrap, dataset-first HF Dataset Hub upload, native BF16 PEFT LoRA (`r=32, alpha=64, quantization=none`), held-out probing, Gate G2 report (CPU smoke-tested locally; live RTX PRO 6000 GPU run pending user execution) |
 | Blockbench 5 export | Stable UUIDs, groups/outliner, transforms, atlas; structural/numeric tests only |
 | Java export | Modern XYZ and conservative legacy; composed rotation and bounds checks; not a packaged resource pack |
 | Texture/preview | Integer padded per-face atlas with flat colors; CPU diagnostic four views |
@@ -27,13 +29,11 @@ and `artifacts/validation/cpu-tests.txt`. Example outputs are in
 | Capability | Blocking task |
 | --- | --- |
 | Extrusion, full static DSL coverage, nested mirrors | P1-01 |
-| True permitted-contact regions and physical connectivity | P1-02 |
 | Box UV production layout, shading, palette ramps, directional mirror textures | P1-03 |
 | Grip/display solving and hand constraints | P1-04 |
 | Differentiable Torch geometry, gradients and PGD | P1-05 / P1-06 |
 | XGrammar, live symbol masks and real KV rollback | P1-07 |
-| Audited dataset generators and large shards | P1-08 |
-| Model bake-off, LoRA training, GPU memory/restart proof | P0-03 / P0-04 / P1-09 |
+| Live GPU model bake-off, RTX PRO 6000 BF16 LoRA training run, GPU memory/restart proof | P0-03 / P0-04 / P1-09 |
 | Full baseline evaluation and G2 evidence | P1-10 |
 | Learned refiner and training | P2-01 / P2-02, conditional only |
 | IK, motion, Bedrock and GeckoLib export | P3-01 / P3-02 / P3-03 |
@@ -49,12 +49,13 @@ first handoff tasks.
 
 ## Known limitations that affect interpretation
 
-`audit_scene(...).passed` certifies only finite valid OBB evaluation and absence of
-non-exempt collisions. It **does not** establish validity of declared contact pairs,
-connected physical geometry, usable grip, shading, UV seams or engine compatibility.
-Deep overlap and separation on exempt declared pairs are visible in the report but
-are not currently rejection conditions. See `NUMERICAL_NOTES.md`; fix P1-02 before
-using the audit as a training-label or G2 acceptance oracle.
+`audit_scene(..., enforce_physical_contact=True)` certifies finite valid OBB evaluation,
+absence of non-exempt collisions, genuine physical surface contact or bounded shallow inset
+(`<= 0.5` model units) on declared `attach`/`place` pairs (rejecting separated floating gaps
+and deep co-penetrations such as `NUMERICAL_NOTES.md` §4 `D=0` and `D=50`), and physical
+connectivity up to explicitly authorized `detached=true` bones. It **does not** establish
+usable hand grip (`P1-04`), production shading/UV seam quality (`P1-03`), `extrude` polygons
+(`P1-01`), or live GUI/game engine import (`P0-02`).
 
 The plan's full static example includes features deliberately rejected by the
 starter subset. The bundled examples use supported syntax and original geometry.

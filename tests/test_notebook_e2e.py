@@ -351,6 +351,29 @@ class TestNotebookTier1FeatureCoverage(unittest.TestCase):
         self.assertIn("Ottosson", sec5_code)
         self.assertIn("synccraft2026model", sec5_code)
 
+    def test_06c_full_60k_preset_and_sys_path_anti_shadowing(self):
+        """
+        Verify Section 1 & Section 3:
+        1. Default to 'full_60k' (60,000 seen + 1,200 unseen = 61,200 complex rows) on GPU,
+           and 'smoke' in SMOKE_TEST_MODE.
+        2. Never insert PROJECT_ROOT directly onto sys.path (only SRC_DIR), preventing the
+           generated datasets/ directory from shadowing Hugging Face 'datasets' via PEP 420.
+        3. Enforce P1-02 physical contact auditing (enforce_physical_contact=True) and Parquet shards.
+        """
+        nb = load_notebook()
+        sec1_code = "\n".join(get_section_code_cells(nb, 1))
+        sec3_code = "\n".join(get_section_code_cells(nb, 3))
+
+        self.assertNotIn("sys.path.insert(0, str(PROJECT_ROOT))", sec1_code)
+        self.assertNotIn("sys.path.insert(0, str(_fallback_root))", sec3_code)
+        self.assertIn("sys.path.insert(0, str(SRC_DIR))", sec1_code)
+        self.assertIn("spec.loader is not None", sec1_code)
+
+        self.assertIn('"full_60k"', sec3_code)
+        self.assertIn("build_verified_dataset", sec3_code)
+        self.assertIn("enforce_physical_contact=True", sec3_code)
+        self.assertIn("write_parquet=True", sec3_code)
+
     def test_07_lora_4b_7b_training_configurations(self):
         """
         Verify Section 4 specifies genuine full-precision BF16 LoRA configurations for Colab RTX PRO 6000:
@@ -1159,6 +1182,26 @@ class TestNotebookTier4RealWorldScenarios(unittest.TestCase):
                     self.assertIn("dataset_manifest_sha256", evidence)
                     self.assertIn("evaluation_manifest_sha256", evidence)
                     self.assertIn("all_samples_have_at_least_16_parts", evidence)
+
+                # Validate sys.path anti-shadowing, P1-02 canary quarantine, and complex multi-bone asset synthesis
+                self.assertNotIn(str(temp_path), sys.path)
+                rejected_ids = {r.get("asset_id") for r in global_scope.get("rejected_records", [])}
+                for expected_trap in (
+                    "test_intentional_collision",
+                    "test_p102_coincident_penetration",
+                    "test_p102_separated_gap",
+                ):
+                    self.assertIn(expected_trap, rejected_ids)
+
+                c_stats = manifest_json.get("complexity_stats", {})
+                self.assertGreaterEqual(c_stats.get("min_boxes", 0), 12)
+                self.assertGreaterEqual(c_stats.get("min_bones", 0), 3)
+                for row in manifest_json.get("rows", []):
+                    prov = row.get("prompt_and_provenance", {})
+                    self.assertIsInstance(prov, dict)
+                    self.assertGreater(len(prov.get("prompt", "")), 40)
+                    if row.get("split") == "test_unseen":
+                        self.assertGreaterEqual(row["audit_version_and_results"]["boxes"], 16)
 
             finally:
                 os.chdir(orig_cwd)

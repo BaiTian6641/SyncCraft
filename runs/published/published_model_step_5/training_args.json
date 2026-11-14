@@ -2,45 +2,55 @@
   "global_step": 5,
   "precision": "bf16",
   "quantization": "none",
-  "loss": 6.0549,
+  "loss": 7.4832,
   "dataset_repo_id": "BaiTian6641/synccraft-v3-blockdsl-dataset",
-  "dataset_manifest_sha256": "77c5036856aef875292db96a71f3a2a343b77ff671938280f217f209b02a290c",
+  "dataset_manifest_sha256": "1b9ad1acc489f4379eabe571bbe69c01f6250ebee7c7d71b73d287bec5d69390",
   "attribution": "SyncCraft Contributors (https://github.com/BaiTian6641/SyncCraft), Apache-2.0",
   "training_history": [
     {
       "step": 1,
-      "loss": 6.1188,
-      "grad_norm": 0.7818,
-      "tokens": 183,
+      "micro_step": 1,
+      "loss": 7.5488,
+      "lr": 0.0002,
+      "grad_norm": 1.0963,
+      "tokens": 1299,
       "family": "straight_blade_sword"
     },
     {
       "step": 2,
-      "loss": 6.1003,
-      "grad_norm": 0.7819,
-      "tokens": 183,
-      "family": "straight_blade_sword"
+      "micro_step": 2,
+      "loss": 7.5286,
+      "lr": 0.0002,
+      "grad_norm": 1.0551,
+      "tokens": 1189,
+      "family": "simple_wood_bow"
     },
     {
       "step": 3,
-      "loss": 6.0759,
-      "grad_norm": 0.8061,
-      "tokens": 183,
+      "micro_step": 3,
+      "loss": 7.5111,
+      "lr": 0.0002,
+      "grad_norm": 1.0872,
+      "tokens": 1248,
       "family": "single_edge_blade"
     },
     {
       "step": 4,
-      "loss": 6.0703,
-      "grad_norm": 0.7995,
-      "tokens": 183,
-      "family": "single_edge_blade"
+      "micro_step": 4,
+      "loss": 7.5024,
+      "lr": 0.0002,
+      "grad_norm": 1.1024,
+      "tokens": 1073,
+      "family": "war_hammer"
     },
     {
       "step": 5,
-      "loss": 6.0549,
-      "grad_norm": 0.7869,
-      "tokens": 183,
-      "family": "battle_axe"
+      "micro_step": 5,
+      "loss": 7.4832,
+      "lr": 0.0002,
+      "grad_norm": 1.0983,
+      "tokens": 1090,
+      "family": "gearbox"
     }
   ]
 }

@@ -21,15 +21,15 @@ Fine-tuned full-precision `bfloat16` PEFT LoRA adapter for generating typed, kin
 ## Model & Dataset Overview
 - **Source Repository**: [https://github.com/BaiTian6641/SyncCraft](https://github.com/BaiTian6641/SyncCraft)
 - **Companion Public Dataset**: [https://huggingface.co/datasets/BaiTian6641/synccraft-v3-blockdsl-dataset](https://huggingface.co/datasets/BaiTian6641/synccraft-v3-blockdsl-dataset)
-- **Dataset Manifest SHA-256**: `77c5036856aef875292db96a71f3a2a343b77ff671938280f217f209b02a290c`
+- **Dataset Manifest SHA-256**: `1b9ad1acc489f4379eabe571bbe69c01f6250ebee7c7d71b73d287bec5d69390`
 - **Base Architecture**: `Qwen/Qwen2.5-Coder-7B-Instruct`
 - **Fine-Tuning Technique**: Full-Precision `bfloat16` PEFT LoRA on Google Colab NVIDIA RTX PRO 6000 (`r=32`, `alpha=64`, `quantization=none`)
 - **License**: Apache-2.0
 - **Target Export Profiles**: Blockbench 5.0 (`bbmodel_5`) / Java Modern (`1.21.11+`)
 
 ## Training Metrics
-- **Final Training Loss**: `6.0549`
-- **Total Generated Tokens**: `730`
+- **Final Training Loss**: `7.4832`
+- **Total Generated Tokens**: `5335`
 - **Supervised Training Samples**: `16` SAT-verified `Block-DSL` records
 
 ## Credits, Attributions & Open-Source Notices
