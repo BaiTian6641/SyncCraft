@@ -49,10 +49,17 @@ htmlcov/
 .ipynb_checkpoints/
 */.ipynb_checkpoints/
 
-# SyncCraft generated outputs, datasets, checkpoints & model weights
-runs/
-checkpoints/
+# SyncCraft generated datasets, large training runs & model weights
+# (Smoke-test checkpoint-5, demo exports, and gate_g2_report.json remain tracked)
 datasets/
+runs/*
+!runs/demo/
+!runs/gate_g2_report.json
+!runs/published/
+runs/published/*
+!runs/published/published_model_step_5/
+checkpoints/*
+!checkpoints/checkpoint-5/
 wandb/
 mlruns/
 lightning_logs/
@@ -69,9 +76,14 @@ huggingface_cache/
 *.onnx
 *.parquet
 *.arrow
+!checkpoints/checkpoint-5/*.safetensors
+!checkpoints/checkpoint-5/*.bin
+!runs/published/published_model_step_5/*.safetensors
+!runs/published/published_model_step_5/*.bin
 
-# Multi-agent / IDE / OS scratch files
-.agents/
+# Multi-agent / IDE / OS scratch files (.agents/teamwork/ specs & reviews tracked)
+.agents/*
+!.agents/teamwork/
 .vscode/
 .idea/
 *.swp
