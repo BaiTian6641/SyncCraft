@@ -227,6 +227,37 @@ class TestNotebookTier1FeatureCoverage(unittest.TestCase):
                 f"Missing required Section {sec_num} header in notebook markdown cells. Pattern: {pattern.pattern}",
             )
 
+    def test_03b_colab_standalone_repo_bootstrap_and_auto_install(self):
+        """
+        Verify Section 1 (and Section 3 self-healing guard) automatically clones the
+        SyncCraft git repository and installs synccraft + dependencies when opened
+        standalone from GitHub in Google Colab (preventing ModuleNotFoundError: No module named 'synccraft').
+        """
+        nb = load_notebook()
+        sec1_code = "\n".join(get_section_code_cells(nb, 1))
+        sec3_code = "\n".join(get_section_code_cells(nb, 3))
+
+        self.assertIn(
+            'find_spec("synccraft")',
+            sec1_code,
+            "Section 1 must check importlib.util.find_spec('synccraft') to detect standalone Colab runtimes",
+        )
+        self.assertIn(
+            "https://github.com/BaiTian6641/SyncCraft.git",
+            sec1_code,
+            "Section 1 must auto-clone BaiTian6641/SyncCraft when synccraft is missing on Colab",
+        )
+        self.assertIn(
+            '"pip", "install"',
+            sec1_code,
+            "Section 1 must run pip install automatically on standalone Colab runtimes",
+        )
+        self.assertIn(
+            'find_spec("synccraft")',
+            sec3_code,
+            "Section 3 must also include a self-healing find_spec('synccraft') guard for out-of-order Colab execution",
+        )
+
     def test_04_colab_secrets_and_env_fallback(self):
         """Verify Section 2 code cell implements Colab Secrets retrieval with os.environ fallback."""
         nb = load_notebook()
@@ -287,6 +318,38 @@ class TestNotebookTier1FeatureCoverage(unittest.TestCase):
             "dataset_manifest_sha256" in code_combined or "sha256" in code_combined,
             "Manifest generation must calculate SHA-256 digest of the dataset manifest",
         )
+
+    def test_06b_dataset_first_hf_hub_publishing_and_attribution(self):
+        """
+        Verify Section 3 builds the dataset FIRST and publishes it publicly to Hugging Face Hub
+        (repo_type='dataset') BEFORE Section 4 training, complete with Dataset Card (README.md),
+        NOTICE file, Apache-2.0 license, Oklab/SyncCraft credits, and BibTeX citation.
+        """
+        nb = load_notebook()
+        sec3_code = "\n".join(get_section_code_cells(nb, 3))
+        sec5_code = "\n".join(get_section_code_cells(nb, 5))
+
+        # Section 3 (before Section 4 training) must publish dataset to Hugging Face Hub
+        self.assertIn('repo_type="dataset"', sec3_code)
+        self.assertIn("create_repo", sec3_code)
+        self.assertIn("upload_folder", sec3_code)
+        self.assertIn("DATASET_REPO_ID", sec3_code)
+
+        # Dataset Card configs & attribution checks
+        self.assertIn("configs:", sec3_code)
+        self.assertIn("train.jsonl", sec3_code)
+        self.assertIn("val.jsonl", sec3_code)
+        self.assertIn("test_unseen.jsonl", sec3_code)
+        self.assertIn("Apache-2.0", sec3_code)
+        self.assertIn("BaiTian6641/SyncCraft", sec3_code)
+        self.assertIn("Ottosson", sec3_code)
+        self.assertIn("synccraft2026dataset", sec3_code)
+
+        # Section 5 Model Card must cross-link DATASET_REPO_ID and include full attribution
+        self.assertIn("DATASET_REPO_ID", sec5_code)
+        self.assertIn("BaiTian6641/SyncCraft", sec5_code)
+        self.assertIn("Ottosson", sec5_code)
+        self.assertIn("synccraft2026model", sec5_code)
 
     def test_07_lora_4b_7b_training_configurations(self):
         """
@@ -1031,7 +1094,7 @@ class TestNotebookTier4RealWorldScenarios(unittest.TestCase):
                     "Manifest SHA256 must be a 64-character hexadecimal string",
                 )
 
-                # Validate seen static family coverage in manifest rows
+                # Validate seen and unseen static family coverage + attribution in manifest
                 manifest_families = {row.get("family_id") for row in manifest_json.get("rows", [])}
                 for fam in SEEN_STATIC_FAMILIES:
                     self.assertIn(
@@ -1039,8 +1102,29 @@ class TestNotebookTier4RealWorldScenarios(unittest.TestCase):
                         manifest_families,
                         f"Generated dataset_manifest.json must contain entries for seen family '{fam}'",
                     )
+                for fam in UNSEEN_STATIC_FAMILIES:
+                    self.assertIn(
+                        fam,
+                        manifest_families,
+                        f"Generated dataset_manifest.json must contain held-out entries for unseen family '{fam}'",
+                    )
+                self.assertIn("attribution", manifest_json)
+                self.assertEqual(manifest_json["attribution"].get("license"), "Apache-2.0")
 
-                # Validate checkpoint generation and safetensors binary integrity
+                # Validate Dataset Card (README.md), NOTICE, and offline-staged public dataset bundle
+                ds_readme = temp_path / "datasets" / "README.md"
+                ds_notice = temp_path / "datasets" / "NOTICE"
+                staged_ds_readme = temp_path / "runs" / "published" / "published_dataset" / "README.md"
+                self.assertTrue(ds_readme.is_file(), "datasets/README.md Dataset Card must be generated")
+                self.assertTrue(ds_notice.is_file(), "datasets/NOTICE attribution file must be generated")
+                self.assertTrue(staged_ds_readme.is_file(), "Staged public dataset bundle must include README.md")
+                ds_card_text = ds_readme.read_text(encoding="utf-8")
+                self.assertIn("configs:", ds_card_text)
+                self.assertIn("BaiTian6641/SyncCraft", ds_card_text)
+                self.assertIn("Ottosson", ds_card_text)
+                self.assertIn("@misc{synccraft2026dataset,", ds_card_text)
+
+                # Validate checkpoint generation, Model Card attribution, and safetensors binary integrity
                 checkpoint_dirs = list(temp_path.glob("**/checkpoint*"))
                 self.assertTrue(
                     len(checkpoint_dirs) > 0,
@@ -1053,6 +1137,13 @@ class TestNotebookTier4RealWorldScenarios(unittest.TestCase):
                         h_len, h_dict = validate_safetensors_binary_header(sf_bytes)
                         self.assertGreater(h_len, 0)
                         self.assertIsInstance(h_dict, dict)
+                    mc_path = ckpt / "README.md"
+                    if mc_path.is_file():
+                        mc_text = mc_path.read_text(encoding="utf-8")
+                        self.assertIn("https://huggingface.co/datasets/", mc_text)
+                        self.assertIn("BaiTian6641/SyncCraft", mc_text)
+                        self.assertIn("Ottosson", mc_text)
+                        self.assertIn("@misc{synccraft2026model,", mc_text)
 
                 # Validate probing outputs recorded in execution scope
                 if "probed_completions" in global_scope:

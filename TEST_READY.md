@@ -1,6 +1,6 @@
 # TEST_READY: SyncCraft Hardened End-to-End Notebook Test Suite
 
-**Status**: READY & VERIFIED (25/25 Passing)  
+**Status**: READY & VERIFIED (27/27 E2E Passing, 132/132 Total Repo Tests Passing)  
 **Test Suite Path**: `tests/test_notebook_e2e.py`  
 **Test Infrastructure Path**: `TEST_INFRA.md`  
 **Target Notebook**: `notebooks/synccraft_end_to_end.ipynb`  
@@ -10,21 +10,23 @@
 
 ## 1. Readiness Declaration
 
-The hardened, zero-facade E2E test suite for `notebooks/synccraft_end_to_end.ipynb` is implemented in `tests/test_notebook_e2e.py` (with adversarial challenger and stress suites in `tests/test_adversarial_challenger.py` and `tests/test_adversarial_stress.py`). The E2E suite enforces 25 tests across Tiers 1–4, covering AST structural verification of native `bfloat16` PEFT LoRA (`r=32`, `alpha=64`, `quantization="none"`, banning 4-bit `BitsAndBytesConfig` / `load_in_4bit` QLoRA), binary safetensors header decoding (`struct.unpack("<Q", payload[:8])[0] < 100MB`), genuine model probing query verification, dynamic Gate G2 prerequisite evaluation, and complete 8-family static dataset coverage.
+The hardened, zero-facade E2E test suite for `notebooks/synccraft_end_to_end.ipynb` is implemented in `tests/test_notebook_e2e.py` (with adversarial challenger and stress suites in `tests/test_adversarial_challenger.py` and `tests/test_adversarial_stress.py`). The E2E suite enforces 27 tests across Tiers 1–4, covering standalone Google Colab repository bootstrap (`git clone` + `pip install` preventing `ModuleNotFoundError: No module named 'synccraft'`), dataset-first Hugging Face Dataset Hub publishing (`repo_type="dataset"`, `datasets/README.md` Dataset Card & `NOTICE` with full open-source credits, attributions, and BibTeX citation), AST structural verification of native `bfloat16` PEFT LoRA (`r=32`, `alpha=64`, `quantization="none"`, banning 4-bit `BitsAndBytesConfig` / `load_in_4bit` QLoRA), binary safetensors header decoding (`struct.unpack("<Q", payload[:8])[0] < 100MB`), genuine model probing query verification, dynamic Gate G2 prerequisite evaluation, and complete 8-seen + 6-unseen static family dataset coverage.
 
 ---
 
-## 2. Test Architecture & Coverage Matrix (Tiers 1–4, 25 Tests)
+## 2. Test Architecture & Coverage Matrix (Tiers 1–4, 27 Tests)
 
 | Tier | Test Identifier | Scope / Contract Tested | Status |
 |---|---|---|---|
 | **Tier 1** | `test_01_notebook_file_exists` | Primary notebook exists at `notebooks/synccraft_end_to_end.ipynb` | **PASS** |
 | **Tier 1** | `test_02_notebook_valid_json_and_nbformat_v4` | Syntactically valid JSON & `nbformat` v4 schema compliance | **PASS** |
 | **Tier 1** | `test_03_markdown_sections_delineated` | All 6 required sections present as delineated markdown headers | **PASS** |
+| **Tier 1** | `test_03b_colab_standalone_repo_bootstrap_and_auto_install` | Auto-clones `BaiTian6641/SyncCraft` & runs `pip install` on standalone Colab runtimes | **PASS** |
 | **Tier 1** | `test_04_colab_secrets_and_env_fallback` | Colab Secrets (`userdata.get`) with `os.environ` fallback | **PASS** |
 | **Tier 1** | `test_05_dataset_gathering_and_sat_filtering` | AST validation and 15-axis SAT collision filter invocation | **PASS** |
 | **Tier 1** | `test_05b_seen_static_families_complete_coverage` | All 8 seen static families defined in Section 3 per data policy | **PASS** |
 | **Tier 1** | `test_06_dataset_manifest_schema_and_hashing` | `dataset_manifest.json` generation with SHA-256 digest | **PASS** |
+| **Tier 1** | `test_06b_dataset_first_hf_hub_publishing_and_attribution` | Dataset-first HF Hub upload (`repo_type="dataset"`), Dataset Card `configs:`, Apache-2.0, Oklab/SyncCraft credits & BibTeX | **PASS** |
 | **Tier 1** | `test_07_lora_4b_7b_training_configurations` | AST verification: `AutoModelForCausalLM`, `AutoTokenizer`, `bfloat16`, `peft` / `LoraConfig` (`r=32`, `alpha=64`), real dataset tokenization; ban on 4-bit QLoRA (`BitsAndBytesConfig` / `load_in_4bit`) and `torch.randint` | **PASS** |
 | **Tier 1** | `test_08_checkpoint_structure_contract` | Atomic checkpoint layout (`manifest.json`, adapters); ban on `b"LORA_SAFETENSORS_PAYLOAD"` | **PASS** |
 | **Tier 1** | `test_08b_safetensors_binary_header_contract` | Binary safetensors serialization: unpack `<Q` header length < 100MB, JSON parse, non-mock payload | **PASS** |
