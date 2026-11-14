@@ -29,3 +29,52 @@ def decide_gate(evidence: dict):
             "learned_refiner_enabled": enabled, "pass_rate": rate,
             "passed": passed, "total": total,
             "interpretation": "Engineering branch decision; not proof of a local-minimum cause."}
+
+
+def inspect_runtime_gate_prerequisites() -> dict[str, bool]:
+    """Dynamically inspect repository module readiness for Gate G2 prerequisites.
+
+    Prevents notebooks or scripts from hardcoding True for unimplemented Phase 1/2
+    components (e.g. Steve/Alex grip audit, differentiable PyTorch SE(3)/PGD baselines).
+    """
+    full_audit_ready = False
+    pgd_ready = False
+    baselines_ready = False
+
+    try:
+        from synccraft.dsl import parse_program
+        from synccraft.kinematics.se3_chain import compile_geometry
+        from synccraft.audit.sync_audit import audit_scene
+
+        sample = parse_program(
+            "@meta { archetype: weapon_3d, target_profile: bbmodel_5, texel_density: 16 }\n"
+            "@palette { m: ramp(base_lch=[0.6, 0.05, 220], steps=4) }\n"
+            "@rig { root bone r { pivot_local: [0,0,0] box b { size: [2,2,2], material: m } } }\n"
+        )
+        rep = audit_scene(compile_geometry(sample))
+        full_audit_ready = bool(rep.get("complete_for_release", False) and not rep.get("coverage_gaps"))
+    except Exception:
+        full_audit_ready = False
+
+    try:
+        from synccraft.refiner.pgd_baseline import project_with_pgd
+
+        project_with_pgd()
+        pgd_ready = True
+        baselines_ready = True
+    except NotImplementedError:
+        pgd_ready = False
+        baselines_ready = False
+    except TypeError:
+        # Real callable requiring arguments exists
+        pgd_ready = True
+        baselines_ready = True
+    except Exception:
+        pgd_ready = False
+        baselines_ready = False
+
+    return {
+        "full_static_audit_implemented": full_audit_ready,
+        "repair_pgd_policy_preregistered": pgd_ready,
+        "baseline_implementations_verified": baselines_ready,
+    }

@@ -110,7 +110,7 @@ the full static example after shading/grip tasks support its other sections.
 
 ## P1-02 — Replace broad contact exemptions with physical contact checks
 
-Status: pending; high priority. Dependencies: P0-01.
+Status: CPU policy implemented & unit-tested (`sync_audit.py` + `test_data_gen_and_contact.py`); full static asset coverage awaits P1-01/P0-02. Dependencies: P0-01.
 
 Turn `attach` and `place` into explicit typed contact contracts: intended anchor
 surface/region, permitted depth/gap, inflation allowance, and detachment semantics.
@@ -129,7 +129,7 @@ geometric contact. This task blocks full asset-validity metrics and G2.
 
 ## P1-03 — Implement production integer UV and analytic pixel shading
 
-Status: pending; diagnostic atlas implemented. Dependencies: P1-01, P0-02.
+Status: `ADR 0003` (`P1-03a..e`) stateful surface-material world model, 10-family process library, linear-space Pixel-PBR compiler, LabPBR 1.3 & glTF 2.0 exporters, 7 causal interventions, inverse inference, and `pilot_200` trajectories implemented & CPU-verified; live Blockbench GUI & pinned Minecraft Iris LabPBR runtime import remain pending `P0-02`, and `@shade` text grammar awaits `P1-01`. Dependencies: P1-01, P0-02.
 
 Implement target-appropriate Box UV/per-face mapping, deterministic packing,
 integer texel density, palette ramps, short-radius cavity AO, edge highlights,
