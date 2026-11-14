@@ -14,7 +14,7 @@ candidates:
     immutable_revision: null
     license_evidence_sha256: null
     expected_license_from_plan: Apache-2.0
-    suggested_memory_strategy: NF4_QLoRA_if_required
+    suggested_memory_strategy: BF16_LoRA_on_RTX_PRO_6000
     smoke_status: not_run
   - label: Spark-X2.6-4B
     repository_id: null

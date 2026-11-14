@@ -4,7 +4,9 @@ task: P1-09
 model_manifest: null
 dataset_manifest: null
 seeds: [17, 29, 43]
-precision_intent: bf16_lora_4b_or_nf4_qlora_7b
+hardware_target: colab_rtx_pro_6000
+precision_intent: bf16_lora_4b_and_7b
+quantization: none
 max_sequence_length: 2048
 micro_batch_size: 2
 gradient_accumulation_steps: 64
@@ -36,6 +38,7 @@ checkpoint:
   include: [adapters, refiner_if_enabled, optimizer, scheduler, scaler_if_used, rng_all_devices, sampler, shard_cursor, global_step, config_hash, model_revision, dataset_manifest]
 targets_not_measurements:
   bf16_4b_peak_allocated_decimal_gb_less_than: 18.0
+  bf16_7b_rtx_pro_6000_full_lora: true
   proposed_sequence_length: 2048
   proposed_micro_batch: 2
 paid_job_launch_enabled: false
