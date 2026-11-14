@@ -1,0 +1,81 @@
+# Environment variables & secrets (never commit real credentials)
+.env
+.env.*
+!.env.example
+.secrets
+secrets/
+*.pem
+*.key
+
+# Python virtual environments & caches
+.venv/
+venv/
+env/
+.conda/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Python packaging & build artifacts
+build/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+src/*.egg-info/
+.installed.cfg
+*.egg
+
+# Test, lint & type-check caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+
+# Jupyter / Google Colab notebook checkpoints
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/
+
+# SyncCraft generated outputs, datasets, checkpoints & model weights
+runs/
+checkpoints/
+datasets/
+wandb/
+mlruns/
+lightning_logs/
+tensorboard/
+.cache/
+hf_cache/
+huggingface_cache/
+*.safetensors
+*.ckpt
+*.pt
+*.pth
+*.bin
+*.gguf
+*.onnx
+*.parquet
+*.arrow
+
+# Multi-agent / IDE / OS scratch files
+.agents/
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+._*
+Thumbs.db
