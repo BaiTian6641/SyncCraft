@@ -1,0 +1,634 @@
+"""Comprehensive verification for ADR 0006: Block-DSL v3.1, Nested Mirrors, Musculoskeletal Tendon/IK Physics,
+Cobblemon CC-BY-NC Quarantine + Molang Decompiler, Closed-Loop Artist Assistant, and Apex Complex Entity Pack.
+"""
+
+from __future__ import annotations
+
+from dataclasses import replace
+import json
+import tempfile
+import unittest
+from pathlib import Path
+
+import numpy as np
+
+from synccraft.audit.sync_audit import audit_scene
+from synccraft.backends.common import reflected_cullfaces
+from synccraft.data_gen import (
+    ALL_APEX_FAMILIES,
+    APEX_SEEN_FAMILIES,
+    APEX_UNSEEN_FAMILIES,
+    SEEN_STATIC_FAMILIES,
+    UNSEEN_STATIC_FAMILIES,
+    build_apex_complex_program,
+    generate_apex_complex_dataset,
+)
+from synccraft.dsl import (
+    Attach,
+    BehaviorDecl,
+    BehaviorStateDecl,
+    Bone,
+    Box,
+    ClipDecl,
+    DSLValidationError,
+    IKChainDecl,
+    IKDriveDecl,
+    KinematicsDecl,
+    Locator,
+    LookChainDecl,
+    MaterialDecl,
+    MaterialModDecl,
+    Meta,
+    MuscleDecl,
+    MuscleDriveDecl,
+    Palette,
+    Place,
+    Program,
+    StyleDecl,
+    TendonCoupling,
+    TrackDecl,
+    UnsupportedFeature,
+    format_program,
+    parse_program,
+    validate_program,
+)
+from synccraft.kinematics import compile_geometry, compile_posed_geometry
+from synccraft.kinematics.musculoskeletal import (
+    audit_behavior_clip,
+    evaluate_behavior_clip,
+    evaluate_muscles_at_activations,
+    solve_look_chain,
+)
+from synccraft.surface.contracts import MaterialProgram, StyleConfig, WorldState
+from synccraft.surface.domain import build_surface_domain, initialize_surface_state
+from synccraft.world import (
+    ActivateBehaviorStateAction,
+    AssetProvenance,
+    ExecuteBehaviorClipAction,
+    LicenseGateError,
+    action_from_dict,
+    analyze_artist_project,
+    build_progressive_from_scratch_trajectory,
+    decompile_bedrock_animation_to_behavior,
+    ingest_external_asset,
+    run_looped_artist_enhancement,
+    step_world,
+    verify_asset_provenance,
+)
+
+
+class TestBlockDSLv31AndNestedMirrors(unittest.TestCase):
+    """Verify Block-DSL v3.1 grammar, validation bounds, and arbitrary-depth nested mirror_x O(3) parity."""
+
+    def test_v31_full_dsl_parse_format_roundtrip(self) -> None:
+        dsl_text = """
+@meta { archetype: entity, target_profile: bbmodel_5, texel_density: 16 }
+@palette {
+  hide: ramp(base_lch=[0.45, 0.14, 28.0], steps=6, hue_shift=[-8.0, 10.0], emissive=false)
+  glow: ramp(base_lch=[0.8, 0.2, 180.0], steps=4, hue_shift=[0.0, 0.0], emissive=true)
+}
+@rig {
+  root bone root {
+    pivot_local: [0.0, 12.0, 0.0]
+    box torso { size: [8, 6, 10], material: hide, inflate: 0.0 }
+    locator seat { offset: [0.0, 4.0, 0.0], role: rider_seat }
+    bone arm_l attach(parent_box=torso, anchor=[1.0, 0.2, 0.0], align=[-1.0, 0.0, 0.0], offset=[0.0, 0.0, 0.0], detached=false) mirror_x(arm_r) {
+      rest_euler: [0.0, 0.0, 10.0]
+      joint_limits: [[-30.0, 30.0], [-25.0, 25.0], [-60.0, 60.0]]
+      box humerus { size: [6, 2, 3], material: hide, inflate: 0.0, cullface: [west] }
+      bone digit_in attach(parent_box=humerus, anchor=[0.5, 0.0, -1.0], align=[0.0, 0.0, 1.0], offset=[0.0, 0.0, 0.0], detached=false) mirror_x(digit_out) {
+        rest_euler: [-4.0, 0.0, 0.0]
+        joint_limits: [[-20.0, 20.0], [-20.0, 20.0], [-20.0, 20.0]]
+        box phalanx { size: [1, 1, 5], material: glow, inflate: 0.0, cullface: [east] }
+        locator tip_vfx { offset: [0.0, 0.0, -2.5], role: vfx_emitter }
+      }
+    }
+    bone thigh_l attach(parent_box=torso, anchor=[1.0, -0.3, 0.0], align=[-1.0, 0.0, 0.0], offset=[0.0, 0.0, 0.0], detached=false) mirror_x(thigh_r) {
+      rest_euler: [6.0, 0.0, 0.0]
+      joint_limits: [[-65.0, 65.0], [-20.0, 20.0], [-20.0, 20.0]]
+      box femur { size: [3, 5, 3], material: hide, inflate: 0.0 }
+      bone shank_l attach(parent_box=femur, anchor=[0.0, -1.0, 0.0], align=[0.0, 1.0, 0.0], offset=[0.0, 0.0, 0.0], detached=false) {
+        rest_euler: [-12.0, 0.0, 0.0]
+        joint_limits: [[-75.0, 55.0], [-15.0, 15.0], [-15.0, 15.0]]
+        box tibia { size: [2, 5, 2], material: hide, inflate: 0.0 }
+        locator sole_l { offset: [0.0, -5.0, 0.0], role: ik_effector }
+      }
+    }
+  }
+}
+@materials {
+  hide: process(family=keratin_scales, roughness=0.34, metalness=0.0, coating=0.0, ior=1.5, scale=1.0, seed=101, anisotropy=1.6, subsurface=0.25, wear=0.4, weld_group=body_skin)
+  glow: process(family=thin_film_iridescence, roughness=0.18, metalness=0.0, coating=0.0, ior=1.5, scale=1.0, seed=102, emissive=1.2, film_nm=440.0)
+}
+@style { target_encoding: labpbr_1_3, quantize_ramp: false, bevel_highlight: 0.12, view_deg: 22.0 }
+@muscles {
+  muscle flap_l { origin_bone: root, insertion_bone: arm_l, action_axis: z, moment_arm_deg: -18.0, tendon_coupling: [digit_in, x, -0.4], belly_box: humerus, bulge_inflate: 0.08 }
+  muscle flap_r { origin_bone: root, insertion_bone: arm_r, action_axis: z, moment_arm_deg: 18.0, tendon_coupling: [arm_r__digit_in, x, -0.4], belly_box: arm_r__humerus, bulge_inflate: 0.08 }
+}
+@kinematics {
+  ik_chain leg_l { upper: thigh_l, lower: shank_l, effector: [0.0, -5.0, 0.0], hinge_axis: x }
+  ik_chain leg_r { upper: thigh_r, lower: thigh_r__shank_l, effector: [0.0, -5.0, 0.0], hinge_axis: x }
+  look_chain gaze { bones: [arm_l], weight_decay: 0.8 }
+}
+@behavior {
+  clip patrol {
+    duration_s: 1.6, loop: true
+    track arm_l: wave(axis=y, amp_deg=3.0, freq_hz=0.625, phase_deg=0.0, bias_deg=0.0)
+    muscle_drive flap_l: activation(peak=0.6, freq_hz=0.625, phase_deg=0.0, baseline=0.05)
+    muscle_drive flap_r: activation(peak=0.6, freq_hz=0.625, phase_deg=0.0, baseline=0.05)
+    ik_drive leg_l: foot_cycle(stride=1.4, lift=0.7, phase_deg=0.0)
+    ik_drive leg_r: foot_cycle(stride=1.4, lift=0.7, phase_deg=180.0)
+  }
+  state enraged {
+    pose_bias arm_l: [-3.0, 0.0, 0.0]
+    muscle_tone flap_l: 0.5
+    material_mod glow: { emissive: 1.9, moisture: 0.2, wear_delta: 0.03 }
+  }
+}
+"""
+        prog1 = parse_program(dsl_text)
+        formatted1 = format_program(prog1)
+        prog2 = parse_program(formatted1)
+        formatted2 = format_program(prog2)
+        self.assertEqual(formatted1, formatted2)
+        self.assertEqual(prog1, prog2)
+
+        scene = compile_geometry(prog1)
+        # Verify 2-level nested mirror O(3) parity: det(R) == +1 on all bones, cullface parity toggles twice!
+        for bone in scene.bones:
+            self.assertAlmostEqual(float(np.linalg.det(bone.rotation)), 1.0, places=9)
+
+        box_by_name = {b.name: b for b in scene.boxes}
+        self.assertFalse(box_by_name["phalanx"].mirrored)
+        self.assertTrue(box_by_name["digit_out__phalanx"].mirrored)
+        self.assertTrue(box_by_name["arm_r__phalanx"].mirrored)
+        # Doubly mirrored node toggles back to mirrored=False and restores original east cullface via reflected_cullfaces!
+        self.assertFalse(box_by_name["arm_r__digit_out__phalanx"].mirrored)
+        self.assertEqual(reflected_cullfaces(box_by_name["phalanx"]), ("east",))
+        self.assertEqual(reflected_cullfaces(box_by_name["digit_out__phalanx"]), ("west",))
+        self.assertEqual(reflected_cullfaces(box_by_name["arm_r__phalanx"]), ("west",))
+        self.assertEqual(reflected_cullfaces(box_by_name["arm_r__digit_out__phalanx"]), ("east",))
+
+        # Verify SurfaceDomain symmetry_pairs captures nested mirror pairs
+        mp = MaterialProgram.from_program(prog1)
+        dom = build_surface_domain(prog1, mp, subdivisions_per_unit=1)
+        self.assertGreater(len(dom.symmetry_pairs), 0)
+
+    def test_three_level_nested_mirror_and_exponential_bomb_guard(self) -> None:
+        # 3-level nested mirror compiles cleanly (2^3 = 8 leaf branches)
+        leaf = Bone("lvl3_a", attach=Attach("b2", anchor=(0.5, 0.0, 1.0), align=(0.0, 0.0, -1.0)), mirror_name="lvl3_b", items=[Box("b3", (1, 1, 2), "m")])
+        mid = Bone("lvl2_a", attach=Attach("b1", anchor=(0.5, 1.0, 0.0), align=(0.0, -1.0, 0.0)), mirror_name="lvl2_b", items=[Box("b2", (4, 2, 4), "m"), leaf])
+        outer = Bone("lvl1_a", attach=Attach("b0", anchor=(1.0, 0.0, 0.0), align=(-1.0, 0.0, 0.0)), mirror_name="lvl1_b", items=[Box("b1", (6, 2, 6), "m"), mid])
+        root = Bone("root", items=[Box("b0", (6, 4, 6), "m"), outer])
+        prog_3 = validate_program(Program(Meta("entity", "bbmodel_5", 16), [Palette("m", (0.5, 0.1, 40.0), steps=4)], root))
+        sc_3 = compile_geometry(prog_3)
+        triple_box = next(b for b in sc_3.boxes if b.name == "lvl1_b__lvl2_b__lvl3_b__b3")
+        self.assertTrue(triple_box.mirrored)  # 3 reflections: False -> True -> False -> True
+        self.assertAlmostEqual(float(np.linalg.det(triple_box.rotation)), 1.0, places=9)
+
+        # 15-level nested mirror bomb (2^15 = 32,768 > 8192) must be rejected before expansion
+        cur = Bone("n_14", attach=Attach("bx_13", anchor=(1.0, 0.0, 0.0), align=(-1.0, 0.0, 0.0)), mirror_name="m_14", items=[Box("bx_14", (1, 1, 1), "m")])
+        for d in range(13, -1, -1):
+            p_bx = "root_bx" if d == 0 else f"bx_{d - 1}"
+            cur = Bone(
+                f"n_{d}",
+                attach=Attach(p_bx, anchor=(1.0, 0.0, 0.0), align=(-1.0, 0.0, 0.0)),
+                mirror_name=f"m_{d}",
+                items=[Box(f"bx_{d}", (1, 1, 1), "m"), cur],
+            )
+        bomb_prog = Program(Meta("entity", "bbmodel_5", 16), [Palette("m", (0.5, 0.1, 40.0), steps=4)], Bone("root", items=[Box("root_bx", (2, 2, 2), "m"), cur]))
+        with self.assertRaises(DSLValidationError):
+            validate_program(bomb_prog)
+
+    def test_validation_rejects_invalid_v31_contracts_and_preserves_unsupported_guards(self) -> None:
+        # Invalid locator role
+        with self.assertRaises(DSLValidationError):
+            validate_program(
+                Program(
+                    Meta("entity", "bbmodel_5", 16),
+                    [Palette("m", (0.5, 0.1, 40.0), steps=4)],
+                    Bone("root", items=[Box("b", (2, 2, 2), "m"), Locator("bad", role="teleport_beacon")]),
+                )
+            )
+        # Inverted joint_limits (lo > hi)
+        with self.assertRaises(DSLValidationError):
+            validate_program(
+                Program(
+                    Meta("entity", "bbmodel_5", 16),
+                    [Palette("m", (0.5, 0.1, 40.0), steps=4)],
+                    Bone("root", joint_limits=((20.0, -10.0), (-10.0, 10.0), (-10.0, 10.0)), items=[Box("b", (2, 2, 2), "m")]),
+                )
+            )
+        # Protected unsupported features (@shade, @motion, @ergonomics, extrude) still fail explicitly
+        for forbidden_snippet in (
+            "@shade { ambient: 0.5 }",
+            "@motion { walk: 1 }",
+            "@ergonomics { grip: 1 }",
+            "@rig { root bone r { pivot_local: [0, 0, 0] extrude blade { size: [2, 2, 1] } } }",
+        ):
+            with self.assertRaises(UnsupportedFeature):
+                if forbidden_snippet.startswith("@rig"):
+                    parse_program(
+                        "@meta { archetype: entity, target_profile: bbmodel_5, texel_density: 16 }\n"
+                        "@palette { m: ramp(base_lch=[0.5, 0.1, 40.0], steps=4, hue_shift=[0.0, 0.0], emissive=false) }\n"
+                        f"{forbidden_snippet}\n"
+                    )
+                else:
+                    parse_program(
+                        "@meta { archetype: entity, target_profile: bbmodel_5, texel_density: 16 }\n"
+                        "@palette { m: ramp(base_lch=[0.5, 0.1, 40.0], steps=4, hue_shift=[0.0, 0.0], emissive=false) }\n"
+                        "@rig { root bone r { pivot_local: [0, 0, 0] box b { size: [2, 2, 2], material: m, inflate: 0.0 } } }\n"
+                        f"{forbidden_snippet}\n"
+                    )
+
+
+class TestMusculoskeletalTendonAndClosedLoopIK(unittest.TestCase):
+    """Verify Hill-type agonist-antagonist co-contraction, tendon pantographs, belly bulge, and <0.02u stance IK."""
+
+    def _build_antagonist_arm_rig(self) -> Program:
+        wrist = Bone(
+            "wrist",
+            attach=Attach("forearm_box", anchor=(0.0, -1.0, 0.0), align=(0.0, 1.0, 0.0)),
+            joint_limits=((-60.0, 60.0), (-15.0, 15.0), (-15.0, 15.0)),
+            items=[Box("hand_box", (2, 3, 2), "skin")],
+        )
+        elbow = Bone(
+            "elbow",
+            attach=Attach("upper_box", anchor=(0.0, -1.0, 0.0), align=(0.0, 1.0, 0.0)),
+            joint_limits=((-75.0, 75.0), (-15.0, 15.0), (-15.0, 15.0)),
+            items=[Box("forearm_box", (2, 5, 2), "skin"), wrist],
+        )
+        root = Bone(
+            "shoulder",
+            pivot_local=(0.0, 14.0, 0.0),
+            items=[
+                Box("upper_box", (3, 6, 3), "skin"),
+                Box("bicep_belly", (2, 4, 1), "muscle_mat", place=Place("upper_box", anchor=(0.0, 0.0, 1.0), align=(0.0, 0.0, -1.0))),
+                Box("tricep_belly", (2, 4, 1), "muscle_mat", place=Place("upper_box", anchor=(0.0, 0.0, -1.0), align=(0.0, 0.0, 1.0))),
+                elbow,
+            ],
+        )
+        muscles = (
+            MuscleDecl("bicep_flexor", "shoulder", "elbow", "x", 32.0, TendonCoupling("wrist", "x", 0.50), "bicep_belly", 0.14),
+            MuscleDecl("tricep_extensor", "shoulder", "elbow", "x", -32.0, None, "tricep_belly", 0.14),
+        )
+        return validate_program(
+            Program(
+                Meta("entity", "bbmodel_5", 16),
+                [Palette("skin", (0.62, 0.09, 48.0), steps=5), Palette("muscle_mat", (0.48, 0.16, 22.0), steps=5)],
+                root,
+                muscles=muscles,
+                kinematics=KinematicsDecl(look_chains=(LookChainDecl("arm_aim", ("elbow", "wrist"), 0.75),)),
+            )
+        )
+
+    def test_agonist_antagonist_cocontraction_stiffness_and_isochoric_bulge(self) -> None:
+        prog = self._build_antagonist_arm_rig()
+
+        # 1. Pure flexion: elbow flexes > 0 deg, coupled wrist flexes by 0.5x pantograph, bicep bulges
+        flex_res = evaluate_muscles_at_activations(prog, {"bicep_flexor": 0.85, "tricep_extensor": 0.0})
+        elbow_rx = flex_res.pose_euler_deltas["elbow"][0]
+        wrist_rx = flex_res.pose_euler_deltas["wrist"][0]
+        self.assertGreater(elbow_rx, 15.0)
+        self.assertAlmostEqual(wrist_rx, 0.50 * elbow_rx, places=4)
+        self.assertGreater(flex_res.box_inflate_deltas["bicep_belly"], 0.05)
+        self.assertEqual(flex_res.box_inflate_deltas.get("tricep_belly", 0.0), 0.0)
+
+        # Integer box sizes remain strictly immutable (Box-UV safe!)
+        bicep_box = next(b for b in flex_res.scene.boxes if b.name == "bicep_belly")
+        np.testing.assert_array_equal(bicep_box.size, np.array([2.0, 4.0, 1.0]))
+        self.assertGreater(bicep_box.inflate, 0.05)
+
+        # 2. Symmetric isometric co-contraction: net angle cancels to 0, stiffness increases, BOTH bellies bulge!
+        coco_res = evaluate_muscles_at_activations(prog, {"bicep_flexor": 0.85, "tricep_extensor": 0.85})
+        self.assertAlmostEqual(coco_res.pose_euler_deltas.get("elbow", (0.0, 0.0, 0.0))[0], 0.0, places=6)
+        self.assertGreater(coco_res.joint_stiffness["elbow"], flex_res.joint_stiffness["elbow"] * 1.4)
+        self.assertGreater(coco_res.box_inflate_deltas["bicep_belly"], 0.05)
+        self.assertGreater(coco_res.box_inflate_deltas["tricep_belly"], 0.05)
+
+        # 3. Look chain converges monotonically toward target (both downward -y arm aim and forward -z head gaze)
+        rest_sc = compile_geometry(prog)
+        rest_tip = next(b for b in rest_sc.boxes if b.name == "hand_box").center
+        target = np.array([2.0, 5.0, 6.0], dtype=np.float64)
+        look_deltas = solve_look_chain(prog, "arm_aim", target, forward_axis="-y")
+        posed_sc = compile_posed_geometry(prog, look_deltas)
+        posed_tip = next(b for b in posed_sc.boxes if b.name == "hand_box").center
+        elbow_piv = next(b for b in rest_sc.bones if b.name == "elbow").pivot_world
+        v_rest = (rest_tip - elbow_piv) / np.linalg.norm(rest_tip - elbow_piv)
+        v_posed = (posed_tip - elbow_piv) / np.linalg.norm(posed_tip - elbow_piv)
+        v_targ = (target - elbow_piv) / np.linalg.norm(target - elbow_piv)
+        self.assertGreater(float(np.dot(v_posed, v_targ)), float(np.dot(v_rest, v_targ)))
+
+        # Also check +z forward 3-bone cervical head/neck gaze on an Apex wyvern
+        wyvern = build_apex_complex_program("apex_flying_wyvern", seed=101)
+        w_rest = compile_geometry(wyvern)
+        gaze_target = np.array([10.0, 28.0, 35.0], dtype=np.float64)
+        w_look = solve_look_chain(wyvern, "cervical_gaze", gaze_target, forward_axis="+z")
+        w_posed = compile_posed_geometry(wyvern, w_look)
+        neck_piv = next(b for b in w_rest.bones if b.name == "neck_1").pivot_world
+        head_rest_dir = next(b for b in w_rest.bones if b.name == "wyvern_head").rotation[:, 2]
+        head_posed_dir = next(b for b in w_posed.bones if b.name == "wyvern_head").rotation[:, 2]
+        gaze_dir = (gaze_target - neck_piv) / np.linalg.norm(gaze_target - neck_piv)
+        self.assertGreater(float(np.dot(head_posed_dir, gaze_dir)), float(np.dot(head_rest_dir, gaze_dir)))
+
+    def test_world_behavior_actions_and_serialization_roundtrip(self) -> None:
+        prog = build_apex_complex_program("fanged_thunder_wyvern", seed=101)
+        mp = MaterialProgram.from_program(prog, seed=101)
+        dom = build_surface_domain(prog, mp, subdivisions_per_unit=1)
+        ws = WorldState(
+            program=prog,
+            material_program=mp,
+            surface_state=initialize_surface_state(dom),
+            style_config=StyleConfig.from_program(prog),
+        )
+
+        act_clip = ExecuteBehaviorClipAction(clip_name="quadruped_prowl_trot", cycles=2, num_frames_per_cycle=8)
+        self.assertEqual(action_from_dict(act_clip.to_dict()), act_clip)
+        res_clip = step_world(ws, act_clip, dt=1.4)
+        self.assertTrue(res_clip.swept_audit_passed)
+        self.assertGreater(res_clip.total_sliding_wear_added, 0.0)
+        self.assertLess(res_clip.ik_metadata["clip_audit"]["max_stance_slip_units"], 0.02)
+
+        act_state = ActivateBehaviorStateAction(state_name="fulgur_overcharge_state", substeps=6)
+        self.assertEqual(action_from_dict(act_state.to_dict()), act_state)
+        res_state = step_world(res_clip.next_state, act_state, dt=0.5)
+        self.assertTrue(res_state.swept_audit_passed)
+        self.assertGreaterEqual(
+            res_state.next_state.material_program.materials["fulgur_core"].emissive_strength,
+            1.8,
+        )
+
+
+class TestCobblemonCCBYNCQuarantineAndDecompilers(unittest.TestCase):
+    """Verify CC-BY-NC quarantine policy, Bedrock/Cobblemon .geo.json locators, and zero-eval Molang decompilation."""
+
+    def _sample_cobblemon_geojson_and_anim(self) -> tuple[dict, dict]:
+        geo = {
+            "format_version": "1.12.0",
+            "minecraft:geometry": [
+                {
+                    "description": {
+                        "identifier": "geometry.synccraft.cleanroom_sproutling",
+                        "texture_width": 64,
+                        "texture_height": 64,
+                    },
+                    "bones": [
+                        {
+                            "name": "body_root",
+                            "pivot": [0, 6, 0],
+                            "cubes": [{"origin": [-4, 2, -4], "size": [8, 8, 8], "uv": [0, 0]}],
+                            "locators": {
+                                "seat_1": [0, 11, 0],
+                                "target_hitbox": {"offset": [0, 6, 0], "rotation": [0, 0, 0]},
+                            },
+                        },
+                        {
+                            "name": "head_group",
+                            "parent": "body_root",
+                            "pivot": [0, 10, 0],
+                            "rotation": [5, 0, 0],
+                            "cubes": [{"origin": [-3, 10, -3], "size": [6, 5, 6], "uv": [0, 16]}],
+                            "locators": {
+                                "head_camera_focus": [0, 13, -3],
+                                "solar_beam_emitter": [0, 12, -4],
+                            },
+                        },
+                        {
+                            "name": "leaf_ear_l",
+                            "parent": "head_group",
+                            "pivot": [3, 15, 0],
+                            "rotation": [0, 0, 15],
+                            "cubes": [{"origin": [2, 15, -1], "size": [2, 5, 2], "uv": [24, 16]}],
+                        },
+                    ],
+                }
+            ],
+        }
+        anim = {
+            "format_version": "1.8.0",
+            "animations": {
+                "animation.sproutling.ground_idle": {
+                    "loop": True,
+                    "animation_length": 2.0,
+                    "bones": {
+                        "head_group": {
+                            "rotation": [
+                                "math.sin(q.anim_time * 180) * 6 + 2",
+                                "math.cos(query.anim_time * 180 - 45) * 8",
+                                0,
+                            ]
+                        },
+                        "leaf_ear_l": {
+                            "rotation": {
+                                "0.0": [0, 0, 0],
+                                "1.0": [0, 0, 12],
+                                "2.0": [0, 0, 0],
+                            }
+                        },
+                    },
+                }
+            },
+        }
+        return geo, anim
+
+    def test_cc_by_nc_quarantine_and_mojang_ban(self) -> None:
+        geo, anim = self._sample_cobblemon_geojson_and_anim()
+        nc_prov = AssetProvenance(
+            asset_id="community_creature_01",
+            source_url="https://gitlab.com/cable-mc/cobblemon-assets-example/sproutling",
+            author="CommunityArtist",
+            license_spdx="CC-BY-NC-4.0",
+            attribution_notice="CC-BY-NC-4.0 CommunityArtist (non-commercial research split)",
+        )
+
+        # 1. Default clean_room_permissive policy MUST reject CC-BY-NC-4.0
+        with self.assertRaises(LicenseGateError):
+            ingest_external_asset(geo, "bedrock_geojson", nc_prov, license_policy="clean_room_permissive")
+
+        # 2. Missing attribution_notice under research_nc MUST be rejected
+        no_attr = AssetProvenance(
+            asset_id="community_creature_01",
+            source_url="https://example.org/sprout",
+            author="CommunityArtist",
+            license_spdx="CC-BY-NC-4.0",
+            attribution_notice="",
+        )
+        with self.assertRaises(LicenseGateError):
+            verify_asset_provenance(no_attr, license_policy="research_nc")
+
+        # 3. Mojang / proprietary tokens MUST be rejected even under research_nc
+        mojang_prov = AssetProvenance(
+            asset_id="warden_rip",
+            source_url="https://example.org/mojang_jar_extract",
+            author="Extractor",
+            license_spdx="CC0-1.0",
+        )
+        with self.assertRaises(LicenseGateError):
+            verify_asset_provenance(mojang_prov, license_policy="research_nc")
+
+        # 4. Quarantined research_nc ingestion succeeds, marks commercial_weights_eligible=False,
+        #    preserves 3D vertices + semantic locators, and decompiles Molang animations without eval!
+        rec = ingest_external_asset(
+            geo,
+            "bedrock_geojson",
+            nc_prov,
+            animation_payload=anim,
+            license_policy="research_nc",
+        )
+        self.assertEqual(rec.license_track, "research_nc")
+        self.assertFalse(rec.commercial_weights_eligible)
+        self.assertLess(rec.vertex_reconstruction_error, 1e-5)
+
+        sc = compile_geometry(rec.program)
+        roles = {loc.role for loc in sc.locators}
+        self.assertIn("rider_seat", roles)
+        self.assertIn("hitbox", roles)
+        self.assertIn("camera_focus", roles)
+        self.assertIn("vfx_emitter", roles)
+
+        self.assertIsNotNone(rec.program.behavior)
+        assert rec.program.behavior is not None
+        self.assertEqual(len(rec.program.behavior.clips), 1)
+        self.assertGreaterEqual(len(rec.program.behavior.clips[0].tracks), 2)
+
+    def test_molang_decompiler_ignores_adversarial_code_strings_without_eval(self) -> None:
+        geo, _ = self._sample_cobblemon_geojson_and_anim()
+        adversarial_anim = {
+            "animations": {
+                "animation.adversarial.test": {
+                    "loop": True,
+                    "animation_length": 1.0,
+                    "bones": {
+                        "head_group": {
+                            "rotation": [
+                                "__import__('os').system('touch /tmp/synccraft_should_never_exist')",
+                                "eval('1+1')",
+                                "math.sin(q.anim_time * 360) * 5",
+                            ]
+                        }
+                    },
+                }
+            }
+        }
+        prov = AssetProvenance(
+            asset_id="safe_test",
+            source_url="https://example.org/safe",
+            author="CleanAuthor",
+            license_spdx="CC0-1.0",
+        )
+        rec = ingest_external_asset(geo, "bedrock_geojson", prov, animation_payload=adversarial_anim)
+        self.assertFalse(Path("/tmp/synccraft_should_never_exist").exists())
+        assert rec.program.behavior is not None
+        tracks = rec.program.behavior.clips[0].tracks
+        # Only the valid math.sin Z-axis expression compiles into a TrackDecl
+        self.assertEqual(len(tracks), 1)
+        self.assertEqual(tracks[0].axis, "z")
+        self.assertAlmostEqual(tracks[0].amp_deg, 5.0, places=4)
+
+
+class TestArtistAssistantLoopAndProgressiveRefinement(unittest.TestCase):
+    """Verify closed-loop artist critique/enhancement and 5-stage from-scratch trajectory construction."""
+
+    def test_looped_artist_enhancement_upgrades_raw_draft_to_verified_masterwork(self) -> None:
+        # Take Stage 2 (pure clay geometry, no @materials, no @muscles, no @behavior) of a complex entity
+        master = build_apex_complex_program("brute_theropod_wyvern", seed=101)
+        stages = build_progressive_from_scratch_trajectory(master)
+        raw_clay_draft = replace(
+            stages[2].program,
+            root=replace(stages[2].program.root, joint_limits=None),
+        )
+
+        initial_crit = analyze_artist_project(raw_clay_draft)
+        self.assertGreater(len(initial_crit.suggestions), 0)
+        self.assertLess(initial_crit.readiness_score, 0.80)
+
+        loop_out = run_looped_artist_enhancement(raw_clay_draft, max_iterations=5)
+        self.assertGreater(loop_out["final_readiness_score"], loop_out["initial_readiness_score"] + 0.15)
+        upgraded: Program = loop_out["final_program"]
+        self.assertGreater(len(upgraded.materials), 0)
+        self.assertGreater(len(upgraded.muscles), 0)
+        self.assertIsNotNone(upgraded.behavior)
+        assert upgraded.behavior is not None
+        self.assertTrue(audit_scene(compile_geometry(upgraded), enforce_physical_contact=True)["passed"])
+        clip_rep = audit_behavior_clip(upgraded, upgraded.behavior.clips[0].name, num_frames=12)
+        self.assertTrue(clip_rep["passed"])
+
+    def test_five_stage_progressive_from_scratch_trajectory_invariants(self) -> None:
+        master = build_apex_complex_program("apex_flying_wyvern", seed=101)
+        stages = build_progressive_from_scratch_trajectory(master)
+        self.assertEqual(len(stages), 5)
+
+        prev_boxes = 0
+        prev_score = -1.0
+        for st in stages:
+            # Every intermediate stage must round-trip parse and pass strict SAT + P1-02 physical contact audit!
+            parsed = parse_program(st.program_dsl)
+            sc = compile_geometry(parsed)
+            aud = audit_scene(sc, enforce_physical_contact=True)
+            self.assertTrue(aud["passed"], f"Stage {st.stage_name} failed SAT/P1-02: {aud}")
+            self.assertGreaterEqual(st.box_count, prev_boxes)
+            self.assertGreaterEqual(st.readiness_score + 1e-6, prev_score)
+            prev_boxes = st.box_count
+            prev_score = st.readiness_score
+
+        # Stage 0 is a concise silhouette blockout; Stage 4 is the full 56-box musculoskeletal wyvern
+        self.assertLess(stages[0].box_count, stages[4].box_count)
+        self.assertEqual(stages[4].box_count, 56)
+        self.assertGreater(len(stages[4].program.muscles), 0)
+        self.assertIsNotNone(stages[4].program.behavior)
+
+
+class TestApexComplexEntityAndAssetPack(unittest.TestCase):
+    """Verify all 10 clean-room Apex families (8 seen + 2 held-out >=40 boxes) and multi-turn dataset shard."""
+
+    def test_benchmark_static_family_counts_preserved_and_all_ten_apex_families_pass(self) -> None:
+        self.assertEqual(len(SEEN_STATIC_FAMILIES), 40)
+        self.assertEqual(len(UNSEEN_STATIC_FAMILIES), 15)
+        self.assertEqual(len(APEX_SEEN_FAMILIES), 8)
+        self.assertEqual(len(APEX_UNSEEN_FAMILIES), 2)
+        self.assertEqual(len(ALL_APEX_FAMILIES), 10)
+
+        for fam in ALL_APEX_FAMILIES:
+            for seed in (101, 202):
+                prog = build_apex_complex_program(fam, seed=seed)
+                dsl_txt = format_program(prog)
+                reparsed = parse_program(dsl_txt)
+                self.assertEqual(format_program(reparsed), dsl_txt)
+                sc = compile_geometry(reparsed)
+                aud = audit_scene(sc, enforce_physical_contact=True)
+                self.assertTrue(aud["passed"], f"{fam} seed={seed} failed static audit: {aud}")
+                if fam in APEX_UNSEEN_FAMILIES:
+                    self.assertGreaterEqual(len(sc.boxes), 40, f"Unseen {fam} has {len(sc.boxes)} < 40 boxes")
+                self.assertIsNotNone(reparsed.behavior)
+                assert reparsed.behavior is not None
+                clip_aud = audit_behavior_clip(reparsed, reparsed.behavior.clips[0].name, num_frames=12)
+                self.assertTrue(clip_aud["passed"], f"{fam} seed={seed} failed dynamic clip audit: {clip_aud}")
+                self.assertLess(clip_aud["max_stance_slip_units"], 0.02)
+
+    def test_generate_apex_complex_dataset_shard(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            bundle = generate_apex_complex_dataset(
+                tmp,
+                samples_per_seen_family=1,
+                samples_per_unseen_family=1,
+                seed=202611,
+            )
+            summary = bundle["summary"]
+            rows = bundle["rows"]
+            self.assertEqual(summary["total_rows"], 30)  # 10 families * 3 supervision turns
+            self.assertEqual(summary["static_sat_pass_rate"], 1.0)
+            self.assertEqual(summary["dynamic_clip_pass_rate"], 1.0)
+            self.assertLess(summary["max_stance_slip_observed"], 0.02)
+            self.assertEqual(summary["default_target_llm"], "LiquidAI/LFM3-VL-2B")
+
+            manifest = json.loads((Path(tmp) / "apex_complex_manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["total_rows"], 30)
+            for row in rows:
+                self.assertEqual(row["license_spdx"], "Apache-2.0")
+                self.assertTrue(row["commercial_weights_eligible"])
+                parsed = parse_program(row["assistant_dsl"])
+                self.assertTrue(audit_scene(compile_geometry(parsed), enforce_physical_contact=True)["passed"])
+
+
+if __name__ == "__main__":
+    unittest.main()

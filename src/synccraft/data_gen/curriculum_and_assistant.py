@@ -48,20 +48,89 @@ ASSISTANT_TASK_MODES: tuple[str, ...] = (
 
 def _prune_unused_palettes_and_materials(prog: Program) -> Program:
     used_mats: set[str] = set()
+    expanded_bones: dict[str, str | None] = {}
+    expanded_boxes: set[str] = set()
 
-    def _scan(bone: Bone) -> None:
+    def _scan(bone: Bone, parent_name: str | None = None, prefix: str | None = None, renamed: str | None = None) -> None:
+        bname = renamed or (f"{prefix}__{bone.name}" if prefix else bone.name)
+        expanded_bones[bname] = parent_name
         for item in bone.items:
             if isinstance(item, Box):
                 used_mats.add(item.material)
-            else:
-                _scan(item)
+                expanded_boxes.add(f"{prefix}__{item.name}" if prefix else item.name)
+            elif isinstance(item, Bone):
+                _scan(item, bname, prefix=prefix)
+                if item.mirror_name:
+                    m_root = f"{prefix}__{item.mirror_name}" if prefix else item.mirror_name
+                    _scan(item, bname, prefix=m_root, renamed=m_root)
 
     _scan(prog.root)
     new_palettes = [p for p in prog.palettes if p.name in used_mats]
     if not new_palettes and prog.palettes:
         new_palettes = [prog.palettes[0]]
-    new_materials = tuple(m for m in prog.materials if m.name in used_mats)
-    return replace(prog, palettes=new_palettes, materials=new_materials)
+    valid_mat_names = {p.name for p in new_palettes}
+    new_materials = tuple(m for m in prog.materials if m.name in valid_mat_names)
+
+    # Prune @muscles, @kinematics, and @behavior declarations referencing trimmed bones/boxes
+    root_name = prog.root.name
+    kept_muscles = []
+    for m in prog.muscles:
+        if m.origin_bone not in expanded_bones or m.insertion_bone not in expanded_bones or m.insertion_bone == root_name:
+            continue
+        if m.belly_box is not None and m.belly_box not in expanded_boxes:
+            m = replace(m, belly_box=None, bulge_inflate=0.0)
+        if m.tendon_coupling is not None and (
+            m.tendon_coupling.bone not in expanded_bones or m.tendon_coupling.bone == root_name
+        ):
+            m = replace(m, tendon_coupling=None)
+        kept_muscles.append(m)
+    kept_muscle_names = {m.name for m in kept_muscles}
+
+    new_kin = None
+    kept_ik_names: set[str] = set()
+    if prog.kinematics is not None:
+        iks = tuple(
+            ik for ik in prog.kinematics.ik_chains
+            if ik.upper in expanded_bones and ik.upper != root_name and expanded_bones.get(ik.lower) == ik.upper
+        )
+        lks = []
+        for lk in prog.kinematics.look_chains:
+            bs = tuple(b for b in lk.bones if b in expanded_bones and b != root_name)
+            if bs:
+                lks.append(replace(lk, bones=bs))
+        if iks or lks:
+            from synccraft.dsl.ast_nodes import KinematicsDecl
+            new_kin = KinematicsDecl(ik_chains=iks, look_chains=tuple(lks))
+            kept_ik_names = {ik.name for ik in iks}
+
+    new_beh = None
+    if prog.behavior is not None:
+        from synccraft.dsl.ast_nodes import BehaviorDecl
+        clips = []
+        for cl in prog.behavior.clips:
+            trs = tuple(t for t in cl.tracks if t.bone in expanded_bones and t.bone != root_name)
+            mds = tuple(md for md in cl.muscle_drives if md.muscle in kept_muscle_names)
+            ikds = tuple(ikd for ikd in cl.ik_drives if ikd.chain in kept_ik_names)
+            if trs or mds or ikds:
+                clips.append(replace(cl, tracks=trs, muscle_drives=mds, ik_drives=ikds))
+        states = []
+        for st in prog.behavior.states:
+            pbs = tuple((b, v) for b, v in st.pose_biases if b in expanded_bones and b != root_name)
+            mts = tuple((m, v) for m, v in st.muscle_tones if m in kept_muscle_names)
+            mms = tuple(mm for mm in st.material_mods if mm.material in valid_mat_names)
+            if pbs or mts or mms:
+                states.append(replace(st, pose_biases=pbs, muscle_tones=mts, material_mods=mms))
+        if clips or states:
+            new_beh = BehaviorDecl(clips=tuple(clips), states=tuple(states))
+
+    return replace(
+        prog,
+        palettes=new_palettes,
+        materials=new_materials,
+        muscles=tuple(kept_muscles),
+        kinematics=new_kin,
+        behavior=new_beh,
+    )
 
 
 def _box_volume(bx: Box) -> float:
@@ -289,7 +358,7 @@ def apply_animation_keyframe(program: Program, spec: dict[str, Any], phase_fract
     two_pi_phase = 2.0 * math.pi * phase_fraction
 
     def _pose_bone(b: Bone) -> Bone:
-        new_items = [it if isinstance(it, Box) else _pose_bone(it) for it in b.items]
+        new_items = [_pose_bone(it) if isinstance(it, Bone) else it for it in b.items]
         ch = channels.get(b.name)
         if ch is None:
             return replace(b, items=new_items)

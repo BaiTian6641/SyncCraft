@@ -1,13 +1,26 @@
 """Action-conditioned 3D World Model transitions, exemplars, interventions, inverse inference, and datasets."""
 
+from .artist_loop import (
+    ArtistCritiqueReport,
+    ArtistSuggestion,
+    ProgressiveStageRecord,
+    analyze_artist_project,
+    build_progressive_from_scratch_trajectory,
+    enhance_artist_project_step,
+    ingest_artist_project_to_program,
+    run_looped_artist_enhancement,
+)
 from .exemplars import build_articulated_mechanism_world, build_biological_creature_world
 from .interventions import run_seven_interventions_suite
 from .inverse_inference import (
+    APPROVED_NONCOMMERCIAL_RESEARCH_LICENSES,
     APPROVED_PERMISSIVE_LICENSES,
+    LICENSE_POLICIES,
     AssetProvenance,
     IngestedAssetRecord,
     LicenseGateError,
     MaterialHypothesis,
+    decompile_bedrock_animation_to_behavior,
     infer_material_posterior,
     ingest_external_asset,
     verify_asset_provenance,
@@ -19,9 +32,11 @@ from .trajectory_dataset import (
     evaluate_matched_budget_world_baselines,
 )
 from .transitions import (
+    ActivateBehaviorStateAction,
     ApplyRubbingAction,
     EditGeometryAction,
     EditMaterialAction,
+    ExecuteBehaviorClipAction,
     JointTrajectoryAction,
     NoOpEnvironmentAction,
     RepackUVAction,
@@ -36,18 +51,25 @@ from .transitions import (
 )
 
 __all__ = [
+    "APPROVED_NONCOMMERCIAL_RESEARCH_LICENSES",
     "APPROVED_PERMISSIVE_LICENSES",
     "COMPOSITIONAL_HELDOUT_TRIPLES",
+    "LICENSE_POLICIES",
     "WORLD_DATASET_PRESETS",
+    "ActivateBehaviorStateAction",
     "ApplyRubbingAction",
+    "ArtistCritiqueReport",
+    "ArtistSuggestion",
     "AssetProvenance",
     "EditGeometryAction",
     "EditMaterialAction",
+    "ExecuteBehaviorClipAction",
     "IngestedAssetRecord",
     "JointTrajectoryAction",
     "LicenseGateError",
     "MaterialHypothesis",
     "NoOpEnvironmentAction",
+    "ProgressiveStageRecord",
     "RepackUVAction",
     "SetLightingAction",
     "SetPoseAction",
@@ -56,12 +78,18 @@ __all__ = [
     "TwoBoneIKAction",
     "WorldAction",
     "action_from_dict",
+    "analyze_artist_project",
     "build_articulated_mechanism_world",
     "build_biological_creature_world",
     "build_intervention_trajectory_dataset",
+    "build_progressive_from_scratch_trajectory",
+    "decompile_bedrock_animation_to_behavior",
+    "enhance_artist_project_step",
     "evaluate_matched_budget_world_baselines",
     "infer_material_posterior",
+    "ingest_artist_project_to_program",
     "ingest_external_asset",
+    "run_looped_artist_enhancement",
     "run_seven_interventions_suite",
     "step_world",
     "verify_asset_provenance",

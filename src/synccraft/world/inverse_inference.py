@@ -15,9 +15,10 @@ extracts localized ``StampOverride`` layers for artist-authored markings (eyes, 
 from __future__ import annotations
 
 import base64
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import io
 import math
+import re
 from typing import Any
 
 import numpy as np
@@ -25,16 +26,21 @@ from PIL import Image
 
 from synccraft.dsl.ast_nodes import (
     FACES,
+    LOCATOR_ROLES,
     Attach,
+    BehaviorDecl,
     Bone,
     Box,
+    ClipDecl,
+    Locator,
     Meta,
     Palette,
     Place,
     Program,
+    TrackDecl,
     validate_program,
 )
-from synccraft.kinematics.se3_chain import compile_geometry
+from synccraft.kinematics.se3_chain import compile_geometry, euler_xyz_matrix
 from synccraft.surface.contracts import (
     MATERIAL_FAMILIES,
     MaterialProgram,
@@ -54,6 +60,16 @@ APPROVED_PERMISSIVE_LICENSES: frozenset[str] = frozenset({
     "BSD-3-Clause",
 })
 
+APPROVED_NONCOMMERCIAL_RESEARCH_LICENSES: frozenset[str] = frozenset({
+    "CC-BY-NC-4.0",
+    "CC-BY-NC-SA-4.0",
+})
+
+LICENSE_POLICIES: frozenset[str] = frozenset({
+    "clean_room_permissive",
+    "research_nc",
+})
+
 BANNED_PROVENANCE_TOKENS: tuple[str, ...] = (
     "mojang",
     "minecraft_jar",
@@ -65,7 +81,7 @@ BANNED_PROVENANCE_TOKENS: tuple[str, ...] = (
 
 
 class LicenseGateError(PermissionError):
-    """Raised when an external asset lacks an approved permissive license or clean provenance."""
+    """Raised when an external asset lacks an approved license for the active policy or clean provenance."""
 
 
 @dataclass(frozen=True)
@@ -79,21 +95,53 @@ class AssetProvenance:
     attribution_notice: str = ""
 
 
-def verify_asset_provenance(provenance: AssetProvenance) -> None:
-    """Enforce AGENTS.md / ADR 0003 permissive-license and anti-Mojang-asset gate."""
+def verify_asset_provenance(
+    provenance: AssetProvenance,
+    *,
+    license_policy: str = "clean_room_permissive",
+) -> str:
+    """Enforce AGENTS.md / ADR 0003 / ADR 0006 license quarantine and anti-Mojang-asset gate.
+
+    Returns the resolved license track: ``'clean_room_permissive'`` or ``'research_nc'``.
+    Default ``license_policy='clean_room_permissive'`` strictly rejects ``CC-BY-NC`` assets
+    unless ``license_policy='research_nc'`` is explicitly requested for non-commercial
+    research evaluation/training quarantine (e.g. Cobblemon ``CC-BY-NC-4.0`` assets).
+    """
+    if license_policy not in LICENSE_POLICIES:
+        raise ValueError(f"Unknown license_policy {license_policy!r}; expected one of {sorted(LICENSE_POLICIES)}")
     if not isinstance(provenance, AssetProvenance):
         raise LicenseGateError("AssetProvenance record is required for external ingestion")
     if not provenance.asset_id.strip() or not provenance.source_url.strip() or not provenance.author.strip():
         raise LicenseGateError("asset_id, source_url, and author must all be non-empty")
-    if provenance.license_spdx not in APPROVED_PERMISSIVE_LICENSES:
-        raise LicenseGateError(
-            f"Rejected license {provenance.license_spdx!r}; allowed permissive licenses: "
-            f"{sorted(APPROVED_PERMISSIVE_LICENSES)}"
-        )
+
     combined = f"{provenance.asset_id} {provenance.source_url} {provenance.author} {provenance.attribution_notice}".lower()
     for banned in BANNED_PROVENANCE_TOKENS:
         if banned in combined:
             raise LicenseGateError(f"Asset provenance contains prohibited source marker {banned!r}")
+
+    if provenance.license_spdx in APPROVED_PERMISSIVE_LICENSES:
+        return "clean_room_permissive"
+    if license_policy == "research_nc" and provenance.license_spdx in APPROVED_NONCOMMERCIAL_RESEARCH_LICENSES:
+        if not provenance.attribution_notice.strip():
+            raise LicenseGateError(
+                f"{provenance.license_spdx} requires a non-empty attribution_notice under CC-BY-NC quarantine"
+            )
+        return "research_nc"
+
+    allowed = (
+        sorted(APPROVED_PERMISSIVE_LICENSES | APPROVED_NONCOMMERCIAL_RESEARCH_LICENSES)
+        if license_policy == "research_nc"
+        else sorted(APPROVED_PERMISSIVE_LICENSES)
+    )
+    hint = (
+        " (pass license_policy='research_nc' for quarantined non-commercial CC-BY-NC research splits)"
+        if provenance.license_spdx in APPROVED_NONCOMMERCIAL_RESEARCH_LICENSES
+        else ""
+    )
+    raise LicenseGateError(
+        f"Rejected license {provenance.license_spdx!r} under policy {license_policy!r}; "
+        f"allowed licenses: {allowed}{hint}"
+    )
 
 
 def _sanitize_ident(raw: str, fallback: str, used: set[str]) -> str:
@@ -353,13 +401,33 @@ def _decompile_java_json(doc: dict[str, Any]) -> tuple[Program, dict[str, dict[s
     return prog, uv_map, max_err
 
 
-def _decompile_bedrock_geojson(doc: dict[str, Any]) -> tuple[Program, dict[str, dict[str, list[float]]], float]:
-    """Decompile Minecraft Bedrock .geo.json (minecraft:geometry) -> validated Program + UVs."""
+def _infer_locator_role(raw_loc_name: str) -> str:
+    low = raw_loc_name.lower()
+    if "seat" in low:
+        return "rider_seat"
+    if any(tok in low for tok in ("eye", "head", "camera", "look")):
+        return "camera_focus"
+    if any(tok in low for tok in ("target", "hitbox", "hurtbox")):
+        return "hitbox"
+    if any(tok in low for tok in ("foot", "paw", "talon", "hand", "claw", "ik")):
+        return "ik_effector"
+    if any(tok in low for tok in ("effect", "special", "breath", "muzzle", "flame", "beam", "vfx")):
+        return "vfx_emitter"
+    return "socket"
+
+
+def _decompile_bedrock_geojson(
+    doc: dict[str, Any],
+) -> tuple[Program, dict[str, dict[str, list[float]]], float, dict[str, str]]:
+    """Decompile Minecraft Bedrock / Cobblemon .geo.json -> validated Program + UVs + error + bone_map."""
     used_ids: set[str] = set()
     geos = doc.get("minecraft:geometry") or []
     if not geos or not isinstance(geos[0], dict):
         raise ValueError("Bedrock .geo.json missing 'minecraft:geometry' list")
     g0 = geos[0]
+    desc = g0.get("description") or {}
+    tex_w_desc = max(16, int(desc.get("texture_width", 64)))
+    density = 16 if tex_w_desc <= 128 else 16
     bones_raw = g0.get("bones") or []
     if not bones_raw:
         raise ValueError("Bedrock geometry contains no bones")
@@ -367,39 +435,69 @@ def _decompile_bedrock_geojson(doc: dict[str, Any]) -> tuple[Program, dict[str, 
     uv_map: dict[str, dict[str, list[float]]] = {}
     bone_records: dict[str, dict[str, Any]] = {}
     children_map: dict[str | None, list[str]] = {None: []}
+    raw_to_safe_bone: dict[str, str] = {}
+    expected_box_centers: dict[str, np.ndarray] = {}
 
+    total_cubes = 0
     for b in bones_raw:
         bname = str(b["name"])
         bone_records[bname] = b
         children_map.setdefault(bname, [])
+        total_cubes += len(b.get("cubes") or [])
     for b in bones_raw:
         parent = b.get("parent")
         parent_key = str(parent) if parent in bone_records else None
         children_map[parent_key].append(str(b["name"]))
 
+    need_fallback_root_box = total_cubes == 0
+
+    def _emit_bone_locators(
+        rec: dict[str, Any],
+        piv: np.ndarray,
+    ) -> list[Locator]:
+        locs_raw = rec.get("locators")
+        if not isinstance(locs_raw, dict):
+            return []
+        out_locs: list[Locator] = []
+        for raw_lname, lspec in locs_raw.items():
+            safe_lname = _sanitize_ident(f"loc_{raw_lname}", "locator", used_ids)
+            role = _infer_locator_role(str(raw_lname))
+            if isinstance(lspec, dict):
+                pos_arr = np.asarray(lspec.get("offset", lspec.get("position", piv.tolist())), dtype=np.float64)
+            else:
+                pos_arr = np.asarray(lspec, dtype=np.float64)
+            loc_local = pos_arr - piv
+            out_locs.append(
+                Locator(
+                    name=safe_lname,
+                    offset=(float(loc_local[0]), float(loc_local[1]), float(loc_local[2])),
+                    role=role,
+                )
+            )
+        return out_locs
+
     def _build_bedrock_bone(
         raw_name: str,
         parent_pivot: np.ndarray,
-        parent_first_box: str | None,
+        parent_world_rot: np.ndarray,
+        parent_first_anchor: str | None,
         parent_first_loc: np.ndarray | None,
         is_root: bool,
     ) -> Bone:
         rec = bone_records[raw_name]
         safe_bname = _sanitize_ident(raw_name, "bone", used_ids)
+        raw_to_safe_bone[raw_name] = safe_bname
         piv = np.asarray(rec.get("pivot", [0.0, 0.0, 0.0]), dtype=np.float64)
         rot = tuple(float(x) for x in rec.get("rotation", [0.0, 0.0, 0.0]))
+        local_rot_mat = np.eye(3, dtype=np.float64) if is_root else euler_xyz_matrix(rot)
+        world_rot = parent_world_rot @ local_rot_mat
         cubes = rec.get("cubes") or []
 
-        items: list[Box | Bone] = []
+        items: list[Box | Locator | Bone] = []
         fb_name: str | None = None
         fb_loc: np.ndarray | None = None
 
-        if not cubes:
-            hub = _sanitize_ident(f"{safe_bname}_hub", "hub", used_ids)
-            items.append(Box(hub, (1, 1, 1), "mat_0"))
-            uv_map[hub] = {f: [0.0, 0.0, 1.0, 1.0] for f in FACES}
-            fb_name, fb_loc = hub, np.zeros(3, dtype=np.float64)
-        else:
+        if cubes:
             for c_idx, cube in enumerate(cubes):
                 origin = np.asarray(cube["origin"], dtype=np.float64)
                 sz_raw = np.maximum(1.0, np.rint(np.asarray(cube["size"], dtype=np.float64)))
@@ -408,6 +506,7 @@ def _decompile_bedrock_geojson(doc: dict[str, Any]) -> tuple[Program, dict[str, 
                 loc_c = ctr - piv
                 inflate = max(0.0, float(cube.get("inflate", 0.0)))
                 cname = _sanitize_ident(f"{safe_bname}_cube_{c_idx}", "box", used_ids)
+                expected_box_centers[cname] = piv + world_rot @ loc_c
 
                 uv_raw = cube.get("uv", [0, 0])
                 uv_map[cname] = {}
@@ -421,7 +520,6 @@ def _decompile_bedrock_geojson(doc: dict[str, Any]) -> tuple[Program, dict[str, 
                             wu, hv = face_uv_extents_units(sz_i, f)
                             uv_map[cname][f] = [0.0, 0.0, float(wu), float(hv)]
                 else:
-                    # Standard Bedrock Box-UV [u_base, v_base]
                     ub, vb = float(uv_raw[0]), float(uv_raw[1])
                     sx, sy, sz = sz_i
                     uv_map[cname] = {
@@ -442,38 +540,263 @@ def _decompile_bedrock_geojson(doc: dict[str, Any]) -> tuple[Program, dict[str, 
                     pl = Place(fb_name, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0), (float(diff[0]), float(diff[1]), float(diff[2])))
                 items.append(Box(cname, sz_i, "mat_0", place=pl, inflate=inflate))
 
+            items.extend(_emit_bone_locators(rec, piv))
+        else:
+            # Zero-cube structural/socket bone: emit Cobblemon locators or a dimensionless socket Locator!
+            explicit_locs = _emit_bone_locators(rec, piv)
+            if is_root and need_fallback_root_box:
+                hub = _sanitize_ident(f"{safe_bname}_hub", "hub", used_ids)
+                items.append(Box(hub, (1, 1, 1), "mat_0"))
+                uv_map[hub] = {f: [0.0, 0.0, 1.0, 1.0] for f in FACES}
+                fb_name, fb_loc = hub, np.zeros(3, dtype=np.float64)
+                items.extend(explicit_locs)
+            elif explicit_locs:
+                items.extend(explicit_locs)
+                first_loc = explicit_locs[0]
+                fb_name = first_loc.name
+                fb_loc = np.asarray(first_loc.offset, dtype=np.float64)
+            else:
+                piv_loc_name = _sanitize_ident(f"{safe_bname}_pivot", "locator", used_ids)
+                items.append(Locator(name=piv_loc_name, offset=(0.0, 0.0, 0.0), role="socket"))
+                fb_name, fb_loc = piv_loc_name, np.zeros(3, dtype=np.float64)
+
         for child_raw in children_map.get(raw_name, []):
-            items.append(_build_bedrock_bone(child_raw, piv, fb_name, fb_loc, is_root=False))
+            items.append(_build_bedrock_bone(child_raw, piv, world_rot, fb_name, fb_loc, is_root=False))
 
         if is_root:
             return Bone(safe_bname, pivot_local=(float(piv[0]), float(piv[1]), float(piv[2])), items=items)
 
-        assert parent_first_box is not None and parent_first_loc is not None
-        rel = piv - parent_pivot - parent_first_loc
+        assert parent_first_anchor is not None and parent_first_loc is not None
+        # Exact inverse parent rotation so world_pivot == piv even under rotated ancestor bones
+        rel = parent_world_rot.T @ (piv - parent_pivot) - parent_first_loc
+        # Attaching to a dimensionless Locator or beyond 0.5u requires detached=True
+        parent_is_locator = parent_first_anchor not in uv_map
         att = Attach(
-            parent_first_box,
+            parent_first_anchor,
             (0.0, 0.0, 0.0),
             (0.0, 0.0, 0.0),
             (float(rel[0]), float(rel[1]), float(rel[2])),
-            detached=any(abs(float(x)) > 0.5 for x in rel),
+            detached=(parent_is_locator or any(abs(float(x)) > 0.5 for x in rel)),
         )
         return Bone(safe_bname, rest_euler=rot, attach=att, items=items)
 
     top_bones = children_map[None]
     if len(top_bones) == 1 and not any(abs(float(x)) > 1e-8 for x in bone_records[top_bones[0]].get("rotation", [0, 0, 0])):
-        root_bone = _build_bedrock_bone(top_bones[0], np.zeros(3), None, None, is_root=True)
+        root_bone = _build_bedrock_bone(top_bones[0], np.zeros(3), np.eye(3), None, None, is_root=True)
     else:
         syn_root = _sanitize_ident("bedrock_root", "bone", used_ids)
-        syn_hub = _sanitize_ident("bedrock_hub", "box", used_ids)
-        uv_map[syn_hub] = {f: [0.0, 0.0, 1.0, 1.0] for f in FACES}
-        r_items: list[Box | Bone] = [Box(syn_hub, (1, 1, 1), "mat_0")]
+        if need_fallback_root_box:
+            syn_anchor = _sanitize_ident("bedrock_hub", "box", used_ids)
+            uv_map[syn_anchor] = {f: [0.0, 0.0, 1.0, 1.0] for f in FACES}
+            r_items: list[Box | Locator | Bone] = [Box(syn_anchor, (1, 1, 1), "mat_0")]
+        else:
+            syn_anchor = _sanitize_ident("bedrock_origin", "locator", used_ids)
+            r_items = [Locator(name=syn_anchor, offset=(0.0, 0.0, 0.0), role="socket")]
         for tb in top_bones:
-            r_items.append(_build_bedrock_bone(tb, np.zeros(3), syn_hub, np.zeros(3), is_root=False))
+            r_items.append(_build_bedrock_bone(tb, np.zeros(3), np.eye(3), syn_anchor, np.zeros(3), is_root=False))
         root_bone = Bone(syn_root, pivot_local=(0.0, 0.0, 0.0), items=r_items)
 
-    prog = validate_program(Program(Meta("entity", "bedrock_entity", 16), [Palette("mat_0", (0.62, 0.06, 220.0), 6)], root_bone))
-    compile_geometry(prog)
-    return prog, uv_map, 0.0
+    prog = validate_program(Program(Meta("entity", "bedrock_entity", density), [Palette("mat_0", (0.62, 0.06, 220.0), 6)], root_bone))
+    compiled = compile_geometry(prog)
+    max_err = max(
+        (float(np.linalg.norm(b.center - expected_box_centers[b.name])) for b in compiled.boxes if b.name in expected_box_centers),
+        default=0.0,
+    )
+    return prog, uv_map, max_err, raw_to_safe_bone
+
+
+_MOLANG_CALL_RE = re.compile(
+    r"([+-]?\s*(?:\d+(?:\.\d+)?\s*\*\s*)?)math\.(sin|cos)\(([^()]{1,160})\)(?:\s*\*\s*([+-]?\d+(?:\.\d+)?))?",
+    re.IGNORECASE,
+)
+_TRAILING_SHIFT_RE = re.compile(r"([+-]\s*\d+(?:\.\d+)?)\s*$")
+_PLAIN_NUM_RE = re.compile(r"[+-]?\d+(?:\.\d+)?")
+
+
+def _parse_molang_channel_zero_eval(
+    expr: Any,
+    bone_name: str,
+) -> tuple[str, float, float, float] | None:
+    """Zero-eval bounded parser translating Bedrock/Cobblemon Molang rotation channel to TrackDecl parameters."""
+    if isinstance(expr, bool) or expr is None:
+        return None
+    if isinstance(expr, (int, float)):
+        val = float(expr)
+        if not math.isfinite(val) or abs(val) < 0.25:
+            return None
+        return ("hinge", 0.0, 0.0, float(np.clip(val, -180.0, 180.0)))
+    if not isinstance(expr, str) or len(expr) > 256:
+        return None
+    text = expr.strip()
+    if not text:
+        return None
+    try:
+        const_val = float(text)
+        if not math.isfinite(const_val) or abs(const_val) < 0.25:
+            return None
+        return ("hinge", 0.0, 0.0, float(np.clip(const_val, -180.0, 180.0)))
+    except ValueError:
+        pass
+
+    m = _MOLANG_CALL_RE.search(text)
+    if m is None:
+        return None
+
+    lead_str, trig_fn, inside_arg, trail_scale_str = m.groups()
+    lead_clean = lead_str.replace(" ", "")
+    if lead_clean in ("", "+"):
+        scale_pre = 1.0
+    elif lead_clean == "-":
+        scale_pre = -1.0
+    else:
+        scale_pre = float(lead_clean.rstrip("*"))
+    scale_post = float(trail_scale_str) if trail_scale_str is not None else 1.0
+    amp = float(np.clip(scale_pre * scale_post, -180.0, 180.0))
+
+    # Extract additive constant outside the matched trig term
+    outside = (text[: m.start()] + " " + text[m.end() :]).strip()
+    bias = 0.0
+    for nm in _PLAIN_NUM_RE.findall(outside):
+        bias += float(nm)
+    bias = float(np.clip(bias, -180.0, 180.0))
+
+    # Phase shift from inside-parens trailing degree offset + cos->sin +90 deg shift
+    phase_deg = 90.0 if trig_fn.lower() == "cos" else 0.0
+    sh_m = _TRAILING_SHIFT_RE.search(inside_arg)
+    if sh_m is not None:
+        # Ensure it's an additive phase term rather than the sole multiplier after '*'
+        prefix_inside = inside_arg[: sh_m.start()].rstrip()
+        if not prefix_inside.endswith("*"):
+            phase_deg += float(sh_m.group(1).replace(" ", ""))
+    phase_offset = (phase_deg / 360.0) % 1.0
+    if phase_offset >= 0.999999:
+        phase_offset = 0.0
+
+    wf = "flap" if "wing" in bone_name.lower() else "wave"
+    if abs(amp) < 0.1 and abs(bias) < 0.25:
+        return None
+    return (wf, round(amp, 4), round(phase_offset, 4), round(bias, 4))
+
+
+def decompile_bedrock_animation_to_behavior(
+    anim_doc: dict[str, Any],
+    program: Program,
+    *,
+    raw_to_safe_bone: dict[str, str] | None = None,
+) -> BehaviorDecl:
+    """Convert Bedrock / Cobblemon .animation.json into a validated @behavior BehaviorDecl (zero eval)."""
+    anims = anim_doc.get("animations")
+    if not isinstance(anims, dict) or not anims:
+        raise ValueError("Bedrock .animation.json missing non-empty 'animations' dictionary")
+
+    compiled = compile_geometry(program)
+    valid_bones = set(compiled.bone_by_name)
+    bone_lookup: dict[str, str] = {b: b for b in valid_bones}
+    bone_lookup.update({b.lower(): b for b in valid_bones})
+    if raw_to_safe_bone:
+        for raw_k, safe_v in raw_to_safe_bone.items():
+            if safe_v in valid_bones:
+                bone_lookup[raw_k] = safe_v
+                bone_lookup[raw_k.lower()] = safe_v
+
+    used_clip_ids: set[str] = set()
+    clips: list[ClipDecl] = []
+
+    for raw_clip_name, spec in anims.items():
+        if not isinstance(spec, dict):
+            continue
+        short_name = str(raw_clip_name).split(".")[-1]
+        clip_name = _sanitize_ident(short_name, "clip", used_clip_ids)
+        loop_val = bool(spec.get("loop", True))
+        dur = float(spec.get("animation_length", 1.5))
+        dur = float(np.clip(dur if dur > 0 else 1.5, 0.1, 60.0))
+        base_freq_hz = round(float(np.clip(1.0 / dur, 0.05, 20.0)), 4)
+
+        bones_anim = spec.get("bones") or {}
+        tracks: list[TrackDecl] = []
+        if isinstance(bones_anim, dict):
+            for raw_b, channels in bones_anim.items():
+                target_b = bone_lookup.get(str(raw_b)) or bone_lookup.get(str(raw_b).lower())
+                if target_b is None or target_b == program.root.name or not isinstance(channels, dict):
+                    continue
+                rot_ch = channels.get("rotation")
+                if isinstance(rot_ch, (list, tuple)) and len(rot_ch) == 3:
+                    for ax_idx, ax_name in enumerate(("x", "y", "z")):
+                        parsed = _parse_molang_channel_zero_eval(rot_ch[ax_idx], target_b)
+                        if parsed is not None:
+                            wf, amp, ph, bs = parsed
+                            tracks.append(
+                                TrackDecl(
+                                    bone=target_b,
+                                    law=wf,
+                                    axis=ax_name,
+                                    amp_deg=float(np.clip(amp, -120.0, 120.0)),
+                                    freq_hz=base_freq_hz,
+                                    phase_deg=round(ph * 360.0, 2),
+                                    bias_deg=float(np.clip(bs, -90.0, 90.0)),
+                                )
+                            )
+                elif isinstance(rot_ch, dict) and rot_ch:
+                    kf_rows: list[tuple[float, list[float]]] = []
+                    for t_str, k_val in rot_ch.items():
+                        try:
+                            t_num = float(t_str)
+                        except (TypeError, ValueError):
+                            continue
+                        vec_raw = k_val.get("post", k_val.get("lerp_mode")) if isinstance(k_val, dict) else k_val
+                        if isinstance(vec_raw, (list, tuple)) and len(vec_raw) == 3:
+                            try:
+                                kf_rows.append((t_num, [float(vec_raw[0]), float(vec_raw[1]), float(vec_raw[2])]))
+                            except (TypeError, ValueError):
+                                continue
+                    kf_rows.sort(key=lambda item: item[0])
+                    if len(kf_rows) >= 2:
+                        for ax_idx, ax_name in enumerate(("x", "y", "z")):
+                            vals = [row[1][ax_idx] for row in kf_rows]
+                            vmin, vmax = min(vals), max(vals)
+                            span = vmax - vmin
+                            if span < 0.25:
+                                continue
+                            v_start, v_end = vals[0], vals[-1]
+                            if abs(v_start - vmin) < 0.2 * span and abs(v_end - vmin) < 0.2 * span:
+                                wf = "hinge"
+                                bs = float(np.clip(vmin, -90.0, 90.0))
+                                amp = float(np.clip(span, -120.0, 120.0))
+                            else:
+                                wf = "flap" if "wing" in target_b.lower() else "wave"
+                                bs = float(np.clip(0.5 * (vmax + vmin), -90.0, 90.0))
+                                amp = float(np.clip(0.5 * span, -120.0, 120.0))
+                            tracks.append(
+                                TrackDecl(
+                                    bone=target_b,
+                                    law=wf,
+                                    axis=ax_name,
+                                    amp_deg=round(amp, 4),
+                                    freq_hz=base_freq_hz,
+                                    phase_deg=0.0,
+                                    bias_deg=round(bs, 4),
+                                )
+                            )
+
+        if not tracks:
+            non_root_bones = sorted(valid_bones - {program.root.name})
+            if not non_root_bones:
+                continue
+            tracks.append(
+                TrackDecl(
+                    bone=non_root_bones[0],
+                    law="wave",
+                    axis="y",
+                    amp_deg=0.0,
+                    freq_hz=base_freq_hz,
+                )
+            )
+
+        clips.append(ClipDecl(name=clip_name, duration_s=round(dur, 4), loop=loop_val, tracks=tuple(tracks)))
+
+    if not clips:
+        raise ValueError("No valid animation clips found in .animation.json")
+    return BehaviorDecl(clips=tuple(clips))
 
 
 # ---------------------------------------------------------------------------
@@ -501,7 +824,7 @@ class MaterialHypothesis:
 
 @dataclass(frozen=True)
 class IngestedAssetRecord:
-    """Complete verified output of P1-03e real-asset inverse inference."""
+    """Complete verified output of P1-03e / ADR 0006 real-asset inverse inference."""
 
     provenance: AssetProvenance
     format_kind: str
@@ -512,6 +835,8 @@ class IngestedAssetRecord:
     extracted_stamps: tuple[StampOverride, ...]
     identifiability_score: float
     has_labpbr_auxiliary_maps: bool
+    license_track: str = "clean_room_permissive"
+    commercial_weights_eligible: bool = True
 
     def to_dict(self) -> dict[str, Any]:
         from synccraft.dsl.parser import format_program
@@ -519,6 +844,8 @@ class IngestedAssetRecord:
         return {
             "asset_id": self.provenance.asset_id,
             "license_spdx": self.provenance.license_spdx,
+            "license_track": self.license_track,
+            "commercial_weights_eligible": self.commercial_weights_eligible,
             "format_kind": self.format_kind,
             "program_dsl": format_program(self.program),
             "vertex_reconstruction_error": self.vertex_reconstruction_error,
@@ -783,21 +1110,32 @@ def ingest_external_asset(
     atlas_png: bytes | None = None,
     labpbr_n_png: bytes | None = None,
     labpbr_s_png: bytes | None = None,
+    animation_payload: dict[str, Any] | None = None,
+    license_policy: str = "clean_room_permissive",
     top_k: int = 3,
     seed: int = 404,
 ) -> IngestedAssetRecord:
-    """Gate provenance/license, decompile geometry, and infer top-K MaterialProgram posterior."""
-    verify_asset_provenance(provenance)
+    """Gate provenance/license, decompile geometry (+ optional Bedrock/Cobblemon animation), and infer MaterialProgram."""
+    resolved_track = verify_asset_provenance(provenance, license_policy=license_policy)
 
     embedded_rgba: np.ndarray | None = None
+    raw_to_safe_bone: dict[str, str] | None = None
     if format_kind == "bbmodel":
         program, uv_map, embedded_rgba, vert_err = _decompile_bbmodel(payload)
     elif format_kind == "java_json":
         program, uv_map, vert_err = _decompile_java_json(payload)
     elif format_kind == "bedrock_geojson":
-        program, uv_map, vert_err = _decompile_bedrock_geojson(payload)
+        program, uv_map, vert_err, raw_to_safe_bone = _decompile_bedrock_geojson(payload)
     else:
         raise ValueError(f"Unsupported external format_kind {format_kind!r}; expected 'bbmodel', 'java_json', or 'bedrock_geojson'")
+
+    if animation_payload is not None:
+        beh = decompile_bedrock_animation_to_behavior(
+            animation_payload,
+            program,
+            raw_to_safe_bone=raw_to_safe_bone,
+        )
+        program = validate_program(replace(program, behavior=beh))
 
     if atlas_png is not None:
         atlas_rgba = _decode_png_rgba(atlas_png)
@@ -829,4 +1167,6 @@ def ingest_external_asset(
         extracted_stamps=stamps,
         identifiability_score=ident_score,
         has_labpbr_auxiliary_maps=(n_rgba is not None or s_rgba is not None),
+        license_track=resolved_track,
+        commercial_weights_eligible=(resolved_track == "clean_room_permissive"),
     )

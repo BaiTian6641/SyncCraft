@@ -14,8 +14,12 @@ from typing import Any
 
 import numpy as np
 
-from synccraft.dsl.ast_nodes import Program, Vec3
-from synccraft.kinematics.se3_chain import compile_posed_geometry
+from synccraft.dsl.ast_nodes import Bone, Program, Vec3
+from synccraft.kinematics.se3_chain import (
+    _clamp_delta_to_joint_limits,
+    compile_posed_geometry,
+    euler_xyz_matrix,
+)
 
 
 @dataclass(frozen=True)
@@ -106,11 +110,51 @@ def solve_two_bone_ik(
     else:
         knee_deg = 0.0
 
+    # Precompute exact zero-delta chain matrices for associative SO(3) inner-loop evaluation
+    zero_poses = dict(poses)
+    zero_poses[upper_bone] = (0.0, 0.0, 0.0)
+    zero_poses[lower_bone] = (0.0, 0.0, 0.0)
+    zero_scene = compile_posed_geometry(program, zero_poses)
+    up_0 = zero_scene.bone_by_name[upper_bone]
+    lo_0 = zero_scene.bone_by_name[lower_bone]
+    r_up_0 = up_0.rotation
+    r_lo_local_rest = r_up_0.T @ lo_0.rotation
+    t_lo = lo_0.local_translation
+
+    limits_by_expanded: dict[str, Any] = {}
+
+    def _collect_limits(node: Bone, prefix: str | None = None, renamed: str | None = None) -> None:
+        exp_name = renamed or (f"{prefix}__{node.name}" if prefix else node.name)
+        limits_by_expanded[exp_name] = node.joint_limits
+        for ch in node.items:
+            if isinstance(ch, Bone):
+                _collect_limits(ch, prefix=prefix)
+                if ch.mirror_name:
+                    mp = f"{prefix}__{ch.mirror_name}" if prefix else ch.mirror_name
+                    _collect_limits(ch, prefix=mp, renamed=mp)
+
+    _collect_limits(program.root)
+    up_lim = limits_by_expanded.get(upper_bone)
+    lo_lim = limits_by_expanded.get(lower_bone)
+
     # Parameter vector q = [upper_rx, upper_ry, upper_rz, lower_hinge]
     u0 = poses[upper_bone]
     l0 = poses[lower_bone]
     best_q: np.ndarray | None = None
     best_err = float("inf")
+
+    def _fast_eff(vec_q: np.ndarray) -> np.ndarray:
+        du = vec_q[:3]
+        if up_lim is not None:
+            du = _clamp_delta_to_joint_limits(du, up_lim, mirrored=up_0.mirrored)
+        dl = np.array([l0[0], l0[1], l0[2]], dtype=np.float64)
+        dl[axis_idx] = float(vec_q[3])
+        if lo_lim is not None:
+            dl = _clamp_delta_to_joint_limits(dl, lo_lim, mirrored=lo_0.mirrored)
+        r_u = r_up_0 @ euler_xyz_matrix(du)
+        p_l = root_p + r_u @ t_lo
+        r_l = r_u @ r_lo_local_rest @ euler_xyz_matrix(dl)
+        return p_l + r_l @ eff_loc
 
     for sign_try in (1.0, -1.0):
         q = np.array([u0[0], u0[1], u0[2], l0[axis_idx] + sign_try * knee_deg * 0.5], dtype=np.float64)
@@ -118,15 +162,7 @@ def solve_two_bone_ik(
         eps = 1e-4
         iters_used = 0
 
-        def _apply_q(vec_q: np.ndarray) -> dict[str, Vec3]:
-            d = dict(poses)
-            d[upper_bone] = (float(vec_q[0]), float(vec_q[1]), float(vec_q[2]))
-            lo_list = list(l0)
-            lo_list[axis_idx] = float(vec_q[3])
-            d[lower_bone] = (lo_list[0], lo_list[1], lo_list[2])
-            return d
-
-        cur_eff, _ = _effector_world(program, _apply_q(q), lower_bone, eff_loc)
+        cur_eff = _fast_eff(q)
         cur_err = float(np.linalg.norm(cur_eff - clamped_tgt))
 
         for it in range(1, max_iters + 1):
@@ -137,7 +173,7 @@ def solve_two_bone_ik(
             for j in range(4):
                 q_plus = q.copy()
                 q_plus[j] += eps
-                eff_plus, _ = _effector_world(program, _apply_q(q_plus), lower_bone, eff_loc)
+                eff_plus = _fast_eff(q_plus)
                 jac[:, j] = (eff_plus - cur_eff) / eps
 
             residual = clamped_tgt - cur_eff
@@ -149,7 +185,7 @@ def solve_two_bone_ik(
                 dq *= 25.0 / dq_norm
 
             q_cand = q + dq
-            cand_eff, _ = _effector_world(program, _apply_q(q_cand), lower_bone, eff_loc)
+            cand_eff = _fast_eff(q_cand)
             cand_err = float(np.linalg.norm(cand_eff - clamped_tgt))
             if cand_err < cur_err:
                 q = q_cand

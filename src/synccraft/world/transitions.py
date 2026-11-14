@@ -16,6 +16,11 @@ from synccraft.audit.sync_audit import audit_scene
 from synccraft.data_gen.ik_motion_templates import sample_joint_trajectory, solve_two_bone_ik
 from synccraft.dsl.ast_nodes import Meta, Program, Vec3, validate_program
 from synccraft.dsl.parser import format_program, parse_program
+from synccraft.kinematics.musculoskeletal import (
+    audit_behavior_clip,
+    evaluate_behavior_clip,
+    evaluate_muscles_at_activations,
+)
 from synccraft.shading.uv_packer import allocate_uv_layout
 from synccraft.surface.contracts import (
     EnvironmentState,
@@ -231,6 +236,48 @@ class RepackUVAction:
         }
 
 
+@dataclass(frozen=True)
+class ExecuteBehaviorClipAction:
+    """Execute a musculoskeletal & closed-loop IK @behavior clip with swept wear & stance audit."""
+
+    clip_name: str
+    active_state: str | None = None
+    cycles: int = 1
+    num_frames_per_cycle: int = 12
+    contact_normal_load: float = 1.2
+    contact_threshold: float = 0.60
+    kind: str = "execute_behavior_clip"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "kind": self.kind,
+            "clip_name": self.clip_name,
+            "active_state": self.active_state,
+            "cycles": self.cycles,
+            "num_frames_per_cycle": self.num_frames_per_cycle,
+            "contact_normal_load": self.contact_normal_load,
+            "contact_threshold": self.contact_threshold,
+        }
+
+
+@dataclass(frozen=True)
+class ActivateBehaviorStateAction:
+    """Transition entity into a named @behavior state (pose_bias, muscle_tone, material_mods)."""
+
+    state_name: str
+    substeps: int = 6
+    contact_normal_load: float = 1.0
+    kind: str = "activate_behavior_state"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "kind": self.kind,
+            "state_name": self.state_name,
+            "substeps": self.substeps,
+            "contact_normal_load": self.contact_normal_load,
+        }
+
+
 WorldAction = (
     NoOpEnvironmentAction
     | SetPoseAction
@@ -242,6 +289,8 @@ WorldAction = (
     | SetTexelDensityAction
     | SetLightingAction
     | RepackUVAction
+    | ExecuteBehaviorClipAction
+    | ActivateBehaviorStateAction
 )
 
 
@@ -317,6 +366,21 @@ def action_from_dict(data: dict[str, Any]) -> WorldAction:
             padding=int(data.get("padding", 2)),
             reverse_boxes=bool(data.get("reverse_boxes", True)),
             reverse_faces=bool(data.get("reverse_faces", True)),
+        )
+    if kind == "execute_behavior_clip":
+        return ExecuteBehaviorClipAction(
+            clip_name=str(data["clip_name"]),
+            active_state=str(data["active_state"]) if data.get("active_state") is not None else None,
+            cycles=int(data.get("cycles", 1)),
+            num_frames_per_cycle=int(data.get("num_frames_per_cycle", 12)),
+            contact_normal_load=float(data.get("contact_normal_load", 1.2)),
+            contact_threshold=float(data.get("contact_threshold", 0.60)),
+        )
+    if kind == "activate_behavior_state":
+        return ActivateBehaviorStateAction(
+            state_name=str(data["state_name"]),
+            substeps=int(data.get("substeps", 6)),
+            contact_normal_load=float(data.get("contact_normal_load", 1.0)),
         )
     raise ValueError(f"Unknown WorldAction kind {kind!r}")
 
@@ -726,6 +790,95 @@ def step_world(
             box_order=box_names,
             face_order=face_order,
         )
+
+    elif isinstance(action, ExecuteBehaviorClipAction):
+        n_frames = max(2, int(action.num_frames_per_cycle))
+        n_cycles = max(1, int(action.cycles))
+        frames = evaluate_behavior_clip(
+            cur_prog,
+            action.clip_name,
+            num_frames=n_frames,
+            active_state=action.active_state,
+        )
+        clip_audit = audit_behavior_clip(
+            cur_prog,
+            action.clip_name,
+            num_frames=n_frames,
+            active_state=action.active_state,
+        )
+        compiler_calls += n_frames * 3
+        audit_calls += n_frames
+        pose_seq = [cur_pose] + [fr.pose_euler_deltas for fr in frames]
+        swept_w_ok, substeps_audited, max_overlap, wear_added, cc, ac = _accumulate_swept_sliding_wear(
+            domain,
+            cur_prog,
+            cur_mat,
+            next_surf,
+            pose_seq,
+            contact_normal_load=action.contact_normal_load * float(n_cycles),
+            contact_threshold=action.contact_threshold,
+        )
+        compiler_calls += cc
+        audit_calls += ac
+        swept_ok = bool(swept_w_ok and clip_audit["passed"])
+        cur_pose = dict(frames[-1].pose_euler_deltas)
+        ik_meta = {
+            "clip_name": action.clip_name,
+            "active_state": action.active_state,
+            "cycles": n_cycles,
+            "clip_audit": clip_audit,
+        }
+
+    elif isinstance(action, ActivateBehaviorStateAction):
+        if cur_prog.behavior is None:
+            raise ValueError("Program has no @behavior section")
+        st_map = {s.name: s for s in cur_prog.behavior.states}
+        if action.state_name not in st_map:
+            raise KeyError(f"Unknown @behavior state {action.state_name!r}")
+        st = st_map[action.state_name]
+        ms_res = evaluate_muscles_at_activations(
+            cur_prog,
+            dict(st.muscle_tones),
+            base_pose_deltas=dict(st.pose_biases),
+        )
+        compiler_calls += 2
+        kfs = [(0.0, cur_pose), (max(1e-3, dt), ms_res.pose_euler_deltas)]
+        traj = sample_joint_trajectory(kfs, num_samples=max(2, action.substeps))
+        pose_seq = [p for _, p in traj]
+        swept_ok, substeps_audited, max_overlap, wear_added, cc, ac = _accumulate_swept_sliding_wear(
+            domain,
+            cur_prog,
+            cur_mat,
+            next_surf,
+            pose_seq,
+            contact_normal_load=action.contact_normal_load,
+            contact_threshold=0.55,
+        )
+        compiler_calls += cc
+        audit_calls += ac
+        cur_pose = dict(ms_res.pose_euler_deltas)
+
+        # Apply causal state-driven material & persistent surface field interventions
+        pal_map = {p.name: p for p in cur_prog.palettes}
+        for mod in st.material_mods:
+            spec = cur_mat.spec_for(mod.material, pal_map.get(mod.material))
+            if abs(mod.emissive) > 1e-9:
+                new_em = float(np.clip(max(spec.emissive_strength, mod.emissive), 0.0, 2.0))
+                cur_mat = cur_mat.with_material(replace(spec, emissive_strength=new_em))
+            for fk, grid in domain.faces.items():
+                if grid.material_name == mod.material:
+                    st_patch = next_surf.patches[fk]
+                    if abs(mod.moisture) > 1e-9:
+                        st_patch.moisture = np.clip(np.maximum(st_patch.moisture, mod.moisture), 0.0, 1.0)
+                    if abs(mod.wear_delta) > 1e-9:
+                        dw_mod = np.maximum(0.0, st_patch.wear + mod.wear_delta) - st_patch.wear
+                        st_patch.wear = st_patch.wear + dw_mod
+                        wear_added += float(np.maximum(0.0, dw_mod).sum())
+
+        ik_meta = {
+            "activated_state": action.state_name,
+            "musculoskeletal_equilibrium": ms_res.to_dict(),
+        }
 
     # Final posed evaluation & SAT check if not already audited along a trajectory
     final_scene, final_kin = evaluate_posed_surface_kinematics(domain, cur_prog, cur_pose)

@@ -1,5 +1,5 @@
-schema: synccraft.data-policy/0.2
-status: categorized_assistant_world_model_p1_08_r3
+schema: synccraft.data-policy/0.3
+status: apex_musculoskeletal_and_artist_loop_p1_08_r4
 source_plan_scale_targets:
   static_train: 60000
   dynamic_train: 15000
@@ -14,9 +14,22 @@ curriculum_policy:
     tier_2_medium: [9, 15]
     tier_3_complex: [16, 24]
     tier_4_masterwork: [25, 42]
+    tier_5_apex_complex: [32, 68]
   test_unseen_min_boxes_gate_g2: 16
+  apex_unseen_min_boxes: 40
   controlled_defect_repair_ratio_train: 0.05
   batch_statistical_qc_required: true
+license_quarantine_tracks:
+  clean_room_permissive:
+    spdx_allowlist: [CC0-1.0, CC-BY-4.0, MIT, Apache-2.0, BSD-3-Clause]
+    commercial_weights_eligible: true
+    default_hf_release_track: true
+  research_nc:
+    spdx_allowlist: [CC-BY-NC-4.0, CC-BY-NC-SA-4.0]
+    commercial_weights_eligible: false
+    requires_attribution_notice: true
+    quarantined_split_prefix: research_nc/
+    notes: Permits Cobblemon-class CC-BY-NC community assets strictly inside non-commercial research/evaluation splits; never merged into Apache-2.0 commercial weights.
 reserved_extension_tracks:
   human_gathered_real_corpus:
     status: gathering_external_permissive_assets_deferred
@@ -92,6 +105,18 @@ unseen_static_families:
   # Dragon (2)
   - segmented_sea_dragon
   - crowned_zilant
+apex_seen_complex_families:
+  - apex_flying_wyvern
+  - brute_theropod_wyvern
+  - pelagic_leviathan_wyvern
+  - fanged_thunder_wyvern
+  - armored_arthropod_colossus
+  - morphing_switch_blade_axe
+  - elemental_pocket_companion
+  - modular_apricorn_healing_station
+apex_unseen_complex_families:
+  - elder_calamity_dragon
+  - relic_automaton_guardian
 seen_body_plans:
   - humanoid_biped
   - dog_horse_quadruped

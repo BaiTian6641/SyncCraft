@@ -354,14 +354,15 @@ def build_surface_domain(
                     stack.append(nxt)
         components.append(tuple(sorted(comp)))
 
-    # Build Graph 3: symmetry_pairs for mirror_x boxes
+    # Build Graph 3: symmetry_pairs for mirror_x boxes (including arbitrary-depth nested mirror_x)
     symmetry_links: list[SymmetryLink] = []
-    box_names = {b.name for b in rest_scene.boxes}
+    box_map = rest_scene.box_by_name
+    bone_map = rest_scene.bone_by_name
     mirror_face_swap = {"east": "west", "west": "east"}
     for box in rest_scene.boxes:
-        if box.mirrored and "__" in box.name:
-            _, orig_box = box.name.split("__", 1)
-            if orig_box in box_names:
+        if "__" in box.name:
+            outer_prefix, orig_box = box.name.split("__", 1)
+            if outer_prefix in bone_map and orig_box in box_map and box_map[orig_box].mirrored != box.mirrored:
                 for face in FACES:
                     src_face = mirror_face_swap.get(face, face)
                     symmetry_links.append(

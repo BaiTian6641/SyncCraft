@@ -1,20 +1,37 @@
-// Executable-subset reference, not an XGrammar tokenizer integration.
+// Executable-subset reference for Block-DSL v3.1 (ADR 0001 / 0003 / 0006), not an XGrammar tokenizer integration.
 // Runtime parser.py is dependency-free and enforces additional semantic rules.
-start: meta palette rig materials? style?
+start: meta palette rig opt_section*
+opt_section: materials | style | muscles | kinematics | behavior
 meta: "@meta" "{" "archetype" ":" IDENT "," "target_profile" ":" IDENT "," "texel_density" ":" INT "}"
 palette: "@palette" "{" palette_def+ "}"
 palette_def: IDENT ":" "ramp" "(" "base_lch" "=" vec3 "," "steps" "=" INT ("," "hue_shift" "=" vec2)? ("," "emissive" "=" BOOL)? ")"
 rig: "@rig" "{" root_bone "}"
 materials: "@materials" "{" material_def* "}"
-material_def: IDENT ":" "process" "(" "family" "=" IDENT ("," IDENT "=" (NUMBER | INT))* ")"
+material_def: IDENT ":" "process" "(" "family" "=" IDENT ("," IDENT "=" (NUMBER | INT | IDENT))* ")"
 style: "@style" "{" "target_encoding" ":" IDENT ("," IDENT ":" (BOOL | NUMBER))* "}"
+muscles: "@muscles" "{" muscle_def* "}"
+muscle_def: "muscle" IDENT "{" "origin_bone" ":" IDENT "," "insertion_bone" ":" IDENT "," "action_axis" ":" IDENT "," "moment_arm_deg" ":" NUMBER ("," "tendon_coupling" ":" "[" IDENT "," IDENT "," NUMBER "]")? ("," "belly_box" ":" IDENT)? ("," "bulge_inflate" ":" NUMBER)? "}"
+kinematics: "@kinematics" "{" (ik_chain_def | look_chain_def)+ "}"
+ik_chain_def: "ik_chain" IDENT "{" "upper" ":" IDENT "," "lower" ":" IDENT "," "effector" ":" vec3 ("," "hinge_axis" ":" IDENT)? "}"
+look_chain_def: "look_chain" IDENT "{" "bones" ":" ident_list ("," "weight_decay" ":" NUMBER)? "}"
+behavior: "@behavior" "{" (clip_def | state_def)+ "}"
+clip_def: "clip" IDENT "{" "duration_s" ":" NUMBER ("," "loop" ":" BOOL)? (track_def | muscle_drive_def | ik_drive_def)+ "}"
+track_def: "track" IDENT ":" IDENT "(" "axis" "=" IDENT "," "amp_deg" "=" NUMBER "," "freq_hz" "=" NUMBER ("," "phase_deg" "=" NUMBER)? ("," "bias_deg" "=" NUMBER)? ")"
+muscle_drive_def: "muscle_drive" IDENT ":" "activation" "(" "peak" "=" NUMBER "," "freq_hz" "=" NUMBER ("," "phase_deg" "=" NUMBER)? ("," "baseline" "=" NUMBER)? ")"
+ik_drive_def: "ik_drive" IDENT ":" "foot_cycle" "(" "stride" "=" NUMBER "," "lift" "=" NUMBER ("," "phase_deg" "=" NUMBER)? ")"
+state_def: "state" IDENT "{" (pose_bias_def | muscle_tone_def | material_mod_def)+ "}"
+pose_bias_def: "pose_bias" IDENT ":" vec3
+muscle_tone_def: "muscle_tone" IDENT ":" NUMBER
+material_mod_def: "material_mod" IDENT ":" "{" "emissive" ":" NUMBER "," "moisture" ":" NUMBER "," "wear_delta" ":" NUMBER "}"
 root_bone: "root" "bone" IDENT "{" "pivot_local" ":" vec3 node+ "}"
-child_bone: "bone" IDENT attach mirror? "{" ("rest_euler" ":" vec3)? node+ "}"
-?node: box | child_bone
+child_bone: "bone" IDENT attach mirror? "{" ("rest_euler" ":" vec3)? ("joint_limits" ":" "[" vec2 "," vec2 "," vec2 "]")? node+ "}"
+?node: box | locator | child_bone
 attach: "attach" "(" "parent_box" "=" IDENT "," "anchor" "=" vec3 "," "align" "=" vec3 ("," "offset" "=" vec3)? ("," "detached" "=" BOOL)? ")"
 mirror: "mirror_x" "(" IDENT ")"
 place: "place" "(" ("base_box" "=" IDENT ",")? "anchor" "=" vec3 "," "align" "=" vec3 ("," "offset" "=" vec3)? ")"
-box: "box" IDENT place? "{" "size" ":" vec3i "," "material" ":" IDENT ("," "inflate" ":" NUMBER)? ("," "cullface" ":" "[" IDENT ("," IDENT)* "]")? "}"
+box: "box" IDENT place? "{" "size" ":" vec3i "," "material" ":" IDENT ("," "inflate" ":" NUMBER)? ("," "cullface" ":" ident_list)? "}"
+locator: "locator" IDENT "{" "offset" ":" vec3 ("," "role" ":" IDENT)? "}"
+ident_list: "[" IDENT ("," IDENT)* "]"
 vec3: "[" NUMBER "," NUMBER "," NUMBER "]"
 vec2: "[" NUMBER "," NUMBER "]"
 vec3i: "[" INT "," INT "," INT "]"

@@ -7,6 +7,13 @@ from .batch_pipeline import (
     render_batch_inspection_sheet,
     render_row_visual_triptych,
 )
+from .complex_entity_and_asset_pack import (
+    ALL_APEX_FAMILIES,
+    APEX_SEEN_FAMILIES,
+    APEX_UNSEEN_FAMILIES,
+    build_apex_complex_program,
+    generate_apex_complex_dataset,
+)
 from .curriculum_and_assistant import (
     ASSISTANT_TASK_MODES,
     apply_animation_keyframe,
@@ -54,7 +61,10 @@ from .taxonomy_catalog import (
 )
 
 __all__ = [
+    "ALL_APEX_FAMILIES",
     "ALL_CATEGORIES",
+    "APEX_SEEN_FAMILIES",
+    "APEX_UNSEEN_FAMILIES",
     "ASSISTANT_TASK_MODES",
     "COMPLEXITY_TIERS",
     "DATASET_PRESETS",
@@ -75,6 +85,7 @@ __all__ = [
     "DatasetPreset",
     "TaxonomyEntry",
     "apply_animation_keyframe",
+    "build_apex_complex_program",
     "build_assistant_supervision_turn",
     "build_controlled_defect_repair_pair",
     "build_verified_dataset",
@@ -86,6 +97,7 @@ __all__ = [
     "diversify_program_ast",
     "ensure_concise_texture_program",
     "extract_animation_spec_from_row",
+    "generate_apex_complex_dataset",
     "generate_candidate_for_family",
     "generate_dataset_batches",
     "get_taxonomy_metadata",

@@ -119,10 +119,14 @@
         "inflate": 0.0,
         "cullface": []
       }
-    ]
+    ],
+    "joint_limits": null
   },
   "shade": [],
   "ergonomics": null,
   "materials": [],
-  "style": null
+  "style": null,
+  "muscles": [],
+  "kinematics": null,
+  "behavior": null
 }
