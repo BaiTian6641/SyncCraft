@@ -122,5 +122,7 @@
     ]
   },
   "shade": [],
-  "ergonomics": null
+  "ergonomics": null,
+  "materials": [],
+  "style": null
 }

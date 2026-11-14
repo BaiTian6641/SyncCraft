@@ -12,6 +12,19 @@ Vec3i: TypeAlias = tuple[int, int, int]
 ARCHETYPES = frozenset({"entity", "weapon_3d", "block_multipart", "item_extruded"})
 PROFILES = frozenset({"bedrock_entity", "geckolib", "java_modern", "java_legacy", "bbmodel_5"})
 FACES = frozenset({"north", "south", "east", "west", "up", "down"})
+MATERIAL_FAMILIES_DSL = frozenset({
+    "painted_metal",
+    "brushed_metal",
+    "polymer_dielectric",
+    "woven_fabric",
+    "solid_wood",
+    "weathered_stone",
+    "keratin_scales",
+    "patterned_skin",
+    "lichen_biofilm",
+    "thin_film_iridescence",
+})
+TARGET_ENCODINGS_DSL = frozenset({"vanilla", "labpbr_1_3", "gltf_2_0"})
 
 
 class DSLValidationError(ValueError):
@@ -91,12 +104,36 @@ class Ergonomics:
 
 
 @dataclass(frozen=True)
+class MaterialDecl:
+    """Compact optional @materials AST node binding a palette material to a physical family."""
+    name: str
+    family: str
+    roughness: float = 0.35
+    metalness: float = 0.0
+    coating: float = 0.0
+    ior: float = 1.5
+    scale: float = 1.0
+    seed: int = 101
+
+
+@dataclass(frozen=True)
+class StyleDecl:
+    """Compact optional @style AST node configuring stylized bake and PBR target encoding."""
+    target_encoding: str = "vanilla"
+    quantize_ramp: bool = True
+    bevel_highlight: float = 0.08
+    view_deg: float = 20.0
+
+
+@dataclass(frozen=True)
 class Program:
     meta: Meta
     palettes: list[Palette]
     root: Bone
     shade: tuple[ShadeOp, ...] = ()
     ergonomics: Ergonomics | None = None
+    materials: tuple[MaterialDecl, ...] = ()
+    style: StyleDecl | None = None
 
 
 def _finite_number(value) -> bool:
@@ -244,4 +281,44 @@ def validate_program(program: Program) -> Program:
     walk(program.root, None, 0)
     for name in generated:
         claim(name)
+
+    if not isinstance(program.materials, tuple):
+        raise DSLValidationError("materials must be a tuple of MaterialDecl objects")
+    seen_mat_decls: set[str] = set()
+    for mdecl in program.materials:
+        if not isinstance(mdecl, MaterialDecl):
+            raise DSLValidationError("materials must contain MaterialDecl objects")
+        if not isinstance(mdecl.name, str) or mdecl.name not in materials:
+            raise DSLValidationError(f"@materials references undeclared palette material {mdecl.name!r}")
+        if mdecl.name in seen_mat_decls:
+            raise DSLValidationError(f"duplicate @materials declaration for {mdecl.name!r}")
+        seen_mat_decls.add(mdecl.name)
+        if not isinstance(mdecl.family, str) or mdecl.family not in MATERIAL_FAMILIES_DSL:
+            raise DSLValidationError(f"unknown material family {mdecl.family!r}")
+        if not _finite_number(mdecl.roughness) or not (0.02 <= mdecl.roughness <= 1.0):
+            raise DSLValidationError("roughness must lie in [0.02, 1.0]")
+        if not _finite_number(mdecl.metalness) or not (0.0 <= mdecl.metalness <= 1.0):
+            raise DSLValidationError("metalness must lie in [0.0, 1.0]")
+        if not _finite_number(mdecl.coating) or mdecl.coating < 0.0:
+            raise DSLValidationError("coating must be >= 0.0")
+        if not _finite_number(mdecl.ior) or mdecl.ior < 1.0:
+            raise DSLValidationError("ior must be >= 1.0")
+        if not _finite_number(mdecl.scale) or mdecl.scale <= 0.0:
+            raise DSLValidationError("scale must be > 0.0")
+        if type(mdecl.seed) is not int or not _finite_number(mdecl.seed):
+            raise DSLValidationError("seed must be a finite integer")
+
+    if program.style is not None:
+        sdecl = program.style
+        if not isinstance(sdecl, StyleDecl):
+            raise DSLValidationError("style must be a StyleDecl or None")
+        if not isinstance(sdecl.target_encoding, str) or sdecl.target_encoding not in TARGET_ENCODINGS_DSL:
+            raise DSLValidationError(f"unknown target_encoding {sdecl.target_encoding!r}")
+        if type(sdecl.quantize_ramp) is not bool:
+            raise DSLValidationError("quantize_ramp must be a boolean")
+        if not _finite_number(sdecl.bevel_highlight) or sdecl.bevel_highlight < 0.0:
+            raise DSLValidationError("bevel_highlight must be >= 0.0")
+        if not _finite_number(sdecl.view_deg) or not (0.0 <= sdecl.view_deg <= 89.0):
+            raise DSLValidationError("view_deg must lie in [0.0, 89.0]")
+
     return program

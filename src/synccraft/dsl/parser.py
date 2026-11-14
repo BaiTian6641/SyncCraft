@@ -9,7 +9,19 @@ from __future__ import annotations
 from dataclasses import dataclass
 import re
 
-from .ast_nodes import Attach, Bone, Box, Meta, Palette, Place, Program, UnsupportedFeature, validate_program
+from .ast_nodes import (
+    Attach,
+    Bone,
+    Box,
+    MaterialDecl,
+    Meta,
+    Palette,
+    Place,
+    Program,
+    StyleDecl,
+    UnsupportedFeature,
+    validate_program,
+)
 
 
 class DSLParseError(ValueError):
@@ -141,14 +153,89 @@ class _Parser:
         self.take("root")
         root = self.bone(root=True, depth=0)
         self.take("}")
-        if self.at("@"):
+        materials: list[MaterialDecl] | None = None
+        style: StyleDecl | None = None
+        while self.at("@"):
             self.take("@")
             feature = self.ident()
             if feature in {"shade", "ergonomics", "motion"}:
                 raise UnsupportedFeature(f"@{feature} is reserved by v3 but not implemented in the static starter; remove it only for an explicitly simplified asset")
-            self.fail(f"unknown section @{feature}")
+            if feature == "materials":
+                if materials is not None:
+                    self.fail("duplicate @materials section")
+                self.take("{")
+                materials = []
+                while not self.at("}"):
+                    materials.append(self.material_decl())
+                self.take("}")
+            elif feature == "style":
+                if style is not None:
+                    self.fail("duplicate @style section")
+                style = self.style_decl()
+            else:
+                self.fail(f"unknown section @{feature}")
         self.take("<EOF>")
-        return validate_program(Program(Meta(archetype, profile, density), palettes, root))
+        return validate_program(
+            Program(
+                Meta(archetype, profile, density),
+                palettes,
+                root,
+                materials=tuple(materials) if materials else (),
+                style=style,
+            )
+        )
+
+    def material_decl(self) -> MaterialDecl:
+        name = self.ident()
+        self.take(":")
+        self.take("process")
+        self.take("(")
+        self.field("family", "=")
+        family = self.ident()
+        kwargs: dict[str, object] = {}
+        allowed = {"roughness", "metalness", "coating", "ior", "scale", "seed"}
+        while self.at(","):
+            self.take(",")
+            key = self.ident()
+            if key not in allowed or key in kwargs:
+                self.fail(f"unexpected or duplicate @materials field {key!r}")
+            self.take("=")
+            kwargs[key] = self.number(integer=(key == "seed"))
+        self.take(")")
+        return MaterialDecl(
+            name=name,
+            family=family,
+            roughness=float(kwargs.get("roughness", 0.35)),  # type: ignore[arg-type]
+            metalness=float(kwargs.get("metalness", 0.0)),  # type: ignore[arg-type]
+            coating=float(kwargs.get("coating", 0.0)),  # type: ignore[arg-type]
+            ior=float(kwargs.get("ior", 1.5)),  # type: ignore[arg-type]
+            scale=float(kwargs.get("scale", 1.0)),  # type: ignore[arg-type]
+            seed=int(kwargs.get("seed", 101)),  # type: ignore[arg-type]
+        )
+
+    def style_decl(self) -> StyleDecl:
+        self.take("{")
+        self.field("target_encoding")
+        target_enc = self.ident()
+        kwargs: dict[str, object] = {}
+        allowed = {"quantize_ramp", "bevel_highlight", "view_deg"}
+        while self.at(","):
+            self.take(",")
+            key = self.ident()
+            if key not in allowed or key in kwargs:
+                self.fail(f"unexpected or duplicate @style field {key!r}")
+            self.take(":")
+            if key == "quantize_ramp":
+                kwargs[key] = self.boolean()
+            else:
+                kwargs[key] = self.number()
+        self.take("}")
+        return StyleDecl(
+            target_encoding=target_enc,
+            quantize_ramp=bool(kwargs.get("quantize_ramp", True)),
+            bevel_highlight=float(kwargs.get("bevel_highlight", 0.08)),  # type: ignore[arg-type]
+            view_deg=float(kwargs.get("view_deg", 20.0)),  # type: ignore[arg-type]
+        )
 
     def palette(self) -> Palette:
         name = self.ident()
@@ -341,4 +428,19 @@ def format_program(program: Program) -> str:
 
     write_bone(program.root, 2, True)
     lines.append("}")
+    if program.materials:
+        lines.append("@materials {")
+        for md in program.materials:
+            lines.append(
+                f"  {md.name}: process(family={md.family}, roughness={float(md.roughness)}, "
+                f"metalness={float(md.metalness)}, coating={float(md.coating)}, "
+                f"ior={float(md.ior)}, scale={float(md.scale)}, seed={int(md.seed)})"
+            )
+        lines.append("}")
+    if program.style is not None:
+        sd = program.style
+        lines.append(
+            f"@style {{ target_encoding: {sd.target_encoding}, quantize_ramp: {boolstr(sd.quantize_ramp)}, "
+            f"bevel_highlight: {float(sd.bevel_highlight)}, view_deg: {float(sd.view_deg)} }}"
+        )
     return "\n".join(lines) + "\n"

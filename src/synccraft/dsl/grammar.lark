@@ -1,10 +1,13 @@
 // Executable-subset reference, not an XGrammar tokenizer integration.
 // Runtime parser.py is dependency-free and enforces additional semantic rules.
-start: meta palette rig
+start: meta palette rig materials? style?
 meta: "@meta" "{" "archetype" ":" IDENT "," "target_profile" ":" IDENT "," "texel_density" ":" INT "}"
 palette: "@palette" "{" palette_def+ "}"
 palette_def: IDENT ":" "ramp" "(" "base_lch" "=" vec3 "," "steps" "=" INT ("," "hue_shift" "=" vec2)? ("," "emissive" "=" BOOL)? ")"
 rig: "@rig" "{" root_bone "}"
+materials: "@materials" "{" material_def* "}"
+material_def: IDENT ":" "process" "(" "family" "=" IDENT ("," IDENT "=" (NUMBER | INT))* ")"
+style: "@style" "{" "target_encoding" ":" IDENT ("," IDENT ":" (BOOL | NUMBER))* "}"
 root_bone: "root" "bone" IDENT "{" "pivot_local" ":" vec3 node+ "}"
 child_bone: "bone" IDENT attach mirror? "{" ("rest_euler" ":" vec3)? node+ "}"
 ?node: box | child_bone

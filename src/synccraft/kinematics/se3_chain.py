@@ -120,7 +120,23 @@ class Scene:
         }
 
 
-def compile_geometry(program: Program) -> Scene:
+def _recover_euler_xyz_degrees(rotation: np.ndarray) -> np.ndarray:
+    """Recover degrees (x, y, z) for R = Rz(z) @ Ry(y) @ Rx(x)."""
+    y = float(np.arcsin(np.clip(-rotation[2, 0], -1.0, 1.0)))
+    if abs(np.cos(y)) > 1e-8:
+        x = float(np.arctan2(rotation[2, 1], rotation[2, 2]))
+        z = float(np.arctan2(rotation[1, 0], rotation[0, 0]))
+    else:
+        x = float(np.arctan2(-rotation[1, 2], rotation[1, 1]))
+        z = 0.0
+    return np.rad2deg(np.array((x, y, z), dtype=np.float64))
+
+
+def compile_geometry(
+    program: Program,
+    *,
+    pose_euler_deltas: dict[str, Any] | None = None,
+) -> Scene:
     """Expand validated boxes, explicit placements, child bones, and mirrors.
 
     ``mirror_x(right)`` creates a sibling reflected across the parent box's
@@ -160,6 +176,10 @@ def compile_geometry(program: Program) -> Scene:
         sign = reflect if mirrored else np.ones(3)
         euler = _vec(bone.rest_euler) * (angle_reflect if mirrored else 1.0)
         local_rotation = euler_xyz_matrix(euler)
+        if pose_euler_deltas and name in pose_euler_deltas:
+            delta_euler = _vec(pose_euler_deltas[name])
+            local_rotation = local_rotation @ euler_xyz_matrix(delta_euler)
+            euler = _recover_euler_xyz_degrees(local_rotation)
         if parent is None:
             if bone.attach is not None:
                 raise ValueError("The root bone cannot have an attachment")
@@ -249,3 +269,28 @@ def compile_geometry(program: Program) -> Scene:
 
     walk(program.root, None, {})
     return Scene(tuple(boxes), tuple(bones), frozenset(adjacency), program.meta, adjacency)
+
+
+def compile_posed_geometry(
+    program: Program,
+    pose_euler_deltas: dict[str, Any] | None = None,
+) -> Scene:
+    """Compile a posed Scene sharing the exact SE(3) chain with rest compilation."""
+    if pose_euler_deltas:
+        valid_bones: set[str] = set()
+
+        def _collect(node: Bone, prefix: str | None = None, renamed: str | None = None) -> None:
+            expanded = renamed or (f"{prefix}__{node.name}" if prefix else node.name)
+            valid_bones.add(expanded)
+            valid_bones.add(node.name)
+            for child in node.items:
+                if isinstance(child, Bone):
+                    _collect(child, prefix=prefix)
+                    if child.mirror_name and prefix is None:
+                        _collect(child, prefix=child.mirror_name, renamed=child.mirror_name)
+
+        _collect(program.root)
+        unknown = sorted(set(pose_euler_deltas) - valid_bones)
+        if unknown:
+            raise ValueError(f"Unknown bone(s) in pose_euler_deltas: {unknown}")
+    return compile_geometry(program, pose_euler_deltas=pose_euler_deltas)
