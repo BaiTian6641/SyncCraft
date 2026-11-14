@@ -1,0 +1,16 @@
+{
+  "status": "source_plan_estimates_not_current_provider_quotes_or_measured_runs",
+  "source": "source/synccraft-v3-plan.pdf section 5.2",
+  "currency_and_subscription_terms_verified": false,
+  "budget_unit": "Colab_compute_units_as_assumed_by_source_report",
+  "plan_budget_cap": 600,
+  "buffer_fraction": 0.10,
+  "rows": [
+    {"phase": "P0 candidate bakeoff", "gpu_label": "L4", "hours": 7.5, "cu_per_hour": 1.6, "conditional": false},
+    {"phase": "P1 static training", "gpu_label": "A100 40GB", "hours": 22.5, "cu_per_hour": 5.4, "conditional": false},
+    {"phase": "P1 evaluation", "gpu_label": "L4", "hours": 12.0, "cu_per_hour": 1.6, "conditional": false},
+    {"phase": "P2 cached ablations", "gpu_label": "T4", "hours": 36.0, "cu_per_hour": 1.2, "conditional": true},
+    {"phase": "P2 joint tuning", "gpu_label": "A100 40GB", "hours": 13.5, "cu_per_hour": 5.4, "conditional": true},
+    {"phase": "P3/P4 dynamic and final", "gpu_label": "L4", "hours": 31.5, "cu_per_hour": 1.6, "conditional": false}
+  ]
+}

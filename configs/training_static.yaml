@@ -1,0 +1,41 @@
+schema: synccraft.training-intent/0.1
+status: template_not_executable_trainer
+task: P1-09
+model_manifest: null
+dataset_manifest: null
+seeds: [17, 29, 43]
+precision_intent: bf16_lora_4b_or_nf4_qlora_7b
+max_sequence_length: 2048
+micro_batch_size: 2
+gradient_accumulation_steps: 64
+effective_batch_size_single_gpu: 128
+epochs: 2
+lora:
+  rank: 32
+  alpha: 64
+  dropout: 0.05
+  target_modules: resolve_from_actual_model
+  train_embeddings: false
+  expand_vocabulary: false
+  alpha_and_dropout_are_starter_proposals: true
+loss:
+  response_tokens_only: true
+  chunked_fused_linear_cross_entropy: true
+  kernel_and_version: null
+  reference_loss_gradient_parity_required: true
+gradient_checkpointing: true
+optimizer:
+  name: null
+  learning_rate: null
+  weight_decay: null
+  status: select_on_pilot_validation
+checkpoint:
+  interval_minutes: 25
+  destination: local_until_remote_destination_authorized
+  atomic_complete_manifest: true
+  include: [adapters, refiner_if_enabled, optimizer, scheduler, scaler_if_used, rng_all_devices, sampler, shard_cursor, global_step, config_hash, model_revision, dataset_manifest]
+targets_not_measurements:
+  bf16_4b_peak_allocated_decimal_gb_less_than: 18.0
+  proposed_sequence_length: 2048
+  proposed_micro_batch: 2
+paid_job_launch_enabled: false

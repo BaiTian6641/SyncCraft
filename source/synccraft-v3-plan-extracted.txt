@@ -1,0 +1,1114 @@
+TECHNICAL RESEARCH REPORT & MASTER ENGINEERING SPECIFICATION · V3.0
+FINAL
+SyncCraft v3.0                          ：可编辑块状三维资产生成研究报告、架
+构规范与工程实现规划
+Editable Block-Structured 3D Asset Generation via Typed Symbolic Compilation and Differentiable
+Kinematic Projection
+文档状态：两轮技术评审冻结版（                         2026-11-13 ·
+                                                 ）     适用范围：学术论文立项与         Antigravity   全栈工程交付       ·   开源目标：
+
+Apache-2.0   洁净室权重与工具链
+
+
+
+
+   核心立项结论与            v3.0   架构收敛摘要：针对            Minecraft Blockbench
+                                                             与            全品类三维资产（立体武器、多状态方
+
+   块、拉伸道具与可动生物），抛弃三维去噪扩散路线、转向 强类型领域程序生成                       “                     +   确定性多后端编译            +   可微
+
+                      ”
+   运动学几何投影 在工程与学术上均完全成立。经两轮严格代码数值复现与法务审计后，                                                  v3.0   彻底清除了早期
+
+   方案中的五项阻塞风险：（ ）剔除非商用协议的           1     Qwen2.5-Coder-3B ，改在纯     基座候选池                 Apache-2.0
+   （ Qwen3-4B 、 Qwen2.5-Coder-7B-Instruct 与锁定版本的 Spark-X2.6-4B ）上通过首日冒烟实验
+
+                  2
+   择优定型；（ ）移除无独立子问题职责且在多自由度下引发阻挫震荡的四元数与相位耦合振荡器，将方法论
+
+   收敛为共享       SE(3) 正运动学的 轴分离轴（         15             SAT
+                                 ）有向包围盒投影；（ ）补齐单骨骼多图元局部挂载子句                  3
+      place(...) 与完成态数值检查点回滚机制；（ ）以解析足底锁定逆运动学（ ）模板替代不可靠的刚体4                        IK
+   扭矩步态仿真；（ ）建立适配本地工作站与   5                            Google Colab Pro+ 600
+                                                                      （    计算单元预算内）的分阶段开发路线
+
+   及硬性决策门禁（               Gate G2
+                                ）。
+
+
+
+
+一、研究背景、技术演进复盘与核心科学问题
+
+1.1   静态去噪扩散范式与块状生产资产的结构冲突
+
+主流原生三维生成模型               ——         包括基于结构化隐空间的                  TRELLIS Xiang et al. (2025)       、大规模整流流
+
+模型     TripoSG Li et al. (2025)          以及高分辨率扩散架构               Hunyuan3D 2.0 Zhao et al. (2025)——            均将
+
+三维物体表征为连续隐式场或稠密三角网格。这类表征在投入                                              Minecraft Blockbench
+                                                                                   与                   生产工作流
+
+时存在三项难以靠后处理弥补的结构缺陷：
+
+
+   命名骨骼树与精确旋转枢轴缺失：游戏引擎依赖具有语义命名的层级骨骼（如握柄、护手、上下
+
+   肢）及精确铰链枢轴。即便引入残差超棱台图元拟合算法                                           SuperFit Ganeshan et al. (2026)           或
+
+   板材拼装程序学习器                   PlankAssembly Hu et al. (2023)        对网格做长方体分解，也无法自动恢复符
+
+   合运动学逻辑的旋转铰链与第一 三人称手部握持矩阵。            /
+   整数纹素晶格与引擎内置光照冲突：标准块状资产严格遵循整数纹素密度（每                                                         16   建模单位对应
+
+   16×16   整数像素）与有限调色板。扩散贴图烘焙不仅产生亚像素模糊和六面体折角接缝断裂，还
+
+   会将环境平行光固化进贴图，与游戏客户端自带的面朝向明暗乘数叠加造成暗部死黑。
+
+   参数化骨骼动画不可编辑：                         Bedrock GeckoLib
+                                                 与             运行时动画本质上是基于时间变量的紧凑三角函
+
+   数与阻尼公式（                Molang    ），而非无法二次调参的逐帧顶点形变缓存。
+
+
+
+
+SyncCraft v3.0   最终研究报告、架构规范与工程实现规划                                                                        Page 1 of 18
+1.2   程序化三维智能体定位与神经振荡方案的批判性裁撤
+
+                               “
+近期的程序化建模研究证明了 以可执行代码作为原生三维资产表征 的优越性：                             ”           Nova3D Noor et al.
+(2026)    将三维资产直接生成为             Blender 可执行程序；      Procedura Lin et al. (2026)       进一步提出带类
+
+型化可机检装配配合（                Typed Machine-Checkable Mates   ）的免训练智能体，在边缘锐利度与可编辑
+
+性上全面超越原生网格生成器；开源工具链                          img2blockbench Orca GameDev (2026)           则验证了面
+
+向   Blockbench    的确定性图集打包与四视图轮廓审计流程。本工作明确建立在上述程序化装配范式之
+
+上，将其扩展至整数纹素跨接缝像素着色、人机握持工效学与参数化骨骼运动领域。
+
+
+在隐空间推理侧，我们深入考察了连续隐向量推理                                Coconut Hao et al. (2025)   、针对隐式思维链表
+
+面捷径的因果扰动分析            Zhang et al. (2026)      、连续思维机         CTM Darlow et al. (2025)    、人工藏本
+
+振荡神经元         AKOrN Miyato et al. (2025)    以及连续记忆机           CMM Regan et al. (2026)     。在早期原
+
+型推演与        NumPy   数值复现中，我们发现强行将四元数                     Kuramoto  耦合与二维相位滞后矩阵塞入求解
+
+核会产生严重的结构冗余与数学缺陷：
+
+
+    四元数对齐能量缺乏几何对象支撑：左右对称已由语言层的                                  mirror_x 反射算子确定性构造，部
+    件防穿模则完全由三维有向包围盒（                    OBB ）重叠势能刻画；没有任何剩余建模子问题需要让不同
+
+    骨骼的静止旋转互相锁相，且内积能量忽略了单位四元数                                 q −q
+                                                               与     表示同一三维旋转的对径等价
+
+    性。
+
+    无约束相位耦合矩阵引发阻挫且退化平凡：在                          8   自由度随机相位滞后测试中，无约束矩阵在                        400
+    步迭代后仍有          99.5%   样本因几何阻挫无法收敛；而无阻挫相容情形（滞后角等于目标相位差                                      ψa −
+    ψb ）在代数上完全等价于直接单步预测各自由度标量相位，无需耗费数百万参数构建迭代耦合矩
+
+    阵。
+
+
+因此，      SyncCraft v3.0   果断裁撤无职责的振荡器组件，将论文标题与核心科学问题精准聚焦于：在类
+
+型化   Block-DSL 与两层带回滚校验解码器之上，面对多部件紧凑装配，经典零参数可微运动学投影
+（ Baseline-PGD ）、多轮编译器报错文本修复（ Baseline-Repair ）以及轻量级学习型残差投影器
+
+（ LearnedKinematicRefiner ）在严格等算力预算下的性能边界分别在哪里？
+
+
+1.3   全品类资产与目标导出引擎兼容性矩阵
+
+不同导出目标具有严格的几何与动画边界：                           Minecraft Java 1.21.11 Mojang Studios (2025)    开放了
+
+方块与物品元素按             X→Y→Z      顺序的多轴连续旋转，但保留了元素坐标必须在                             [-16, 32] 区间（即
+3×3×3    方块体积）以及    display          [-80, 80] 、 缩 放 不 超 过 的 硬 限 制 ；
+                                    平移在                               4                Blockbench 5.0
+Blockbench Wiki (2025)        则将骨骼组属性拆入 groups 、层级树拆入纯            列表 outliner ， UUID
+并修正了旧版位移       X         X/Y
+                          轴与旋转        轴关键帧的正负号反转。编译器在解析文件头时强制核验下表
+
+矩阵：
+
+
+
+ 资产原型                  bedrock_entity / java_modern           java_legacy          bbmodel_5 ( 通用
+ (Archetype)           geckolib          (1.21.11+)           (≤1.21.10)           工程 )
+ entity (    )
+          生物实体         自由骨骼     + Box UV          (
+                                          禁止导出 原版无自           禁止导出 原版无自(           全特性原生工程支
+                       + Molang           定义实体几何    )         定义实体几何        )      持
+
+
+
+
+SyncCraft v3.0   最终研究报告、架构规范与工程实现规划                                                         Page 2 of 18
+ 资产原型            bedrock_entity / java_modern     java_legacy         bbmodel_5 (   通用
+ (Archetype)     geckolib         (1.21.11+)      (≤1.21.10)          工程 )
+ weapon_3d (      立体      +
+                       附着物骨骼    握持    多轴静态        展平单轴离散角       +     全特性原生工程支
+ 武器  )           + Molang          [-16,32] +     display             持
+
+                                  display
+ block_multipart       自定义方块几何+       多轴静态        展平单轴离散角       +     全特性原生工程支
+ ( )
+  方块                   邻面剔除        [-16,32] +     cullface            持
+
+                                  cullface
+ item_extruded              +
+                       分层合并骨骼    附    贪心长方体合并 +   贪心长方体合并       +     全特性原生工程支
+ (拉伸道具   )             着物         display         display             持
+
+
+
+
+补充规则说明： bedrock_entity 与
+                geckolib 共享相同的自由层级骨骼与          动画表达能力，          Molang
+仅在输出        JSON Schema
+          头字段与动画状态机外层容器上区分；而在 java_modern 与 java_legacy
+
+纯资源包模式下，语义校验器直接禁用 @motion 块，且 java_legacy 必须在父子骨骼变换矩阵完
+
+全展平合成之后，检查每个元素的最终世界旋转是否满足单轴离散角集合 {-45, -22.5, 0, 22.5,
+
+45} 。
+
+
+二、统一中间语言                  Block-DSL v3.0    形式化规范与确定性编译
+
+2.1   支持单骨骼多图元独立挂载的完整                EBNF   文法
+
+针对     v2.0   中同一骨骼下多个长方体被迫堆叠在同一枢轴点的语法漏洞，                           v3.0   在   box_prim 与
+extrude_prim 上新增可选图元级定位子句 place(...) ，使子骨骼能够代表真实的运动学旋转关节
+（如整条前臂或整块护手），而其内部包含的多个护甲片、铆钉或刀刃挤压层可通过 place 相对于
+
+骨骼原点或同骨骼内前序图元精确排布；同时统一所有函数参数键值为 = 语法，消除
+
+pixel_stamp 的符号不一致：
+
+
+
+
+SyncCraft v3.0   最终研究报告、架构规范与工程实现规划                                              Page 3 of 18
+  program             ::= meta_sec palette_sec rig_sec shade_sec? ergonomics_sec?
+  motion_sec?
+
+  meta_sec         ::= '@meta' '{' 'archetype:' ARCHETYPE ',' 'target_profile:'
+  PROFILE ',' 'texel_density:' INT '}'
+  ARCHETYPE        ::= 'entity' | 'weapon_3d' | 'block_multipart' | 'item_extruded'
+  PROFILE          ::= 'bedrock_entity' | 'geckolib' | 'java_modern' | 'java_legacy'
+  | 'bbmodel_5'
+
+  palette_sec      ::= '@palette' '{' palette_def+ '}'
+  palette_def      ::= IDENT ':' 'ramp(' 'base_lch=' vec3 ',' 'steps=' INT (','
+  'hue_shift=' vec2)? (',' 'emissive=' BOOL)? ')'
+
+  rig_sec          ::= '@rig' '{' root_bone '}'
+  root_bone        ::= 'root' 'bone' IDENT '{' 'pivot_local:' vec3 node_item+ '}'
+  child_bone       ::= 'bone' IDENT attach_spec mirror_spec? '{' ('rest_euler:'
+  vec3)? node_item+ '}'
+  attach_spec      ::= 'attach(' 'parent_box=' IDENT ',' 'anchor=' vec3 ',' 'align='
+  vec3 (',' 'offset=' vec3)? (',' 'detached=' BOOL)? ')'
+  mirror_spec      ::= 'mirror_x(' IDENT ')'
+
+  node_item        ::= box_prim | extrude_prim | child_bone
+  place_spec       ::= 'place(' ('base_box=' IDENT ',')? 'anchor=' vec3 ',' 'align='
+  vec3 (',' 'offset=' vec3)? ')'
+  box_prim         ::= 'box' IDENT place_spec? '{' 'size:' vec3i ',' 'material:'
+  IDENT (',' 'inflate:' FLOAT)? (',' 'cullface:' face_list)? '}'
+  extrude_prim     ::= 'extrude' IDENT place_spec? '{' 'grid_size:' vec2i ','
+  'layers:' '[' extrude_layer (',' extrude_layer)* ']' '}'
+  extrude_layer    ::= '{' 'region:' IDENT ',' 'shape:' shape_expr ',' 'thickness:'
+  INT ',' 'z_offset:' INT ',' 'material:' IDENT '}'
+  shape_expr       ::= 'rect(' INT ',' INT ',' INT ',' INT ')' | 'poly(' '[' vec2i
+  (',' vec2i)+ ']' ')'
+  face_list        ::= '[' FACE_DIR (',' FACE_DIR)* ']'
+  FACE_DIR         ::= 'north' | 'south' | 'east' | 'west' | 'up' | 'down'
+
+  shade_sec           ::= '@shade' '{' shade_op+ '}'
+  shade_op            ::= 'pass' 'cavity_ao(' 'strength=' FLOAT ',' 'radius=' FLOAT ')'
+                        | 'pass' 'edge_highlight(' 'bevel_px=' INT ',' 'delta_step=' INT
+  ')'
+                     | 'pass' 'seam_stripe(' 'target=' IDENT ',' 'period_px=' INT ','
+  'delta_step=' INT ')'
+                     | 'pass' 'pixel_stamp(' 'target_box=' IDENT ',' 'face=' FACE_DIR
+  ',' 'uv_pos=' vec2i ',' 'mask=' int_matrix ',' 'material=' IDENT ')'
+
+  ergonomics_sec ::= '@ergonomics' '{' 'grip_box:' IDENT ',' 'hand_mode:' HAND_MODE
+  ',' 'gui_fill:' FLOAT ',' 'fp_tilt_deg:' vec3 '}'
+  HAND_MODE        ::= 'steve_4px' | 'alex_3px' | 'block_center'
+
+  motion_sec       ::= '@motion' '{' motion_clip+ '}'
+  motion_clip      ::= 'clip' IDENT '{' 'loop:' BOOL ',' 'duration_s:' FLOAT ','
+  motion_term+ '}'
+  motion_term      ::= 'oscillator(' 'channel=' CHAN_REF ',' 'freq_hz=' FLOAT ','
+  'amp=' FLOAT ',' 'phase_rad=' FLOAT (',' 'bias=' FLOAT)? ')'
+                     | 'spring step(' 'channel=' CHAN REF ',' 'target=' FLOAT ','
+SyncCraft v3.0   最终研究报告、架构规范与工程实现规划                                                 Page 4 of 18
+关键类型改进说明：长方体的基础尺寸                      size 被显式收紧为三维正整数向量 vec3i ，从语法层面强
+制对齐         Minecraft Box UV     的整数像素展开规则（亚纹素膨胀间隙如盔甲外层仅由浮点字段 inflate
+
+                        “
+承担），彻底消除了 连续实数求解后再四舍五入引发二次穿模与微调丢失 的问题。                                                     ”
+2.2    两层约束解码与语句级检查点回滚（                                Checkpoint Rollback       ）
+
+上下文无关语法掩码无法在浮点字面量生成中途判断多字符拼接后的数值是否越界（例如在写出完
+
+整数组    [12.0, 28.5, 4.0] 并 结 合 父 矩 阵 展 平 前 ， 无 法 仅 凭 单 个 数 字 字 符 判 定 是 否 超 出                                  Java   的
+
+[-16, 32] 边界）。因此，解码引擎实施严谨的 符号掩码 语句级检查点回滚 两阶段协议：               “           +                     ”
+ 1.   词法与离散符号动态掩码层：利用               XGrammar 保证基础         语法正确；同时在解析到    EBNF
+      parent_box= 、 base_box= 、 material: 、 material= 或 CHAN_REF 前缀时，实时根据当前
+      AST   符号表构建前缀树（              Trie     ）白名单掩码，确保              100%   不会引用未声明的骨骼、图元或调色
+
+      板，也不会发生标识符重名冲突。
+
+2.    语句边界数值审计与               KV-Cache       回滚层：每当模型闭合一个                        box_prim 、 extrude_prim 或
+      child_bone 声明块时，增量编译器立即执行一次微秒级局部正运动学验算，检查接触偏移约束
+      （当 detached=false 时要求各轴偏移绝对值不超过     单位）、 java_modern 展平坐标边界      0.5
+      [-16, 32] 以及 java_legacy 展平合成旋转的单轴离散角合法性。若未通过，解码器立即将
+      KV-Cache      回滚至该语句起始检查点，注入简短错误标签并提高局部采样温度重试（最多                                                       3
+      次），且所有被回滚丢弃的生成                         Token       均全额计入等算力评测账本。
+
+
+2.3    共享     SE(3)   层级刚体变换与按渲染管线解耦的腔体着色
+
+编译器、审计器与可微投影器共享同一套精确的刚体运动学方程。设父骨骼的世界齐次变换矩阵为
+
+Tp SE(3)
+      ∈          ，被挂载父图元在父骨骼局部系中的中心为                                   cploc ℝ3
+                                                                             ∈   、整数尺寸为         sp ℤ+3
+                                                                                                    ∈     。对于子骨
+
+骼挂载锚点      ap [−1, 1]3
+                     ∈         、对齐锚点             ac [−1, 1]3
+                                                   ∈              、接触偏移      Δobone ℝ3 ∈   及欧拉角对应的旋转矩阵
+
+Rc = Rz(ψ)Ry(θ)Rx(φ) SO(3)   ∈          ，子骨骼世界变换与内部第                       k 个图元的局部中心按下式递推：
+
+
+
+
+    pjoint(p) = cploc + 0.5 · (sp ap) + Δobone
+                                  ⊙                    ，
+
+    Tc = Tp · Trans(pjoint(p)) · Rot(Rc)     ，
+
+    ckloc = pref,kloc − 0.5 · (sk aalign,k) + Δoplace,k
+                                  ⊙
+
+
+
+
+其中首个无               place 子 句 的 主 图 元 满 足              pref,0loc = 0 aalign,0 = ac
+                                                                   且                 ；同骨骼内后续图元则依据其
+
+place 子句相对骨骼枢轴或同骨骼前序图元                                       cbaseloc + 0.5 · (sbase aplace)
+                                                                                   ⊙           定位。启用        mirror_x
+时，编译器确定性地反转所有                           X   轴锚点与偏移分量，并将欧拉角映射为                         (φ, −θ, −ψ)   。
+
+
+在无去噪解析像素着色阶段，鉴于方块 物品渲染管线默认施加固定六面方向乘数（顶面            /                                                        1.0   、南北
+
+面     0.8   、东西面      0.6   、底面   0.5   ），而实体骨骼渲染管线采用动态环境光与法线漫反射混合，基础色
+
+阶索引         kbase   按目标配置解耦设定：在                   java_modern 与 java_legacy 下取偏亮阶                   kbase = K − 2   以避
+
+免引擎暗面死黑；在                    bedrock_entity 与 geckolib 下取                kbase = K − 2   （亮色材质）或          K−3     （高金
+
+属对比材质），仅叠加短半径局部腔体环境光遮蔽（                                            Cavity AO 1
+                                                                             ）、 像素凸棱高光及跨                  Box UV    接缝
+
+同步图案。
+
+
+
+
+SyncCraft v3.0   最终研究报告、架构规范与工程实现规划                                                                         Page 5 of 18
+2.4   单骨骼多图元         Block-DSL v3.0   完整示例
+
+
+  @meta { archetype: weapon_3d, target_profile: java_modern, texel_density: 16 }
+  @palette {
+    obsidian: ramp(base_lch=[0.28, 0.03, 265.0], steps=5, hue_shift=[-10.0, 6.0],
+  emissive=false)
+    gold_trim: ramp(base_lch=[0.76, 0.14, 82.0], steps=4, hue_shift=[-8.0, 5.0],
+  emissive=false)
+    ember_gem: ramp(base_lch=[0.72, 0.19, 38.0], steps=4, emissive=true)
+  }
+  @rig {
+    root bone grip_assembly {
+      pivot_local: [8.0, 8.0, 8.0]
+      box grip_shaft { size: [2, 7, 2], material: obsidian }
+      box pommel_ring place(base_box=grip_shaft, anchor=[0.0, -1.0, 0.0], align=[0.0,
+  1.0, 0.0]) {
+         size: [3, 2, 3], material: gold_trim
+      }
+      bone guard_assembly attach(parent_box=grip_shaft, anchor=[0.0, 1.0, 0.0],
+  align=[0.0, -1.0, 0.0]) {
+         box guard_block { size: [6, 2, 3], material: gold_trim }
+         box core_jewel place(base_box=guard_block, anchor=[0.0, 0.0, 1.0], align=
+  [0.0, 0.0, -1.0], offset=[0.0, 0.0, -0.25]) {
+           size: [2, 2, 1], material: ember_gem, inflate: 0.05
+         }
+         bone wing_left attach(parent_box=guard_block, anchor=[1.0, 0.0, 0.0], align=
+  [-1.0, 0.0, 0.0]) mirror_x(wing_right) {
+           rest_euler: [0.0, 0.0, 22.5]
+           box wing_tip { size: [4, 2, 2], material: gold_trim }
+         }
+         bone blade_assembly attach(parent_box=guard_block, anchor=[0.0, 1.0, 0.0],
+  align=[0.0, -1.0, 0.0]) {
+           extrude main_blade {
+             grid_size: [6, 15],
+             layers: [
+               { region: fuller_core, shape: rect(2, 0, 4, 11), thickness: 1,
+  z_offset: 0, material: ember_gem },
+               { region: outer_bevel, shape: poly([[1,0],[5,0],[5,11],[3,15],[1,11]]),
+  thickness: 2, z_offset: 0, material: obsidian }
+             ]
+           }
+         }
+      }
+    }
+  }
+  @shade {
+    pass cavity_ao(strength=0.9, radius=2.5)
+    pass edge_highlight(bevel_px=1, delta_step=1)
+    pass seam_stripe(target=grip_shaft, period_px=2, delta_step=-1)
+  }
+  @ergonomics { grip_box: grip_shaft, hand_mode: steve_4px, gui_fill: 0.92,
+  fp_tilt_deg: [16.0, -8.0, 5.0] }
+
+
+SyncCraft v3.0   最终研究报告、架构规范与工程实现规划                                            Page 6 of 18
+三、可微运动学投影与条件化精简残差求解器设计
+
+3.1 v2.0    求解器数值缺陷复盘与                    v3.0   逐项根治对照
+
+第二轮独立数值仿真精准定位了                            v2.0参考求解器的五项功能性缺陷，                      v3.0   已在底层算子与接口设计
+
+上将其逐一闭合：
+
+
+
+ 缺陷模块                         v2.0   数值仿真暴露现象                底层根因分析                      v3.0   根治方案
+
+
+ 尺寸单调膨胀                       初始尺寸         2.0 24
+                                              经     步迭       更新式误写为                      整数尺寸        size 由主干
+                              代膨胀至         11.6  以上，收敛        relu(...) + 0.5 ，每         直接离散生成；连续投影
+                              判据永不触发                         步无条件累加常数           0.5      仅优化受限偏移与欧拉角
+
+
+ 父子自排斥与泄漏                     齐平贴合的子部件受               0.53   漏写父子邻接排除掩码，                 强制应用邻接豁免掩码
+                              势能推力，终态脱离父部                    且   softplus 在零重叠           Eadj   ，改用齐平处势能与
+                              件   0.19 0.45
+                                          至      单位          外仍有正梯度                      梯度恒为零的平方铰链核
+
+
+ 几何表征失配                       旋转四元数完全收不到碰                    势能函数使用轴对齐包围                 直接调用编译器同源可微
+                              撞梯度，镜像块穿模被漏                    盒，忽略 SE(3) 链、对              SE(3) 正运动学展开镜
+                              检                              齐锚点与 mirror_x               像块并计算           15 SAT
+                                                                                                          轴
+                                                                                         OBB    穿透
+
+
+ 输出丢弃与维度错位                    128   维运动读出值被丢                 静态几何与周期运动强行                 静态投影与运动生成彻底
+                              弃，    16   维对数方差与目标            塞入同一循环头且未对齐                 解耦；     6   维连续姿态增量
+                              维度无法配对                         损失接口                        严格配对        6   维对数方差
+
+
+ 无掩码硬编码槽位                     不足     16   个图元时填充零            切片硬编码        16   槽位，缺      全链路传入    slot_mask
+                              槽位与真实部件发生虚假                    少布尔有效掩码                     与 fk_mask ，严格屏蔽
+                              碰撞并污染注意力                                                   无效槽位势能、注意力与
+                                                                                         损失
+
+
+
+
+3.2   零参数经典优化基线：               Baseline-PGD 15        （      轴可微SAT OBB          投影）
+
+在引入任何额外神经网络参数前，                         v3.0      首先构建零学习参数的经典运动学投影器              Baseline-PGD 。
+设当前语句组或整件资产在可微                        SE(3)       展开后产生    N     个有向包围盒（含 mirror_x 派生块），第                               u
+个包围盒由世界中心                cu 、半轴长       eu = 0.5 · su + inflateu    及旋转矩阵三列正交轴                   {u1, u2, u3}    定义。
+
+对任意非邻接图元对               (u, v) ∉ Eadj    （其中  Eadj    包含直接    attach       父子对、 place 基准对以及共享同一
+
+挂载锚点的对称翼片根部对），构造                           15     条标准分离候选轴集合           𝒜uv       （包含     u 3
+                                                                                          的      个面法向、            v 3
+                                                                                                                    的
+
+个面法向，以及经过下界                  10−6    安全归一化的        9      个棱叉积轴  ui × v j      ）。单轴投影穿透深度定义为：
+
+
+
+
+  duv(l) = ∑i=13 eu,i |⟨ui, l⟩| + ∑j=13 ev,j |⟨vj, l⟩| − |⟨cv − cu, l⟩|
+根据三维分离轴定理，两有向包围盒相交当且仅当                                        minl 𝒜uv duv(l) > 0
+                                                                   ∈                  。为获得处处可微且在齐平
+
+接触（零重叠）及分离状态下势能与梯度严格恒等于零的优化目标，定义带微容差                                                                 τtol = 0.01   的精
+
+确零接触平方铰链势能：
+
+
+
+
+SyncCraft v3.0   最终研究报告、架构规范与工程实现规划                                                                           Page 7 of 18
+  ϕsat(u, v) = [ max(0, softminβ({ duv(l) }l 𝒜uv) − τtol) ]2，
+                                                  ∈
+
+
+  Utotal(ΔO, Θ) = ∑(u,v) ∉ Eadj Muv ϕsat(u, v) + λb ϕbounds + λh ϕhand + λreg (‖ΔO − ΔO0‖22 + ‖Θ − Θ0‖22)
+其中    Muv {0, 1}
+            ∈       为有效槽位掩码乘积，                        softminβ(z) = −(1/β) log ∑ exp(−β z)   （取锐度β = 25.0        ）是
+
+最小穿透轴的光滑下界近似。 Baseline-PGD 直接以语言模型输出的初始偏移                                                    ΔO0        Θ0
+                                                                                                     与欧拉角          为
+
+起点，使用带框约束投影的                      Adam L-BFGS
+                                        或                  执行   16 32
+                                                                   至     步确定性梯度下降（保持离散整数尺寸
+
+size 不变，并将连接态偏移钳制在 [-0.5, 0.5] 内；若属 java_legacy 则仅优化偏移并冻结离
+散旋转角），最后将结果量化保留两位小数并重新运行确定性几何审计器 sync_audit 校验零误差
+
+收敛。
+
+
+3.3   条件化精简神经残差投影器：                    LearnedKinematicRefiner                   （仅在   Gate G2     通过时启用）
+
+仅当    Phase 1
+           Baseline-Repair 与 Baseline-PGD 在高密度复杂装配上仍留有显著失败缺
+                 实验证明
+
+口时，才在        Phase 2
+         启用学习型精简残差模块 LearnedKinematicRefiner 。该模块具有三项工程优
+
+       1
+势：（ ）零词表扩容开销：直接抽取基座模型在每个图元声明右花括号 } 位置处的最后一层隐藏
+
+状态作为该图元槽位的语义向量                        cm ℝd
+                                          ∈           ，无需添加特殊触发              Token   ，避免了重绑        13   万词表嵌入矩
+
+阵引发的显存膨胀与语法掩码重编译问题；（ ）循环外单次缓存投影与完整布尔掩码：对已固定部              2
+件的    24   维世界     OBB   描述符（中心          3   、半尺寸         3   、旋转矩阵    9 、局部锚点与层级元数据                   9 ）在循环外
+
+仅投影一次键值对；（ ）参数极度精简：在隐藏维   3                                      d = 2560    下精确总参数量仅为               3,977,252   （约
+
+3.98M    ），逐层明细如下表所示：
+
+
+
+                              张量映射规格
+ 子模块名称                        (d_model=2560,                    调用频率                     精确参数量
+                              d_lat=512)
+  slot_proj                    Linear(2560, 512,                循环外单次执行                  1,311,232
+                              bias=True)
+
+  fk_kv_proj                   Linear(24, 1024,                 循环外单次执行                  25,600
+                              bias=True)
+
+  fk_q_proj +                  2 × Linear(512,                  每步带掩码注意力                 525,312
+ fk_out_proj                  512, bias=True)
+
+  step_norm +                  LayerNorm(1036) +                每步融合    12   维梯度与上       533,016
+ step_in                      Linear(1036, 512)                 下文
+
+
+  gru_cell                     GRUCell(input_size=              每步状态门控更新                 1,575,936
+                              512,
+                              hidden_size=512)
+
+  delta_head                   Linear(512, 12,                  每步残差与不确定度读出              6,156
+                              bias=True) 维修正     (6         +
+                              6   维对数方差      )
+ 总计    (Total)                若切换至                              默认展开    16   步           3,977,252
+                              d_model=3584 则总计
+                              为   4,501,540 (4.50M)
+
+SyncCraft v3.0   最终研究报告、架构规范与工程实现规划                                                                       Page 8 of 18
+以下为修复了全部五项数值缺陷并与共享可微运动学接口严格对齐的        PyTorch   核心实现：
+
+
+
+
+SyncCraft v3.0   最终研究报告、架构规范与工程实现规划                     Page 9 of 18
+  import torch
+  import torch.nn as nn
+  import torch.nn.functional as F
+
+  class LearnedKinematicRefiner(nn.Module):
+      """
+      SyncCraft v3.0 条件化精简运动学残差投影核 (d_model=2560 时精确参数量: 3,977,252)
+      仅在 Gate G2 验证经典 Baseline-PGD 存在显著高密度装配瓶颈时启用。
+      """
+      def __init__(self, d_model: int = 2560, d_fk: int = 24, d_lat: int = 512):
+          super().__init__()
+          self.d_lat = d_lat
+          self.slot_proj = nn.Linear(d_model, d_lat)
+          self.fk_kv_proj = nn.Linear(d_fk, d_lat * 2)
+          self.fk_q_proj = nn.Linear(d_lat, d_lat)
+          self.fk_out_proj = nn.Linear(d_lat, d_lat)
+
+                 step_in_dim = 12 + d_lat + d_lat
+                 self.step_norm = nn.LayerNorm(step_in_dim)
+                 self.step_in = nn.Linear(step_in_dim, d_lat)
+                 self.gru_cell = nn.GRUCell(d_lat, d_lat)
+                 self.delta_head = nn.Linear(d_lat, 12) # 6 维姿态步进增量 + 6 维逐分量对数方差
+
+        def forward(
+            self,
+            slot_hidden: torch.Tensor,           # [B, M, d_model] AST 闭合符位置抽取的图元隐向量
+            slot_mask: torch.Tensor,             # [B, M] bool, True 表示真实图元槽位, False 为填
+  充位
+                 init_offsets: torch.Tensor,     # [B, M, 3] 模型初始预测偏移 (位于 [-0.5, 0.5])
+                 init_eulers: torch.Tensor,      # [B, M, 3] 模型初始预测静止欧拉角 (弧度)
+                 fk_desc: torch.Tensor,          # [B, N_fk, 24] 已放置部件的世界 OBB 描述符
+                 fk_mask: torch.Tensor,          # [B, N_fk] bool, True 表示有效历史部件
+                 diff_fk_potential_fn,           # 编译器同源 SE(3) + mirror_x + 15轴 SAT 零接触铰
+  链势能函数
+                 num_steps: int = 16,
+                 offset_bound: float = 0.5,
+        ):
+                 bsz, m_slots, _ = slot_hidden.shape
+                 dtype = slot_hidden.dtype
+                 mask_f = slot_mask.unsqueeze(-1).to(dtype)
+
+                 c_lat = self.slot_proj(slot_hidden) * mask_f           # [B, M, d_lat]
+                 kv_fk = self.fk_kv_proj(fk_desc)                       # 循环外单次预投影 K/V
+                 k_fk, v_fk = kv_fk.chunk(2, dim=-1)
+                 has_fk = fk_mask.any(dim=-1, keepdim=True).unsqueeze(-1).to(dtype)
+
+                 offsets = init_offsets.clone()
+                 eulers = init_eulers.clone()
+                 h_state = c_lat.reshape(bsz * m_slots, self.d_lat)
+
+                 traj_pose, traj_logvar, traj_energy = [], [], []
+
+                 for _ in range(num_steps):
+                     with torch.enable grad():
+SyncCraft v3.0   最终研究报告、架构规范与工程实现规划                                               Page 10 of 18
+四、开源基座选型、洁净室数据管线与防过拟合基准
+
+4.1 Apache-2.0           基座候选池与         Phase 0   冒烟竞标协议
+
+鉴于     Qwen2.5-Coder-3B 采用仅限非商业用途的 Qwen Research 许可协议，无法支撑洁净室商业开
+源权重发布，            v3.0   将基座严格锁定在以下三个经核实具备                         Apache-2.0       许可证的模型中，并在项目
+
+首日通过标准化冒烟与小样本竞标（                           Bake-Off    ）选出唯一主干：
+
+
+
+
+ 候选基座模型                    开源许可证               关键架构规格
+                                                                     BF16 / NF4     静态显       核心工程风险与关
+                                                                     存                        注点
+
+
+ Qwen3-4B                  Apache-2.0          36  层全注意力             约   8.05 GB / 2.6 GB     原生   Transformers
+                                               GQA, d=2560                                    支持，无窗口截断
+                                                                                              风险，首选均衡底
+                                                                                              座
+
+
+ Qwen2.5-Coder-            Apache-2.0          28  层全注意力             约   15.2 GB / 4.8 GB     代码专项预训练最
+ 7B-Instruct                                   GQA, d=3584,   词表                              强；在   L4 上需启用
+                                               152,064                                        NF4 QLoRA   与分块
+                                                                                              交叉熵
+
+
+ Spark-X2.6-4B             Apache-2.0          36 (27 512
+                                                   层     层    滑      约   8.20 GB / 2.7 GB     需锁仓库     Commit
+                                               窗  +9     ),
+                                                       层全注意                                   与
+                                               d=2560,  词表                                     transformers==
+                                               131,072                                        4.57.1 ，必测长距
+                                                                                              符号引用
+
+
+
+
+Phase 0     六项必过冒烟与竞标清单（耗时                         1          1
+                                                       天）：（ ）核验仓库根目录                   LICENSE 全文确为标准
+Apache-2.0       （若选用       Spark-X2.6-4B ， 在 论 文 伦 理 章 节 如 实 披 露 其 模 型 卡 未 公 开 预 训 练 语 料 构
+成）；（ ）挂载2                PEFT LoRA （ r=32 ，作用于全部注意力与前馈投影层）并断言反向传播梯度非
+
+      3
+零；（ ）启用梯度检查点（                    Gradient Checkpointing      ）跑通    2,048   序列长前反向无报错；（ ）验证               4
+无需扩容词表即可从闭合括号                      Token     精确抽取指定图元隐向量；（ ）针对目标分词器成功编译         5
+XGrammar 文法掩码；（ ）在相同的          6           8,000       条静态武器 方块   / DSL        样本上微调上述候选模型                    1   个
+
+Epoch        “
+        ，按 符号声明与引用间距                 ≤512 Token” “      与 间距      >512 Token    （最高         2,048 ”
+                                                                                                  ） 分桶统计首
+
+次完整编译通过率                 —— Spark-X2.6-4B 27
+                            若                     因     层局部滑窗在长距离引用桶出现超过                         3%   的编译率跌
+
+落，立即淘汰并定型为全注意力架构的                             Qwen3-4B 或 Qwen2.5-Coder-7B-Instruct 。
+
+4.2   洁净室数据合成管线与解析足底锁定                         IK      运动模板
+
+为确保开源权重具备零瑕疵的法律合规性，训练数据管线严格执行四条洁净室准则：
+
+
+   物理隔离游戏原版与衍生版权资产：官方                                 JSON   格式文档仅用于工程师编写多后端导出器兼容测
+
+   试；严禁将任何                Mojang   原版模型与贴图、含第三方               IP   衍生设计的         Cobblemon 资产或社区改图
+   资源包混入模型训练集；提示词与母版多样性改写全部由                                        Apache-2.0 / MIT        开源旗舰模型离线生
+
+   成。
+
+
+
+
+SyncCraft v3.0   最终研究报告、架构规范与工程实现规划                                                                    Page 11 of 18
+    小规模种子像素精灵              100%      人工全检白名单：鉴于简单哈希比对无法识别对原版贴图的微调改
+
+    色，    2D 3D
+             转       拉伸管线仅建立一个包含                800   张纯独立绘制     CC0   奇幻冷兵器与道具图标的受控种
+
+    子库（源自非           Minecraft   领域的独立游戏开源图集及项目组自绘图标），执行逐张人工目视审查
+
+    签字归档，其余贴图全部由                       @shade 解析腔体着色器程序化生成。
+    解析足底锁定逆运动学（                Analytical Foot-Lock IK      ）替代刚体扭矩仿真：放弃难以在任意生成
+
+    骨架上稳定行走且无法模拟飞行气动的                      MuJoCo      开环扭矩控制，改用精确运动学步态与冲量模板
+
+    合成器：对站立相（              Stance Phase  ）足端固定世界地面锚点并通过双连杆解析逆运动学反解髋                              /
+      /
+    膝 踝关节角，确保数学意义上的零地面滑步（                        Zero Foot-Skating     ）；对摆动相（        Swing Phase   ）
+
+    生成摆线抬腿轨迹，对脊柱、尾巴与双翼施加可调行波相位差，再通过最小二乘谐波回归拟合成
+
+    精确的      oscillator 与 spring_step 参数标签。
+
+4.3   双模态跨品类留出切分与外部独立基准                         HandCraft-Bench-50
+为防止模型记忆参数化母版生成器，留出泛化切分同时覆盖静态几何拓扑与生物运动身体构型
+
+（   Body Plans     ）（借鉴     AnyTop Gat et al. (2025) TopX Sun et al. (2026)
+                                                        与                            的跨拓扑零样本设
+
+定，但不使用其包含闭源                  Truebones 的训练权重或数据）：
+
+    训练可见大类（           Seen Families     ，共    60,000   组静态资产     + 15,000   组动态生物）：直刃剑、单
+
+    刃刀、战斧、长矛、战锤、基础木弓、桌椅箱柜、齿轮箱；运动构型限于标准双足人形、四足犬
+
+    马构型与双翼鸟类。
+
+    测试完全留出大类（              Held-Out Unseen Families      ，共   1,200   组合成测试集）：机械十字弩、
+
+    手提铁艺灯笼、三脚架望远镜、折叠风车方块、铁砧锻造台、悬浮环法杖；运动构型留出六足甲
+
+    虫（三角交替步态）、前倾霸王龙（重尾平衡双足）与多节水生海龙（                                           S型行波推进）。
+
+    外部独立手工基准（ HandCraft-Bench-50 ）：将原计划不切实际的                                120件缩减为高精度的           50   件
+
+    黄金资产（涵盖            15把立体武器、          15   个复杂方块家具、      10   件拉伸道具与       10   只绑定动画的原创生
+
+    物，总工作量约            120 建模工时），委托完全未接触过                   Block-DSL 语法规范的外部          Blockbench
+    建模师在         Blockbench 5.0   中自由创作并以        CC0   协议交付，彻底消除测试基准向                DSL  表达习惯倾
+
+    斜的系统性偏差。
+
+
+
+五、本地工作站                 + Colab Pro+          混合算力预算与等算力协议
+
+5.1   硬件职责切分、分块交叉熵显存控制与自动断点续训
+
+针对    Google Colab    会话最长        24   小时强制断开、挂载网盘小文件读取极慢以及云端                        CPU   核数受限的
+
+真实运行特征，系统实行严格的混合分工：
+
+
+    本地多核工作站（            CPU   与桌面渲染主力）：承担全部                 75,000   组参数化母版裂变、           Box UV   图集打
+
+    包与腔体着色渲染、 sync_audit 批量几何门禁审计、离屏多视角评测视频渲染，以及运行依赖
+
+    桌面端      Blockbench GUI
+                     blockbench-mcp-plugin
+                                 的                          v1.10.1 Gardner (2026)   外部交互基线；所
+
+    有训练数据在本地打包为单文件约                         500 MB
+                                   的 .parquet                   / .safetensors     Colab
+                                                                                   分片，       启动首步
+
+    直接拉取至本地 /content       磁盘。       NVMe
+
+
+
+SyncCraft v3.0   最终研究报告、架构规范与工程实现规划                                                          Page 12 of 18
+   消除大词表              Logits 显存爆炸：在         131,072 152,064
+                                                    至              词表规模下，若设置微批次                8         与序列长
+
+   2,048   ，仅输出层           Logits   张量即高达     21 25
+                                                 亿至         FP32
+                                                             亿元素（              下占   8.4 10.0 GB
+                                                                                        至               24
+                                                                                                     ，直接撑爆
+
+   GB L4    显卡）。训练脚本强制采用仅在目标回答位置计算的分块融合线性交叉熵（                                                   Chunked
+   Fused Linear Cross-Entropy Liger-Kernel ，如      micro_batch=2  grad_accum=64
+                                                                  ），配合                           、
+
+   （有效批次    128               4B BF16 LoRA 7B NF4 QLoRA
+                           ）与梯度检查点，将                             （或                     ）峰值显存稳定压制在
+
+   14.5 GB 16.8 GB
+                 至               L4 24 GB
+                              ，可在高性价比的               （           ）上流畅运行。
+
+   25  分钟周期全状态原子续训：训练循环每           25      Google Drive Hugging Face
+                                                            分钟向                   与                      私有仓库异步
+
+   双写最新检查点（含        LoRA               权重、精简投影核权重、优化器与学习率调度器状态、全局随机数状
+
+   态及精确数据分片游标），新会话拉起后自动从最近检查点无缝续跑。
+
+
+5.2 Colab Pro+            计算单元（      CU    ）全周期预算账本
+
+按单份   Colab Pro+           订阅（每月       USD 49.99   ，含    600 Compute Units      ，有效期        90   天）及实测         GPU    消
+
+耗费率核算，包含全部阶段、                        3   组随机种子及基线          GPU    推理评估的总开销如下表：
+
+
+
+ 执行阶段与具体任
+                            选用   GPU            单次时长        ×   运行次
+                                                                         费率    (CU/h)            预算小计      (CU)
+ 务                                              数
+
+
+ Phase 0 3 ：      款基座       L4 (24 GB)          2.5 h × 3   款基座          1.6                     12.0
+ 冒烟与   8K     样本竞标
+ 评测
+
+
+ Phase 1 60K
+          ：           静态    A100 (40 GB)        7.5 h × 3   随机种子         5.4                     121.5
+ 垂直切片     LoRA        主
+ 训练  (2 Epochs)
+ Phase 1Eval      ：留出       L4 (24 GB)          4.0 h × 3   随机种子         1.6                     19.2
+ 集 Best-of-N     、
+ Repair@K PGD 与
+ 评估
+
+
+ Phase 2 ( ： 条件触            T4 (16 GB)          3.0 h × 12   组配置   /     1.2                     43.2
+  )
+ 发 缓存特征精简投                                      种子
+ 影核训练与全组消
+ 融
+
+
+ Phase 2Joint (      ： 条    A100 (40 GB)        4.5 h × 3   随机种子         5.4                     72.9
+      ) +
+ 件触发 主干              投影
+ 核端到端微调
+
+
+ Phase 3 & 4 15K L4 (24 GB)
+                  ：                             8.5 h × 3   随机种子         1.6                     50.4
+ 动态生物扩训与                                        +6h  终测
+ HandCraft-Bench-
+ 50  终测
+
+
+ 全周期合计（含                    混合调度                全部训练        +3   种子    + —                       351.0 / 600 CU
+ 10%   断线重连冗余                                   推理评估
+ 缓冲    31.8 CU    ）
+
+
+
+
+算力账本解读：通过将主力全量微调放在吞吐率最高的                                           A100 40GB    、将推理评估放在                 L4 24GB  、并
+
+将缓存特征的投影核消融卸载至廉价                            T4 16GB   ，整个项目含三随机种子复现的总消耗约为                                    351 CU   ，
+
+单月    USD 49.99 Colab Pro+
+                       的                 配额即可留出近        250 CU    的充裕调优余量。
+
+
+SyncCraft v3.0   最终研究报告、架构规范与工程实现规划                                                                         Page 13 of 18
+5.3   硬件无关的确定性等算力协议与核心对比矩阵
+
+由于云端共享实例的墙钟耗时受宿主机负载波动影响不可复现，所有对比实验的主算力横轴统一定
+
+义为确定性硬件无关操作量：总生成                          Token   数（含状态回滚丢弃               Token   与多轮报错修复重生成
+
+Token + ）        连续投影梯度步数（每             16 SAT
+                                          步       梯度折算等价算力权重）               +          /
+                                                                              编译器 审计器调用次数；
+
+补充报告的真实墙钟延迟则统一在单台固定配置的本地工作站上单线程锁频测定。
+
+
+
+ 实验组代号                     系统配置与求解机制                  等算力公平性控制条件                  核心检验科学假设
+
+
+ Baseline-0                原生网格生成       (TRELLIS /    相同提示词输入，统一转                 量化程序原生表征相对网
+                           Hunyuan3D 2.0) +           .bbmodel
+                                                      为                           格后处理在枢轴、       UV   干
+                           SuperFit /                                             净度与可编辑性上的代际
+                           img2blockbench                                         优势
+
+
+ Baseline-Repair           优选基座      LoRA +   两层带     严格对齐总生成与回滚                  测定纯离散符号反馈闭环
+                           回滚解码      +             Token    预算                    在静态与动态全品类上的
+                           sync_audit 报错文本                                        真实上限
+
+                           多轮迭代修复
+
+
+ Baseline-PGD              优选基座       LoRA +  零参数     计入   PGD   步数与重审开           检验经典解析几何优化能
+                           经典      15 SAT OBB
+                                    轴           投影    销，零额外网络参数                   否在不引入学习型求解器
+                           梯度下降                                                   下消除绝大部分穿模
+
+
+ Baseline-MCP              前沿商业大模型       +    桌面端     开放同等轮次的审计报错                 验证结构化相对锚点        DSL
+                           Blockbench MCP v1.10.1 +   与四视图截图回传                    相比逐条调用     GUI   原子工
+                           相同      sync_audit 报错                                  具的空间精度优势
+                           反馈
+
+
+ SyncCraft-Learned         优选基座      LoRA + 3.98M     与   Repair@K PGD
+                                                                  及       严       检验学习型运动学先验在
+                            LearnedKinematicRef       格对齐总推理成本                    高密度非凸拥挤装配中跨
+
+                           iner 仅过  ( Gate G2
+                                           启                                      越局部极小值的净增益
+
+                           用   )
+
+六、面向             Antigravity       的工程实现规划与硬性门禁
+
+6.1   单一代码仓（   Monorepo            ）标准目录结构
+
+Antigravity      在初始化工程时应严格按以下模块边界建立                       Python 3.11+   （配合     PyTorch 2.5+ Pydantic
+                                                                                             、
+
+v2 Lark / XGrammar Pillow ModernGL
+  、                    、           、            离屏渲染）项目骨架，确保编译器与可微投影核百分百
+
+复用同一套几何变换代码：
+
+
+
+
+SyncCraft v3.0   最终研究报告、架构规范与工程实现规划                                                           Page 14 of 18
+  synccraft/
+  ├── pyproject.toml                       # 锁定依赖版本 (含 transformers==4.57.1 兼容配
+  置与 pytest 入口 )
+  ├── configs/                             # 基座竞标、LoRA 微调与评测超参 YAML 配置
+  ├── src/synccraft/
+  │ ├── dsl/
+  │ │ ├── grammar.lark                     # 与 §2.1 完全一致的 Block-DSL v3.0 形式化文法
+  │ │ ├── ast_nodes.py                     # 强类型 AST 数据结构与 Archetype x Profile 矩
+  阵校验
+  │     │        └── stateful_decoder.py   # XGrammar 集成、动态符号表 Trie 掩码与语句级检
+  查点回滚
+  │ ├── kinematics/
+  │ │ ├── se3_chain.py                     # 编译器与求解器共享的可微 PyTorch/NumPy SE(3)
+  层级正运动学与 mirror_x
+  │ │ └── sat_potential.py                 # 15 轴 SAT OBB 穿透检测、邻接豁免掩码 E_adj 与
+  零接触平方铰链势能
+  │ ├── backends/
+  │ │ ├── bbmodel5_exporter.py      # 导出 Blockbench 5.0 (独立 groups/UUID
+  outliner 与新轴向符号)
+  │ │ ├── java_exporter.py          # 导出 Java 1.21.11+ 多轴 JSON、legacy 展平校
+  验与 display 矩阵求解
+  │ │ └── bedrock_gecko_exporter.py # 导出 Bedrock/GeckoLib 骨骼几何与 Molang 表达
+  式动画
+  │     ├── shading/
+  │     │ ├── uv_packer.py                 # 整数纹素 Box UV / Per-face 图集自动紧密排布器
+  │     │ └── cavity_shader.py             # OKLCH 调色板斜坡、局部腔体 AO、凸棱高光与跨接缝
+  图案绘制器
+  │ ├── audit/
+  │ │ ├── sync_audit.py                    # 自研确定性审计器 (穿模体积、连通图防悬空、Steve
+  4x12x4 试戴、滑步率)
+  │ │ └── offscreen_renderer.py            # 基于 ModernGL 的高速无头正交四视图与旋转视频渲
+  染器
+  │     ├── data_gen/
+  │     │ ├── static_families.py           # 武器/方块/拉伸道具参数化母版与跨品类留出切分生成
+  器
+  │ │ └── ik_motion_templates.py           # 解析足底锁定 IK 步态、行波延迟与阻尼冲量合成管线
+  │ └── modeling/
+  │     ├── pgd_projector.py               # 零参数 Baseline-PGD 经典投影优化器
+  │     ├── learned_refiner.py             # 3.98M 参数 LearnedKinematicRefiner (Gate
+  G2 条件模块)
+  │     └── colab_trainer.py               # 支持分块交叉熵与 25 分钟原子断点续训的分布式/单
+  卡训练器
+  └── tests/                               # 各里程碑强制自动化验收测试套件
+
+
+
+
+SyncCraft v3.0   最终研究报告、架构规范与工程实现规划                                            Page 15 of 18
+6.2  五阶段顺序实施里程碑与硬性科学决策门禁（                                         Gate G2）
+
+ 1. Phase 0      ：环境脚手架与基座模型冒烟竞标（第                                 1 2
+                                                                    周前      天）
+
+       完成仓库搭建，执行                 §4.1   的六项冒烟检查与                  8,000条样本分桶编译率竞标，正式锁定唯一
+
+      Apache-2.0          基座模型并固化重算后的                     LoRA    参数与显存表。
+
+2. Phase 1       ：静态资产完整垂直切片与双非学习基线闭环（第                                      1   周第    3   天至第      4   周末）
+
+       优先打通单一垂直切片（暂不引入生物与动画）：完整实现支持                                                        place(...) 的 Block-DSL
+       解析器、语句回滚解码器、 bbmodel_5 与                                   java_modern 导出器、         Box UV       腔体像素着色器、
+
+       离屏渲染器及              sync_audit 静态几何与                 Steve   握持审计器。
+
+       在本地工作站生成             60,000       组静态可见品类训练集与留出未见品类测试集（打包为大尺寸分
+
+       片），在           Colab 3
+                            完成      随机种子          LoRA     微调，全面测定          Pass@1 、 Baseline-Repair@K 与零参
+       数   Baseline-PGD 的等算力表现。
+3. Gate G2       ：硬性科学决策门禁（第                     4   周末里程碑评审点，预先注册判据）
+
+       触发条件：在完全留出的未见高密度装配测试集（部件数                                                 ≥16   的十字弩、提灯、三脚架望远镜
+
+       等）上，检查等算力预算（                      ≤3   次重审调用）下的审计全通过率。
+
+       分支        A   （若   Baseline-Repair        + Baseline-PGD       通过率   <90%       ）：证明经典局部梯度下降在
+
+       复杂非凸拥挤结构中存在局部极小值瓶颈，放行进入                                           Phase 2 3.98M
+                                                                                   训练                  参数的
+
+        LearnedKinematicRefiner 并执行缓存特征消融。
+       分支        B
+                 （若       Baseline-Repair        + Baseline-PGD       通过率    ≥90%      ）：证明强类型相对锚点                     DSL
+       配合零参数可微运动学投影已充分解决该问题！立即跳过学习型求解器开发，将省下的算力与
+
+       工期全部投入扩充高复杂度资产支持与基准评测，论文主线定型为 类型化三维符号编译                                             “                           +   经
+
+       典可微运动学投影系统与基准论文 。                             ”
+4. Phase 2       （条件执行，第            5   至第   6   周）：学习型残差投影核训练与严格消融
+
+       T4
+       在         上基于离线缓存隐藏状态完成投影核快速消融（验证                                          FK-Cache 跨部件注意力、精确
+     SAT     梯度输入与掩码机制的各自增益），随后在                                     A100   上完成端到端联合微调。
+
+5. Phase 3       ：可动生物实体、解析                  IK   动画扩展与多后端收口（第                     7   至第      8   周）
+
+       启用解析足底锁定                IK   步态模板合成               15,000   组动态生物样本，打通                   bedrock_entity 与
+        geckolib 的         Molang   编译导出及足底滑步率审计，并在六足甲虫、霸王龙与海龙留出构型上
+
+       评测跨拓扑泛化能力。
+
+6. Phase 4 HandCraft-Bench-50
+                 ：                                外部评测、           MCP 对比与论文交付（第                    9   至第   10   周）
+
+       在本地桌面环境运行带相同                      sync_audit 反馈的             Blockbench MCP         基线及原生网格生成基线，
+
+       录制统一机位旋转与动作对比视频，完成建模师双盲胜率统计并冻结开源代码与论文终稿。
+
+
+6.3 Antigravity           阶段交付自动化验收准则（                      Pytest Acceptance Gates            ）
+
+Antigravity      每完成一个子模块必须自动运行并通过以下硬性单元测试，未达标严禁推进至下一阶
+
+段：
+
+
+
+
+SyncCraft v3.0   最终研究报告、架构规范与工程实现规划                                                                               Page 16 of 18
+    test_grammar_and_roundtrip.py ：验证含单骨骼多 box                        / extrude place(...)       500
+                                                                                                  结构的
+
+   个随机合法程序            100%   解析并成功导出为无               Schema   报错的      Blockbench 5.0 .bbmodel Java  与
+
+   1.21.11 JSON    ；验证    java_legacy 在父子多级旋转展平违例时被检查点回滚准确拦截。
+   test_sat_zero_flush.py ：构造             1,000
+                                组任意旋转角度下严丝合缝贴合的父子长方体与镜像翼
+
+   片，断言 sat_potential.py 输出的势能值与各坐标 角度偏导数均严格等于 0.0 （浮点误差低       /
+   于 1e-7 ），且人为注入              0.2
+                           单位非邻接穿模时， pgd_projector.py 在 步内将穿模体积降至                      20
+   0.0 而不破坏任何父子锚点接触。
+                                              5
+    test_mask_invariance.py ：将包含 个真实图元的样本分别填充至 槽位与 槽位输入                           8          16
+    LearnedKinematicRefiner ，断言有效槽位在前向与反向传播中的数值差异低于 1e-6 ，确认填
+   充槽位零泄漏。
+
+   test_ik_zero_skating.py ：断言 ik_motion_templates.py 生成的双足、四足与六足步行序列
+   在站立相期间足底接触点水平滑移峰值低于 0.02 建模单位，且导出为                            公式后                  Bedrock Molang
+   与原始运动轨迹的均方根角度误差低于 1.5 度。
+
+    test_colab_resume_and_vram.py ：在序列长                 2,048  、微批次       2   下运行分块交叉熵训练               20   步后
+
+   强制中断进程，重启后验证损失曲线与单次连续运行保持一致，且                                               4B BF16 LoRA       峰值分配显存
+
+   低于     18.0 GB 。
+
+
+七、经核验的参考文献（                          Verified References             ）
+
+ 1. Jianfeng Xiang, Zelong Lv, Sicheng Xu, Yu Deng, Ruicheng Wang, Bowen Zhang, Dong Chen, Xin Tong, and
+    Jiaolong Yang (2025). Structured 3D Latents for Scalable and Versatile 3D Generation (TRELLIS). In
+    Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR),
+    arXiv:2412.01506.
+ 2. Yangguang Li, Zi-Xin Zou, Zexiang Liu, Dehu Wang, Yuan Liang, Zhipeng Yu, Xingchao Liu, Yuan-Chen Guo,
+    Ding Liang, Wanli Ouyang, and Yan-Pei Cao (2025). TripoSG: High-Fidelity 3D Shape Synthesis using Large-
+    Scale Rectified Flow Models. arXiv preprint arXiv:2502.06608.
+ 3. Zibo Zhao et al. (2025). Hunyuan3D 2.0: Scaling Diffusion Models for High Resolution Textured 3D Assets
+    Generation. arXiv preprint arXiv:2501.12202.
+ 4. Aditya Ganeshan, Matheus Gadelha, Thibault Groueix, Zhiqin Chen, Siddhartha Chaudhuri, Vladimir G. Kim,
+    Wang Yifan, and Daniel Ritchie (2026). Residual Primitive Fitting of 3D Shapes with SuperFrusta (SuperFit). In
+    Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR Oral).
+ 5. Wentao Hu, Jia Zheng, Zixin Zhang, Xiaojun Yuan, Jian Yin, and Zihan Zhou (2023). PlankAssembly: Robust 3D
+    Reconstruction from Three Orthographic Views with Learnt Shape Programs. In Proceedings of the IEEE/CVF
+    International Conference on Computer Vision (ICCV), arXiv:2308.05744.
+ 6. Nimra Noor, Muhammad Bilal, Abdullah Hussain, and Hassan Baig (2026). Nova3D: Code-Native Generation of
+    Programmable 3D Assets. arXiv preprint arXiv:2607.22738.
+ 7. Youtian Lin, Yikang Yang, Zhanpeng Hu, Mengqi Zhou, Feihu Zhang, Xun Cao, Jiaheng Liu, and Yao Yao (2026).
+    Procedura: Agentic 3D Modeling with Procedural Control. arXiv preprint arXiv:2608.26238.
+ 8. Orca GameDev (2026). img2blockbench: Open-Source Image-to-Blockbench Benchmark and Deterministic
+    Compiler. GitHub Repository: orca-gamedev/img2blockbench.
+ 9. Shibo Hao, Sainbayar Sukhbaatar, DiJia Su, Xian Li, Zhiting Hu, Jason Weston, and Yuandong Tian (2025).
+    Training Large Language Models to Reason in a Continuous Latent Space (Coconut). In Conference on
+    Language Modeling (COLM), arXiv:2412.06769.
+
+
+SyncCraft v3.0   最终研究报告、架构规范与工程实现规划                                                                    Page 17 of 18
+10. Yuyi Zhang, Boyu Tang, Tianjie Ju, Sufeng Duan, and Gongshen Liu (2026). Do Latent Tokens Think? A Causal
+    and Adversarial Analysis of Chain-of-Continuous-Thought. Accepted to EMNLP 2026 Main Conference,
+    arXiv:2512.21711v2.
+11. Luke Darlow, Ciaran Regan, Sebastian Risi, Jeffrey Seely, and Llion Jones (2025). Continuous Thought
+    Machines. In Advances in Neural Information Processing Systems (NeurIPS), arXiv:2505.05522.
+12. Takeru Miyato, Sindy Löwe, Andreas Geiger, and Max Welling (2025). Artificial Kuramoto Oscillatory Neurons
+    (AKOrN). In International Conference on Learning Representations (ICLR), arXiv:2410.13821.
+13. Ciaran Regan, Kai Arulkumaran, Luke Darlow, Stefania Druga, Sebastian Risi, and Llion Jones (2026).
+    Continuous Memory Machines. arXiv preprint arXiv:2610.07907.
+14. Inbar Gat, Sigal Raab, Guy Tevet, Yuval Reshef, Amit H. Bermano, and Daniel Cohen-Or (2025). AnyTop:
+    Character Animation Diffusion with Any Topology. In ACM SIGGRAPH 2025 Conference Papers,
+    arXiv:2502.17327.
+15. Tengjiao Sun, Pengcheng Fang, Xiaoyu Zhan, Dongjie Fu, Xiaohao Cai, and Hansung Kim (2026). TopX: Text-to-
+    Motion for Unseen Skeletons from the Skeleton File Alone (SkelShift Benchmark). arXiv preprint
+    arXiv:2610.34321.
+16. Jason J. Gardner (2026). Blockbench MCP Plugin (v1.10.1 Release). GitHub Repository:
+    jasonjgardner/blockbench-mcp-plugin.
+17. Blockbench Official Wiki (2025). The .bbmodel Format Specification (Blockbench 5.0 Groups/Outliner Split and
+    Keyframe Axis Conventions, Released 12 October 2025).
+18. Mojang Studios (2025). Minecraft: Java Edition 1.21.11 Release Specification (Multi-Axis Block Model Rotation
+    within [-16, 32] Element Bounds, December 2025).
+
+
+
+
+SyncCraft v3.0   最终研究报告、架构规范与工程实现规划                                                                   Page 18 of 18
+

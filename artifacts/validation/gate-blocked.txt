@@ -1,0 +1,21 @@
+$ python3 -m synccraft gate-g2 configs/gate_g2_evidence.json
+{
+  "decision": "blocked",
+  "learned_refiner_enabled": false,
+  "missing_or_invalid_evidence": [
+    "full_static_audit_implemented",
+    "heldout_split_frozen_before_training",
+    "all_samples_have_at_least_16_parts",
+    "repair_pgd_policy_preregistered",
+    "matched_raw_budgets_enforced",
+    "at_most_three_reaudits_per_sample",
+    "failures_and_timeouts_counted",
+    "baseline_implementations_verified",
+    "dataset_manifest_sha256",
+    "evaluation_manifest_sha256",
+    "valid_sample_counts"
+  ]
+}
+
+
+Exit code: 2

@@ -1,0 +1,29 @@
+$ python3 scripts/demo.py
+[
+  {
+    "output": "/workspace/scratch/3a7d3d99c83c/synccraft-starter/runs/demo/mirrored_wings",
+    "boxes": 5,
+    "bones": 3,
+    "audit_passed": true,
+    "scope": "starter_static_geometry",
+    "engine_import_verified": false
+  },
+  {
+    "output": "/workspace/scratch/3a7d3d99c83c/synccraft-starter/runs/demo/simple_blade",
+    "boxes": 4,
+    "bones": 3,
+    "audit_passed": true,
+    "scope": "starter_static_geometry",
+    "engine_import_verified": false
+  },
+  {
+    "output": "/workspace/scratch/3a7d3d99c83c/synccraft-starter/runs/demo/stacked_block",
+    "boxes": 3,
+    "bones": 1,
+    "audit_passed": true,
+    "scope": "starter_static_geometry",
+    "engine_import_verified": false
+  }
+]
+
+Exit code: 0

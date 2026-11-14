@@ -1,0 +1,85 @@
+{
+  "schema": "synccraft.audit/0.1",
+  "scope": "starter_static_geometry",
+  "status": "passed",
+  "passed": true,
+  "complete_for_release": false,
+  "target_profile": "bbmodel_5",
+  "box_count": 5,
+  "bone_count": 3,
+  "evaluated_non_exempt_pairs": 6,
+  "collision_tolerance": 1e-07,
+  "collision_pairs": [],
+  "declared_contact_pairs": [
+    {
+      "pair": [
+        "hub",
+        "left_panel"
+      ],
+      "raw_min_overlap": 0.3826834323650896,
+      "penetration_depth": 0.3826834323650896,
+      "softmin_overlap": 0.35495474543804745,
+      "surrogate_energy": 0.11899377640022811,
+      "tested_axes": 14,
+      "collision": true,
+      "reason": "attach"
+    },
+    {
+      "pair": [
+        "hub",
+        "right_wing__left_panel"
+      ],
+      "raw_min_overlap": 0.3826834323650896,
+      "penetration_depth": 0.3826834323650896,
+      "softmin_overlap": 0.35495474543804745,
+      "surrogate_energy": 0.11899377640022811,
+      "tested_axes": 14,
+      "collision": true,
+      "reason": "attach"
+    },
+    {
+      "pair": [
+        "left_panel",
+        "left_tip"
+      ],
+      "raw_min_overlap": 4.440892098500626e-16,
+      "penetration_depth": 0.0,
+      "softmin_overlap": -0.05545177444479518,
+      "surrogate_energy": 0.0,
+      "tested_axes": 12,
+      "collision": false,
+      "reason": "place"
+    },
+    {
+      "pair": [
+        "right_wing__left_panel",
+        "right_wing__left_tip"
+      ],
+      "raw_min_overlap": 0.0,
+      "penetration_depth": 0.0,
+      "softmin_overlap": -0.055451774444795626,
+      "surrogate_energy": 0.0,
+      "tested_axes": 12,
+      "collision": false,
+      "reason": "place"
+    }
+  ],
+  "connected_components": [
+    [
+      "hub",
+      "left_panel",
+      "left_tip",
+      "right_wing__left_panel",
+      "right_wing__left_tip"
+    ]
+  ],
+  "errors": [],
+  "coverage_gaps": [
+    "No exact OBB intersection-volume measurement",
+    "Declared contacts are excluded; deep penetration and gaps need separate validation",
+    "Connectivity is a declared-edge graph, not a physical support or floating-part proof",
+    "No Steve/Alex grip, display, UV, texture-seam, or dynamic foot-skating audit",
+    "Engine import, schema conformance, and target-specific bounds require backend acceptance",
+    "No differentiable gradients, constrained PGD, or learned-refiner validation"
+  ]
+}

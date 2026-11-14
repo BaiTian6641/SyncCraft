@@ -1,0 +1,38 @@
+schema: synccraft.model-candidates/0.1
+status: unverified_candidates_from_source_report
+selected_model: null
+selection_task: P0-03
+candidates:
+  - label: Qwen3-4B
+    repository_id: null
+    immutable_revision: null
+    license_evidence_sha256: null
+    expected_license_from_plan: Apache-2.0
+    smoke_status: not_run
+  - label: Qwen2.5-Coder-7B-Instruct
+    repository_id: null
+    immutable_revision: null
+    license_evidence_sha256: null
+    expected_license_from_plan: Apache-2.0
+    suggested_memory_strategy: NF4_QLoRA_if_required
+    smoke_status: not_run
+  - label: Spark-X2.6-4B
+    repository_id: null
+    immutable_revision: null
+    license_evidence_sha256: null
+    expected_license_from_plan: Apache-2.0
+    plan_transformers_candidate: "4.57.1"
+    transformer_pin_verified: false
+    long_reference_bucket_required: true
+    smoke_status: not_run
+smoke_requirements:
+  - exact_license_and_revision_evidence
+  - lora_nonzero_gradients_on_intended_modules
+  - seq2048_gradient_checkpointing_forward_backward
+  - ast_close_positions_without_vocabulary_resize
+  - tokenizer_specific_xgrammar_compilation_and_masking
+  - same_8000_examples_one_epoch_distance_bucket_bakeoff
+reference_distance_buckets_tokens: [[0, 512], [513, 2048]]
+spark_long_bucket_drop_elimination_percentage_points: 3.0
+# Report leaves the exact matched comparison underdefined. Preregister before evaluation.
+distance_bucket_comparator_definition: null

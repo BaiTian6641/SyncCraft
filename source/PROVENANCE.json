@@ -1,0 +1,11 @@
+{
+  "original_uploaded_name": "SyncCraft v3.0 最终研究报告、架构规范与工程实现规划.pdf",
+  "canonical_copy": "source/synccraft-v3-plan.pdf",
+  "source_report_date": "2026-11-13",
+  "pages": 18,
+  "sha256": "adb6ef157737c1a0957860bfacb81673f11a3eabe776013b8d5856ddc031d063",
+  "source_modified": false,
+  "extraction": "pdftotext -layout; page breaks preserved; visual clipping on pages 4 and 10 confirmed",
+  "extracted_text_is_non_authoritative": true,
+  "rights": "User-supplied source retains original rights; not covered by starter code license"
+}

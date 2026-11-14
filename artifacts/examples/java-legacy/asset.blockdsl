@@ -1,0 +1,21 @@
+@meta { archetype: weapon_3d, target_profile: java_legacy, texel_density: 16 }
+@palette {
+  charcoal: ramp(base_lch=[0.32, 0.03, 260.0], steps=5, hue_shift=[0.0, 0.0], emissive=false)
+  brass: ramp(base_lch=[0.73, 0.12, 80.0], steps=4, hue_shift=[0.0, 0.0], emissive=false)
+  steel: ramp(base_lch=[0.82, 0.02, 240.0], steps=5, hue_shift=[0.0, 0.0], emissive=false)
+}
+@rig {
+  root bone grip {
+    pivot_local: [8.0, 8.0, 8.0]
+    box handle { size: [2, 6, 2], material: charcoal, inflate: 0.0 }
+    box pommel place(base_box=handle, anchor=[0.0, -1.0, 0.0], align=[0.0, 1.0, 0.0], offset=[0.0, 0.0, 0.0]) { size: [3, 2, 3], material: brass, inflate: 0.0 }
+    bone guard attach(parent_box=handle, anchor=[0.0, 1.0, 0.0], align=[0.0, -1.0, 0.0], offset=[0.0, 0.0, 0.0], detached=false) {
+      rest_euler: [0.0, 0.0, 0.0]
+      box crosspiece { size: [8, 2, 2], material: brass, inflate: 0.0 }
+      bone blade attach(parent_box=crosspiece, anchor=[0.0, 1.0, 0.0], align=[0.0, -1.0, 0.0], offset=[0.0, 0.0, 0.0], detached=false) {
+        rest_euler: [0.0, 0.0, 0.0]
+        box edge { size: [2, 12, 1], material: steel, inflate: 0.0 }
+      }
+    }
+  }
+}

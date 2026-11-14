@@ -1,0 +1,15 @@
+{
+  "status": "template_no_experiment_run",
+  "total": 0,
+  "passed": 0,
+  "dataset_manifest_sha256": null,
+  "evaluation_manifest_sha256": null,
+  "full_static_audit_implemented": false,
+  "heldout_split_frozen_before_training": false,
+  "all_samples_have_at_least_16_parts": false,
+  "repair_pgd_policy_preregistered": false,
+  "matched_raw_budgets_enforced": false,
+  "at_most_three_reaudits_per_sample": false,
+  "failures_and_timeouts_counted": false,
+  "baseline_implementations_verified": false
+}

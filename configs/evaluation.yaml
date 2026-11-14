@@ -1,0 +1,39 @@
+schema: synccraft.evaluation-intent/0.1
+status: preregistration_template
+frozen: false
+seeds: [17, 29, 43]
+primary_metric: full_static_audit_pass_rate
+secondary_metrics:
+  - syntax_and_symbol_pass_rate
+  - export_import_pass_rate
+  - pass_at_1
+  - repair_at_k
+  - non_exempt_collision_depth_distribution
+  - contact_and_grip_constraint_pass_rate
+  - serialized_roundtrip_error
+  - measured_fixed_hardware_latency
+  - peak_allocated_and_reserved_memory
+raw_cost_dimensions:
+  - accepted_tokens
+  - discarded_tokens
+  - repair_tokens
+  - projection_steps
+  - compiler_calls
+  - initial_audit_calls
+  - reaudit_calls
+budgets:
+  max_total_generated_tokens: null
+  max_projection_steps: 32
+  max_compiler_calls: null
+  max_reaudits: 3
+  wall_clock_timeout_seconds: null
+combined_repair_pgd_policy: null
+scalar_cost_weights: null
+scalar_cost_calibration_manifest: null
+failure_denominator: include_all_syntax_timeouts_budget_export_and_solver_failures
+gate_g2:
+  min_parts: 16
+  pass_rate_threshold: 0.90
+  below_threshold: investigate_then_enable_conditional_learned_experiment
+  at_or_above_threshold: skip_learned_refiner
+  incomplete_evidence: blocked

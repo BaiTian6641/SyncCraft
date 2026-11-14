@@ -1,0 +1,10 @@
+$ python3 scripts/budget_estimate.py
+{
+  "status": "source_plan_estimates_not_current_provider_quotes_or_measured_runs",
+  "source_assumption_subtotal": 319.2,
+  "with_exact_ten_percent_buffer": 351.12,
+  "without_conditional_p2_with_buffer": 223.41,
+  "note": "The report rounds its buffer. Actual rates, allocation, throughput, and subscription terms require local verification."
+}
+
+Exit code: 0

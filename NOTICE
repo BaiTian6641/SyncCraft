@@ -1,0 +1,14 @@
+SyncCraft v3.0 starter pack
+Prepared from the user-supplied SyncCraft v3.0 research report, 2026-11-13.
+
+New source code, documentation, and original starter example definitions:
+Copyright 2026 SyncCraft contributors. Licensed under the Apache License, Version 2.0.
+
+The supplied PDF in source/ and its text extraction retain their original rights.
+They are included as project input, not relicensed by the starter code license.
+
+OKLCH diagnostic conversion uses the published Oklab numerical color-space
+definitions by Bjorn Ottosson: https://bottosson.github.io/posts/oklab/
+
+No Minecraft game assets, third-party model weights, or external benchmark assets
+are included. Minecraft, Blockbench, and other names identify compatibility targets.

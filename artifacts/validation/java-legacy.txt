@@ -1,0 +1,12 @@
+$ python3 -m synccraft compile examples/simple_blade.blockdsl --target java_legacy --out runs/java-legacy --overwrite
+{
+  "output": "/workspace/scratch/3a7d3d99c83c/synccraft-starter/runs/java-legacy",
+  "boxes": 4,
+  "bones": 3,
+  "audit_passed": true,
+  "scope": "starter_static_geometry",
+  "engine_import_verified": false
+}
+
+
+Exit code: 0

@@ -1,0 +1,205 @@
+{
+  "meta": {
+    "archetype": "weapon_3d",
+    "target_profile": "bbmodel_5",
+    "texel_density": 16
+  },
+  "palettes": [
+    {
+      "name": "charcoal",
+      "base_lch": [
+        0.32,
+        0.03,
+        260.0
+      ],
+      "steps": 5,
+      "hue_shift": [
+        0.0,
+        0.0
+      ],
+      "emissive": false
+    },
+    {
+      "name": "brass",
+      "base_lch": [
+        0.73,
+        0.12,
+        80.0
+      ],
+      "steps": 4,
+      "hue_shift": [
+        0.0,
+        0.0
+      ],
+      "emissive": false
+    },
+    {
+      "name": "steel",
+      "base_lch": [
+        0.82,
+        0.02,
+        240.0
+      ],
+      "steps": 5,
+      "hue_shift": [
+        0.0,
+        0.0
+      ],
+      "emissive": false
+    }
+  ],
+  "root": {
+    "name": "grip",
+    "pivot_local": [
+      8.0,
+      8.0,
+      8.0
+    ],
+    "rest_euler": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "attach": null,
+    "mirror_name": null,
+    "items": [
+      {
+        "name": "handle",
+        "size": [
+          2,
+          6,
+          2
+        ],
+        "material": "charcoal",
+        "place": null,
+        "inflate": 0.0,
+        "cullface": []
+      },
+      {
+        "name": "pommel",
+        "size": [
+          3,
+          2,
+          3
+        ],
+        "material": "brass",
+        "place": {
+          "base_box": "handle",
+          "anchor": [
+            0.0,
+            -1.0,
+            0.0
+          ],
+          "align": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "offset": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "inflate": 0.0,
+        "cullface": []
+      },
+      {
+        "name": "guard",
+        "pivot_local": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rest_euler": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "attach": {
+          "parent_box": "handle",
+          "anchor": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "align": [
+            0.0,
+            -1.0,
+            0.0
+          ],
+          "offset": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "detached": false
+        },
+        "mirror_name": null,
+        "items": [
+          {
+            "name": "crosspiece",
+            "size": [
+              8,
+              2,
+              2
+            ],
+            "material": "brass",
+            "place": null,
+            "inflate": 0.0,
+            "cullface": []
+          },
+          {
+            "name": "blade",
+            "pivot_local": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rest_euler": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "attach": {
+              "parent_box": "crosspiece",
+              "anchor": [
+                0.0,
+                1.0,
+                0.0
+              ],
+              "align": [
+                0.0,
+                -1.0,
+                0.0
+              ],
+              "offset": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "detached": false
+            },
+            "mirror_name": null,
+            "items": [
+              {
+                "name": "edge",
+                "size": [
+                  2,
+                  12,
+                  1
+                ],
+                "material": "steel",
+                "place": null,
+                "inflate": 0.0,
+                "cullface": []
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "shade": [],
+  "ergonomics": null
+}

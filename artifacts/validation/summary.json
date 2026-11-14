@@ -1,0 +1,108 @@
+{
+  "schema": "synccraft.starter-validation/0.1",
+  "date_user_timezone": "2026-11-13",
+  "timezone": "America/Chicago",
+  "python": "3.12.14",
+  "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+  "packages": {
+    "numpy": "2.3.5",
+    "Pillow": "13.0.0"
+  },
+  "suite_test_count": 50,
+  "source_program_roundtrip_cases": 500,
+  "rotated_flush_contact_cases": 1000,
+  "commands": [
+    {
+      "name": "cpu-tests",
+      "command": [
+        "python3",
+        "scripts/check.py"
+      ],
+      "actual_exit_code": 0,
+      "expected_exit_code": 0,
+      "log": "artifacts/validation/cpu-tests.txt"
+    },
+    {
+      "name": "demos",
+      "command": [
+        "python3",
+        "scripts/demo.py"
+      ],
+      "actual_exit_code": 0,
+      "expected_exit_code": 0,
+      "log": "artifacts/validation/demos.txt"
+    },
+    {
+      "name": "java-modern",
+      "command": [
+        "python3",
+        "-m",
+        "synccraft",
+        "compile",
+        "examples/simple_blade.blockdsl",
+        "--target",
+        "java_modern",
+        "--out",
+        "runs/java-modern",
+        "--overwrite"
+      ],
+      "actual_exit_code": 0,
+      "expected_exit_code": 0,
+      "log": "artifacts/validation/java-modern.txt"
+    },
+    {
+      "name": "java-legacy",
+      "command": [
+        "python3",
+        "-m",
+        "synccraft",
+        "compile",
+        "examples/simple_blade.blockdsl",
+        "--target",
+        "java_legacy",
+        "--out",
+        "runs/java-legacy",
+        "--overwrite"
+      ],
+      "actual_exit_code": 0,
+      "expected_exit_code": 0,
+      "log": "artifacts/validation/java-legacy.txt"
+    },
+    {
+      "name": "gate-blocked",
+      "command": [
+        "python3",
+        "-m",
+        "synccraft",
+        "gate-g2",
+        "configs/gate_g2_evidence.json"
+      ],
+      "actual_exit_code": 2,
+      "expected_exit_code": 2,
+      "log": "artifacts/validation/gate-blocked.txt"
+    },
+    {
+      "name": "budget-assumptions",
+      "command": [
+        "python3",
+        "scripts/budget_estimate.py"
+      ],
+      "actual_exit_code": 0,
+      "expected_exit_code": 0,
+      "log": "artifacts/validation/budget-assumptions.txt"
+    },
+    {
+      "name": "installed-package",
+      "actual_exit_code": 0,
+      "expected_exit_code": 0,
+      "log": "artifacts/validation/installed-package.txt",
+      "method": "pip --no-index --no-deps --no-build-isolation --target isolated directory; import from installed package; grammar resource check"
+    }
+  ],
+  "gpu_training_tested": false,
+  "blockbench_gui_import_tested": false,
+  "minecraft_runtime_import_tested": false,
+  "windows_macos_install_tested": false,
+  "complete_phase_1_acceptance": false,
+  "gate_g2": "blocked_no_evidence"
+}

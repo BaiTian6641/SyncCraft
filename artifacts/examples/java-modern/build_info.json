@@ -1,0 +1,14 @@
+{
+  "synccraft_version": "0.1.0",
+  "profile": "java_modern",
+  "scope": "starter_static_boxes",
+  "engine_import_verified": false,
+  "complete_for_release": false,
+  "diagnostic_material_mode": "base_OKLCH_color_only",
+  "warnings": [
+    "Palette steps/hue_shift/emissive are preserved in AST but not rendered as ramps or emission.",
+    "Preview uses CPU painter sorting, not ModernGL or the target engine.",
+    "Java output, when present, is an individual model, not an installable resource pack.",
+    "Audit coverage gaps and exempt contact pairs must be reviewed before production use."
+  ]
+}

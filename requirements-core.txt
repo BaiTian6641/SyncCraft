@@ -1,0 +1,4 @@
+# Exact versions used for the delivered CPU validation on Python 3.12.14.
+# This is not a transitive GPU/training environment lock.
+numpy==2.3.5
+Pillow==13.0.0

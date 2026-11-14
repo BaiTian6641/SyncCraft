@@ -1,0 +1,58 @@
+$ python3 scripts/check.py
+test_extreme_finite_color_is_a_controlled_error (test_atlas_numeric.AtlasNumericTests.test_extreme_finite_color_is_a_controlled_error) ... ok
+test_direct_constructor_and_mutation_cannot_refund_cost (test_budget_and_gate.BudgetGateTests.test_direct_constructor_and_mutation_cannot_refund_cost) ... ok
+test_discarded_and_repair_tokens_consume_budget (test_budget_and_gate.BudgetGateTests.test_discarded_and_repair_tokens_consume_budget) ... ok
+test_empty_evidence_never_enables_refiner (test_budget_and_gate.BudgetGateTests.test_empty_evidence_never_enables_refiner) ... ok
+test_ninety_percent_boundary_and_missing_audit (test_budget_and_gate.BudgetGateTests.test_ninety_percent_boundary_and_missing_audit) ... ok
+test_attach_scope_and_connected_offset (test_dsl.TestDSL.test_attach_scope_and_connected_offset) ... ok
+test_comments (test_dsl.TestDSL.test_comments) ... ok
+test_deferred_features_fail_explicitly (test_dsl.TestDSL.test_deferred_features_fail_explicitly) ... ok
+test_direct_ast_canonical_numbers_have_stable_hash_input (test_dsl.TestDSL.test_direct_ast_canonical_numbers_have_stable_hash_input) ... ok
+test_direct_ast_invalid_types_and_unrepresentable_integers (test_dsl.TestDSL.test_direct_ast_invalid_types_and_unrepresentable_integers) ... ok
+test_error_location (test_dsl.TestDSL.test_error_location) ... ok
+test_examples_and_canonical_roundtrip (test_dsl.TestDSL.test_examples_and_canonical_roundtrip) ... ok
+test_mirror_generated_identifiers_reserved (test_dsl.TestDSL.test_mirror_generated_identifiers_reserved) ... ok
+test_rejects_duplicates (test_dsl.TestDSL.test_rejects_duplicates) ... ok
+test_rejects_extra_fields_and_code (test_dsl.TestDSL.test_rejects_extra_fields_and_code) ... ok
+test_rejects_nonfinite_number (test_dsl.TestDSL.test_rejects_nonfinite_number) ... ok
+test_rejects_noninteger_and_nonpositive_sizes (test_dsl.TestDSL.test_rejects_noninteger_and_nonpositive_sizes) ... ok
+test_rejects_place_forward_reference (test_dsl.TestDSL.test_rejects_place_forward_reference) ... ok
+test_rejects_second_implicit_box (test_dsl.TestDSL.test_rejects_second_implicit_box) ... ok
+test_rejects_undefined_material_and_profile (test_dsl.TestDSL.test_rejects_undefined_material_and_profile) ... ok
+test_seeded_500_roundtrips (test_dsl.TestDSL.test_seeded_500_roundtrips) ... ok
+test_unit_anchor_and_origin_place (test_dsl.TestDSL.test_unit_anchor_and_origin_place) ... ok
+test_wrong_direct_ast_reference_type_has_validation_error (test_dsl.TestDSL.test_wrong_direct_ast_reference_type_has_validation_error) ... ok
+test_bbmodel_reconstructs_nested_rotated_world_geometry (test_exporters.ExportTests.test_bbmodel_reconstructs_nested_rotated_world_geometry) ... ok
+test_bedrock_and_gecko_fail_explicitly (test_exporters.ExportTests.test_bedrock_and_gecko_fail_explicitly) ... ok
+test_euler_roundtrip_including_gimbal_lock (test_exporters.ExportTests.test_euler_roundtrip_including_gimbal_lock) ... ok
+test_java_modern_reconstructs_nested_obb_vertices (test_exporters.ExportTests.test_java_modern_reconstructs_nested_obb_vertices) ... ok
+test_legacy_checks_composed_rotation (test_exporters.ExportTests.test_legacy_checks_composed_rotation) ... ok
+test_mirrored_cullface_swaps_east_and_west (test_exporters.ExportTests.test_mirrored_cullface_swaps_east_and_west) ... ok
+test_mutated_scene_cannot_disagree_between_audit_and_export (test_exporters.ExportTests.test_mutated_scene_cannot_disagree_between_audit_and_export) ... ok
+test_target_and_bounds_rejection (test_exporters.ExportTests.test_target_and_bounds_rejection) ... ok
+test_uv_pixels_are_normalized_only_for_java (test_exporters.ExportTests.test_uv_pixels_are_normalized_only_for_java) ... ok
+test_child_joint_and_rotated_primitive_alignment (test_kinematics.KinematicsTests.test_child_joint_and_rotated_primitive_alignment) ... ok
+test_detached_attachment_not_exempt (test_kinematics.KinematicsTests.test_detached_attachment_not_exempt) ... ok
+test_direct_ast_calls_cannot_bypass_validation (test_kinematics.KinematicsTests.test_direct_ast_calls_cannot_bypass_validation) ... ok
+test_euler_rotation_order_and_proper_rotation (test_kinematics.KinematicsTests.test_euler_rotation_order_and_proper_rotation) ... ok
+test_mirror_generates_proper_reflected_subtree (test_kinematics.KinematicsTests.test_mirror_generates_proper_reflected_subtree) ... ok
+test_nested_parent_rotation_is_shared (test_kinematics.KinematicsTests.test_nested_parent_rotation_is_shared) ... ok
+test_root_and_same_bone_place (test_kinematics.KinematicsTests.test_root_and_same_bone_place) ... ok
+test_audit_failure_prevents_export_and_preserves_existing_output (test_pipeline.PipelineTests.test_audit_failure_prevents_export_and_preserves_existing_output) ... ok
+test_complete_static_handoff_and_deterministic_bytes (test_pipeline.PipelineTests.test_complete_static_handoff_and_deterministic_bytes) ... ok
+test_default_bbmodel_compile_and_explicit_overwrite_remove_stale_java_only (test_pipeline.PipelineTests.test_default_bbmodel_compile_and_explicit_overwrite_remove_stale_java_only) ... ok
+test_audit_reports_declared_exemptions_without_sibling_exemption (test_sat.SATTests.test_audit_reports_declared_exemptions_without_sibling_exemption) ... ok
+test_identical_parallel_boxes_detect_collision (test_sat.SATTests.test_identical_parallel_boxes_detect_collision) ... ok
+test_invalid_obb_rejected (test_sat.SATTests.test_invalid_obb_rejected) ... ok
+test_oblique_axes_find_separation_despite_aabb_overlap (test_sat.SATTests.test_oblique_axes_find_separation_despite_aabb_overlap) ... ok
+test_parallel_zero_contact_and_separation (test_sat.SATTests.test_parallel_zero_contact_and_separation) ... ok
+test_positive_point_two_overlap_and_inflation (test_sat.SATTests.test_positive_point_two_overlap_and_inflation) ... ok
+test_rotated_flush_contacts_1000_deterministic_cases (test_sat.SATTests.test_rotated_flush_contacts_1000_deterministic_cases) ... ok
+test_softmin_can_miss_positive_overlap_audit_does_not (test_sat.SATTests.test_softmin_can_miss_positive_overlap_audit_does_not) ... ok
+
+----------------------------------------------------------------------
+Ran 50 tests in 0.880s
+
+OK
+
+Exit code: 0

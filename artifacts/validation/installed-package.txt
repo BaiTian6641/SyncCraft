@@ -1,0 +1,4 @@
+/workspace/scratch/3a7d3d99c83c/tmp/install-smoke/synccraft/__init__.py
+installed-package grammar resource and imports: OK
+
+Exit code: 0

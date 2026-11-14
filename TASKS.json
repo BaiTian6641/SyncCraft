@@ -1,0 +1,249 @@
+{
+  "schema": "synccraft.tasks/0.1",
+  "source": "docs/tasks/BACKLOG.md",
+  "tasks": [
+    {
+      "id": "S0",
+      "title": "Reproduce the delivered starter",
+      "status": "delivered_local_reproduction_required",
+      "depends_on": [],
+      "owner": null,
+      "evidence": []
+    },
+    {
+      "id": "P0-01",
+      "title": "Establish the actual development environment",
+      "status": "pending",
+      "depends_on": [
+        "S0"
+      ],
+      "owner": null,
+      "evidence": []
+    },
+    {
+      "id": "P0-02",
+      "title": "Validate real target imports and freeze compatibility fixtures",
+      "status": "pending",
+      "depends_on": [
+        "P0-01"
+      ],
+      "owner": null,
+      "evidence": []
+    },
+    {
+      "id": "P0-03",
+      "title": "Resolve candidate models and run the first five smoke checks",
+      "status": "pending",
+      "depends_on": [
+        "P0-01"
+      ],
+      "owner": null,
+      "evidence": []
+    },
+    {
+      "id": "P0-04",
+      "title": "Perform the comparable 8K candidate bake-off",
+      "status": "pending",
+      "depends_on": [
+        "P0-03",
+        "P1-07",
+        "P1-08"
+      ],
+      "owner": null,
+      "evidence": []
+    },
+    {
+      "id": "P1-01",
+      "title": "Complete static DSL and deterministic extrusion",
+      "status": "pending",
+      "depends_on": [
+        "P0-01"
+      ],
+      "owner": null,
+      "evidence": []
+    },
+    {
+      "id": "P1-02",
+      "title": "Replace broad contact exemptions with physical contact checks",
+      "status": "pending",
+      "depends_on": [
+        "P0-01"
+      ],
+      "owner": null,
+      "evidence": []
+    },
+    {
+      "id": "P1-03",
+      "title": "Implement production integer UV and analytic pixel shading",
+      "status": "pending",
+      "depends_on": [
+        "P1-01",
+        "P0-02"
+      ],
+      "owner": null,
+      "evidence": []
+    },
+    {
+      "id": "P1-04",
+      "title": "Add grip ergonomics, display and target constraints",
+      "status": "pending",
+      "depends_on": [
+        "P0-02",
+        "P1-02"
+      ],
+      "owner": null,
+      "evidence": []
+    },
+    {
+      "id": "P1-05",
+      "title": "Build differentiable shared kinematics and SAT",
+      "status": "pending",
+      "depends_on": [
+        "P1-01",
+        "P1-02"
+      ],
+      "owner": null,
+      "evidence": []
+    },
+    {
+      "id": "P1-06",
+      "title": "Implement constrained Baseline-PGD",
+      "status": "pending",
+      "depends_on": [
+        "P1-05",
+        "P1-04"
+      ],
+      "owner": null,
+      "evidence": []
+    },
+    {
+      "id": "P1-07",
+      "title": "Implement real constrained decoding and transactional rollback",
+      "status": "pending",
+      "depends_on": [
+        "P1-01",
+        "P0-03"
+      ],
+      "owner": null,
+      "evidence": []
+    },
+    {
+      "id": "P1-08",
+      "title": "Build audited original data generators and frozen splits",
+      "status": "pending",
+      "depends_on": [
+        "P1-01",
+        "P1-02",
+        "P1-03",
+        "P1-04",
+        "P0-02"
+      ],
+      "owner": null,
+      "evidence": []
+    },
+    {
+      "id": "P1-09",
+      "title": "Implement and validate resumable LoRA training",
+      "status": "pending",
+      "depends_on": [
+        "P0-04",
+        "P1-08"
+      ],
+      "owner": null,
+      "evidence": []
+    },
+    {
+      "id": "P1-10",
+      "title": "Evaluate Repair/PGD and make the G2 decision",
+      "status": "pending",
+      "depends_on": [
+        "P1-06",
+        "P1-07",
+        "P1-09",
+        "P1-08",
+        "P0-02"
+      ],
+      "owner": null,
+      "evidence": []
+    },
+    {
+      "id": "P2-01",
+      "title": "Implement learned residual refinement only if eligible",
+      "status": "conditional",
+      "depends_on": [
+        "P1-10"
+      ],
+      "owner": null,
+      "evidence": [],
+      "condition": "valid_G2_pass_rate_below_0.90"
+    },
+    {
+      "id": "P2-02",
+      "title": "Run cached ablations and conditional joint tuning",
+      "status": "conditional",
+      "depends_on": [
+        "P2-01"
+      ],
+      "owner": null,
+      "evidence": [],
+      "condition": "valid_G2_pass_rate_below_0.90"
+    },
+    {
+      "id": "P3-01",
+      "title": "Recover motion grammar and implement analytic IK templates",
+      "status": "pending",
+      "depends_on": [
+        "P1-10"
+      ],
+      "owner": null,
+      "evidence": []
+    },
+    {
+      "id": "P3-02",
+      "title": "Implement Bedrock and GeckoLib with independent capabilities",
+      "status": "pending",
+      "depends_on": [
+        "P3-01",
+        "P0-02"
+      ],
+      "owner": null,
+      "evidence": []
+    },
+    {
+      "id": "P3-03",
+      "title": "Build dynamic dataset and cross-topology evaluation",
+      "status": "pending",
+      "depends_on": [
+        "P3-01",
+        "P3-02",
+        "P1-09"
+      ],
+      "owner": null,
+      "evidence": []
+    },
+    {
+      "id": "P4-01",
+      "title": "Establish HandCraft-Bench-50 and external baselines",
+      "status": "pending",
+      "depends_on": [
+        "P1-10"
+      ],
+      "owner": null,
+      "evidence": []
+    },
+    {
+      "id": "P4-02",
+      "title": "Freeze reproducible results and release package",
+      "status": "pending",
+      "depends_on": [
+        "P4-01",
+        "P3-03"
+      ],
+      "owner": null,
+      "evidence": [],
+      "conditional_dependencies": [
+        "P2-02 if learned branch enabled"
+      ]
+    }
+  ]
+}

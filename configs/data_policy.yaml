@@ -1,0 +1,52 @@
+schema: synccraft.data-policy/0.1
+status: specification_no_dataset_bundled
+source_plan_scale_targets:
+  static_train: 60000
+  dynamic_train: 15000
+  synthetic_unseen_total: 1200
+  external_gold_total: 50
+pilot_samples_before_scale: 200
+seeds: [17, 29, 43]
+split_by: family_and_body_plan_before_parameter_sampling
+seen_static_families:
+  - straight_blade_sword
+  - single_edge_blade
+  - battle_axe
+  - spear
+  - war_hammer
+  - simple_wood_bow
+  - furniture_table_chair_chest_cabinet
+  - gearbox
+unseen_static_families:
+  - mechanical_crossbow
+  - hand_lantern
+  - tripod_telescope
+  - folding_windmill
+  - anvil_forge
+  - floating_ring_staff
+seen_body_plans: [humanoid_biped, dog_horse_quadruped, bird]
+unseen_body_plans: [hexapod_beetle, heavy_tail_tyrannosaur, segmented_sea_dragon]
+prohibited_training_sources:
+  - original_mojang_models_and_textures
+  - third_party_ip_derivatives_without_suitable_rights
+  - incompatible_or_unknown_motion_dataset_licenses
+  - heldout_g2_or_external_benchmark_assets
+required_row_fields:
+  - asset_id
+  - family_id
+  - body_plan_id_if_dynamic
+  - generator_revision
+  - generator_parameters
+  - canonical_dsl
+  - canonical_dsl_sha256
+  - prompt_and_provenance
+  - source_license_and_review_record
+  - split
+  - audit_version_and_results
+  - target_profile_and_version
+  - seed
+shard_target_megabytes: 500
+shard_format: choose_after_pilot_parquet_or_arrow
+# 800 reviewed CC0 icons is a source-plan ambition, not an existing collection.
+reviewed_icon_inventory_present: false
+external_gold_inventory_present: false
