@@ -1052,9 +1052,10 @@ def enhance_artist_project_step(
     program: Program,
     *,
     seen_dsls: set[str] | None = None,
+    precomputed_critique: ArtistCritiqueReport | None = None,
 ) -> tuple[Program, str]:
     """Execute one deterministic rule-grounded enhancement step guided by `analyze_artist_project`."""
-    critique = analyze_artist_project(program)
+    critique = precomputed_critique if precomputed_critique is not None else analyze_artist_project(program)
     if not critique.suggestions:
         return program, "noop_already_optimal"
 
@@ -1092,6 +1093,7 @@ def run_looped_artist_enhancement(
         license_policy=license_policy,
     )
     initial_critique = analyze_artist_project(cur_prog)
+    cur_critique = initial_critique
     history: list[dict[str, Any]] = [
         {
             "iteration": 0,
@@ -1102,7 +1104,11 @@ def run_looped_artist_enhancement(
 
     seen_dsls = {format_program(cur_prog)}
     for step_i in range(1, max(1, max_iterations) + 1):
-        next_prog, op_used = enhance_artist_project_step(cur_prog, seen_dsls=seen_dsls)
+        next_prog, op_used = enhance_artist_project_step(
+            cur_prog,
+            seen_dsls=seen_dsls,
+            precomputed_critique=cur_critique,
+        )
         if op_used.startswith("noop"):
             break
         next_dsl = format_program(next_prog)
@@ -1115,11 +1121,12 @@ def run_looped_artist_enhancement(
             }
         )
         cur_prog = next_prog
+        cur_critique = next_critique
         seen_dsls.add(next_dsl)
         if not next_critique.suggestions:
             break
 
-    final_critique = analyze_artist_project(cur_prog)
+    final_critique = cur_critique
     return {
         "initial_readiness_score": round(initial_critique.readiness_score, 4),
         "final_readiness_score": round(final_critique.readiness_score, 4),
@@ -1257,3 +1264,112 @@ def build_progressive_from_scratch_trajectory(
             )
         )
     return tuple(records)
+
+
+def export_artist_project_bundle(
+    program: Program,
+    *,
+    export_format: str | None = None,
+    atlas: dict[str, Any] | None = None,
+    name: str = "SyncCraft enhanced asset",
+    identifier: str = "geometry.synccraft.enhanced",
+    num_animation_frames: int = 12,
+    animation_mode: str = "keyframes",
+) -> dict[str, Any]:
+    """Export an enhanced Program to Bedrock/Cobblemon, GeckoLib, or animated Blockbench 5.0 with roundtrip re-audit."""
+    from synccraft.backends.bbmodel5_exporter import export_bbmodel
+    from synccraft.backends.bedrock_gecko_exporter import export_bedrock, export_geckolib
+
+    prog = validate_program(program)
+    scene = compile_geometry(prog)
+    static_audit = audit_scene(scene, enforce_physical_contact=True)
+
+    target_fmt = export_format or prog.meta.target_profile
+    if target_fmt not in ("bedrock_entity", "geckolib", "bbmodel_5"):
+        target_fmt = "bbmodel_5"
+
+    clips_total = len(prog.behavior.clips) if prog.behavior is not None else 0
+    clips_passed = 0
+    if prog.behavior is not None:
+        for cl in prog.behavior.clips:
+            if audit_behavior_clip(prog, cl.name, num_frames=max(6, num_animation_frames))["passed"]:
+                clips_passed += 1
+
+    rt_prov = AssetProvenance(
+        asset_id="roundtrip_reaudit",
+        source_url="local://synccraft_roundtrip_reaudit",
+        author="synccraft_auditor",
+        license_spdx="Apache-2.0",
+        attribution_notice="Internal post-export roundtrip verification",
+    )
+
+    if target_fmt == "bedrock_entity":
+        bundle = export_bedrock(
+            scene,
+            program=prog,
+            atlas=atlas,
+            identifier=identifier,
+            profile="bedrock_entity",
+            num_animation_frames=num_animation_frames,
+            animation_mode=animation_mode,
+        )
+        rt_rec = ingest_external_asset(
+            bundle["geometry"],
+            "bedrock_geojson",
+            rt_prov,
+            animation_payload=bundle["animations"],
+        )
+        rt_err = max(float(bundle["serialized_vertex_max_error"]), float(rt_rec.vertex_reconstruction_error))
+    elif target_fmt == "geckolib":
+        bundle = export_geckolib(
+            scene,
+            program=prog,
+            atlas=atlas,
+            identifier=identifier,
+            profile="geckolib",
+            num_animation_frames=num_animation_frames,
+            animation_mode=animation_mode,
+        )
+        rt_rec = ingest_external_asset(
+            bundle["geometry"],
+            "bedrock_geojson",
+            rt_prov,
+            animation_payload=bundle["animations"],
+        )
+        rt_err = max(float(bundle["serialized_vertex_max_error"]), float(rt_rec.vertex_reconstruction_error))
+    else:
+        bb_doc = export_bbmodel(
+            scene,
+            name=name,
+            atlas=atlas,
+            program=prog,
+            num_animation_frames=num_animation_frames,
+        )
+        bundle = {"bbmodel": bb_doc, "runtime_import_verified": False}
+        rt_rec = ingest_external_asset(bb_doc, "bbmodel", rt_prov)
+        rt_sc = compile_geometry(rt_rec.program)
+        rt_err = float(rt_rec.vertex_reconstruction_error)
+        for bx in scene.boxes:
+            if bx.name in rt_sc.box_by_name:
+                c_err = float(
+                    np.max(
+                        np.linalg.norm(
+                            bx.corners(include_inflate=False) - rt_sc.box_by_name[bx.name].corners(include_inflate=False),
+                            axis=-1,
+                        )
+                    )
+                )
+                rt_err = max(rt_err, c_err)
+
+    rt_clips = len(rt_rec.program.behavior.clips) if rt_rec.program.behavior is not None else 0
+    return {
+        "export_format": target_fmt,
+        "runtime_import_verified": False,
+        "static_audit_passed": bool(static_audit["passed"]),
+        "behavior_clips_total": clips_total,
+        "behavior_clips_passed": clips_passed,
+        "roundtrip_vertex_max_error": round(rt_err, 10),
+        "roundtrip_locator_count": len(compile_geometry(rt_rec.program).locators),
+        "roundtrip_clip_count": rt_clips,
+        "payload": bundle,
+    }

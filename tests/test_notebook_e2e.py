@@ -588,6 +588,29 @@ class TestNotebookTier1FeatureCoverage(unittest.TestCase):
         for unseen_fam in UNSEEN_STATIC_FAMILIES:
             self.assertIn(unseen_fam, sec6_code, f"Section 6 must probe unseen family '{unseen_fam}'")
 
+    def test_07d_v31_apex_musculoskeletal_and_8192_context_contracts(self):
+        """
+        Verify ADR 0006 Block-DSL v3.1 integration across Section 3, 4, and 6:
+        - Synthesizes 'apex_complex_v3_1' shard and registers config_name: apex_complex_v3_1 in Dataset Card.
+        - Defaults max_sequence_length to 8192 (>= 8192 so ~7.6k-token multi-turn artist-loop rows do not truncate).
+        - Interleaves 20% Block-DSL v3.1 turns via global_sample_idx % 5 == 3 alongside world trajectories.
+        - Probes both >=40-box held-out Apex unseen families (elder_calamity_dragon, relic_automaton_guardian).
+        """
+        nb = load_notebook()
+        sec3_code = "\n".join(get_section_code_cells(nb, 3))
+        sec4_code = "\n".join(get_section_code_cells(nb, 4))
+        sec6_code = "\n".join(get_section_code_cells(nb, 6))
+
+        self.assertIn("generate_apex_complex_dataset", sec3_code)
+        self.assertIn("config_name: apex_complex_v3_1", sec3_code)
+        self.assertIn('"8192"', sec4_code)
+        self.assertNotIn("max_sequence_length: int = 2048", sec4_code)
+        self.assertIn("global_sample_idx % 5 == 3", sec4_code)
+        self.assertIn("elder_calamity_dragon", sec6_code)
+        self.assertIn("relic_automaton_guardian", sec6_code)
+        self.assertIn("audit_behavior_clip", sec6_code)
+        self.assertIn("apex_complex_eval_report.json", sec6_code)
+
     def test_08_checkpoint_structure_contract(self):
         """Verify Section 4 implements periodic/atomic checkpointing saving manifest and adapters."""
         nb = load_notebook()
@@ -1347,6 +1370,17 @@ class TestNotebookTier4RealWorldScenarios(unittest.TestCase):
                     self.assertGreater(len(prov.get("prompt", "")), 40)
                     if row.get("split") == "test_unseen":
                         self.assertGreaterEqual(row["audit_version_and_results"]["boxes"], 16)
+
+                # Validate ADR 0006 Block-DSL v3.1 shard, 8192 sequence length, interleaving, and >=40-box probing
+                apex_manifest_file = temp_path / "datasets" / "apex_complex_v3_1" / "apex_complex_manifest.json"
+                self.assertTrue(apex_manifest_file.is_file(), "apex_complex_v3_1/apex_complex_manifest.json must exist")
+                self.assertIn("apex_complex_v3_1", ds_card_text)
+                self.assertGreaterEqual(global_scope["training_cfg"].max_sequence_length, 8192)
+                self.assertGreaterEqual(global_scope.get("apex_interleaved_count", 0), 1)
+                apex_probed_fams = {r["family_id"] for r in global_scope.get("apex_probed_completions", [])}
+                self.assertEqual(apex_probed_fams, {"elder_calamity_dragon", "relic_automaton_guardian"})
+                apex_eval_file = temp_path / "runs" / "apex_complex_eval_report.json"
+                self.assertTrue(apex_eval_file.is_file(), "runs/apex_complex_eval_report.json must be written")
 
             finally:
                 os.chdir(orig_cwd)

@@ -30,8 +30,106 @@ def _white_atlas(scene: Any) -> dict:
     }
 
 
-def export_bbmodel(scene: Any, *, name: str = "SyncCraft asset", atlas: dict | None = None) -> dict:
-    """Return JSON-safe .bbmodel data, preserving the static bone hierarchy.
+def _serialize_bbmodel_animations(
+    program: Any,
+    scene: Any,
+    *,
+    asset_name: str,
+    num_animation_frames: int,
+) -> list[dict[str, Any]]:
+    from synccraft.kinematics.musculoskeletal import evaluate_behavior_clip
+
+    n_frames = max(4, int(num_animation_frames))
+    root_bone_name = scene.bones[0].name
+    animations_out: list[dict[str, Any]] = []
+
+    for clip in program.behavior.clips:
+        samples = evaluate_behavior_clip(program, clip.name, num_frames=n_frames)
+        animators: dict[str, dict[str, Any]] = {}
+
+        # Root position keyframes when non-zero
+        if any(any(abs(float(c)) > 1e-5 for c in s.root_translation_delta) for s in samples):
+            root_uid = stable_uuid("bone", root_bone_name, asset_name)
+            pos_kfs: list[dict[str, Any]] = []
+            for k_i, s in enumerate(samples):
+                tx, ty, tz = s.root_translation_delta
+                pos_kfs.append({
+                    "channel": "position",
+                    "data_points": [{"x": round(float(tx), 4), "y": round(float(ty), 4), "z": round(float(tz), 4)}],
+                    "uuid": stable_uuid("kf_pos", f"{clip.name}:{root_bone_name}:{k_i}", asset_name),
+                    "time": round(float(s.time_s), 4),
+                    "color": -1,
+                    "interpolation": "linear",
+                })
+            animators.setdefault(
+                root_uid,
+                {"name": root_bone_name, "type": "bone", "keyframes": []},
+            )["keyframes"].extend(pos_kfs)
+
+        for bone in scene.bones:
+            bname = bone.name
+            if bname == root_bone_name:
+                continue
+            frame_vecs = [s.pose_euler_deltas.get(bname, (0.0, 0.0, 0.0)) for s in samples]
+            if max(max(abs(v[0]), abs(v[1]), abs(v[2])) for v in frame_vecs) < 1e-4:
+                continue
+            b_uid = stable_uuid("bone", bname, asset_name)
+            rot_kfs: list[dict[str, Any]] = []
+            for k_i, (s, vec_d) in enumerate(zip(samples, frame_vecs)):
+                rot_kfs.append({
+                    "channel": "rotation",
+                    "data_points": [{
+                        "x": round(float(vec_d[0]), 4),
+                        "y": round(float(vec_d[1]), 4),
+                        "z": round(float(vec_d[2]), 4),
+                    }],
+                    "uuid": stable_uuid("kf_rot", f"{clip.name}:{bname}:{k_i}", asset_name),
+                    "time": round(float(s.time_s), 4),
+                    "color": -1,
+                    "interpolation": "linear",
+                })
+            if clip.loop:
+                v0 = frame_vecs[0]
+                rot_kfs.append({
+                    "channel": "rotation",
+                    "data_points": [{
+                        "x": round(float(v0[0]), 4),
+                        "y": round(float(v0[1]), 4),
+                        "z": round(float(v0[2]), 4),
+                    }],
+                    "uuid": stable_uuid("kf_rot", f"{clip.name}:{bname}:wrap", asset_name),
+                    "time": round(float(clip.duration_s), 4),
+                    "color": -1,
+                    "interpolation": "linear",
+                })
+            animators.setdefault(
+                b_uid,
+                {"name": bname, "type": "bone", "keyframes": []},
+            )["keyframes"].extend(rot_kfs)
+
+        animations_out.append({
+            "uuid": stable_uuid("animation", clip.name, asset_name),
+            "name": clip.name,
+            "loop": "loop" if clip.loop else "once",
+            "override": False,
+            "length": round(float(clip.duration_s), 4),
+            "snapping": 24,
+            "selected": False,
+            "animators": animators,
+        })
+
+    return animations_out
+
+
+def export_bbmodel(
+    scene: Any,
+    *,
+    name: str = "SyncCraft asset",
+    atlas: dict | None = None,
+    program: Any | None = None,
+    num_animation_frames: int = 12,
+) -> dict:
+    """Return JSON-safe .bbmodel data, preserving the bone hierarchy (+ optional @behavior animations).
 
     ``atlas`` is optional: width, height, data_url and faces[box][face] pixel UVs.
     Omission creates a white 1px texture; it is not material or cavity shading.
@@ -95,9 +193,17 @@ def export_bbmodel(scene: Any, *, name: str = "SyncCraft asset", atlas: dict | N
             "source": atlas["data_url"], "internal": True,
             "render_mode": "default", "render_sides": "auto",
         })
-    return {
+    doc: dict[str, Any] = {
         "meta": {"format_version": "5.0", "model_format": "free", "box_uv": False},
         "name": name, "resolution": {"width": width, "height": height},
         "elements": elements, "groups": groups, "outliner": outliner,
         "textures": textures,
     }
+    if program is not None and getattr(program, "behavior", None) is not None and program.behavior.clips:
+        doc["animations"] = _serialize_bbmodel_animations(
+            program,
+            scene,
+            asset_name=name,
+            num_animation_frames=num_animation_frames,
+        )
+    return doc

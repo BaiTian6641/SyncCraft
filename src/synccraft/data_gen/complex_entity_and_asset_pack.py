@@ -2047,6 +2047,7 @@ def generate_apex_complex_dataset(
     samples_per_seen_family: int = 6,
     samples_per_unseen_family: int = 6,
     seed: int = 202611,
+    seen_families: tuple[str, ...] | list[str] | None = None,
 ) -> dict[str, Any]:
     """Generate an audited multi-turn Apex Complex Entity & Artist-Assistant dataset shard.
 
@@ -2057,14 +2058,14 @@ def generate_apex_complex_dataset(
        and upgrades it into a 100% SAT- & stance-IK-verified asset.
     """
     from synccraft.world.artist_loop import (
-        analyze_artist_project,
         build_progressive_from_scratch_trajectory,
         run_looped_artist_enhancement,
     )
 
+    active_seen = tuple(seen_families) if seen_families is not None else APEX_SEEN_FAMILIES
     rows: list[dict[str, Any]] = []
     family_plan = [
-        *((fam, "seen_train", samples_per_seen_family) for fam in APEX_SEEN_FAMILIES),
+        *((fam, "seen_train", samples_per_seen_family) for fam in active_seen),
         *((fam, "unseen_complex_holdout", samples_per_unseen_family) for fam in APEX_UNSEEN_FAMILIES),
     ]
 
@@ -2082,8 +2083,8 @@ def generate_apex_complex_dataset(
                 if prog.behavior and prog.behavior.clips
                 else None
             )
-            crit_full = analyze_artist_project(prog)
             stages = build_progressive_from_scratch_trajectory(prog)
+            full_readiness_score = stages[-1].readiness_score
 
             base_meta = {
                 "family_id": fam,
@@ -2112,7 +2113,7 @@ def generate_apex_complex_dataset(
                     "source_stage": None,
                     "target_stage": None,
                     "initial_readiness_score": None,
-                    "readiness_score": round(crit_full.readiness_score, 4),
+                    "readiness_score": round(full_readiness_score, 4),
                     "critique_json": None,
                     "user_prompt": (
                         f"Design a complete rule-grounded Block-DSL v3.1 {fam.replace('_', ' ')} "
@@ -2175,7 +2176,7 @@ def generate_apex_complex_dataset(
         "adr": "ADR-0006",
         "default_target_llm": "LiquidAI/LFM3-VL-2B",
         "total_rows": len(rows),
-        "seen_families": list(APEX_SEEN_FAMILIES),
+        "seen_families": list(active_seen),
         "unseen_families": list(APEX_UNSEEN_FAMILIES),
         "static_sat_pass_rate": sum(1 for r in rows if r["static_audit_passed"]) / max(1, len(rows)),
         "dynamic_clip_pass_rate": sum(1 for r in rows if r["dynamic_clip_passed"]) / max(1, len(rows)),
@@ -2188,9 +2189,17 @@ def generate_apex_complex_dataset(
     if output_dir is not None:
         out_p = Path(output_dir)
         out_p.mkdir(parents=True, exist_ok=True)
+        train_rows = [r for r in rows if r["split"] == "seen_train"]
+        unseen_rows = [r for r in rows if r["split"] == "unseen_complex_holdout"]
         jsonl_path = out_p / "apex_complex_entities_v3_1.jsonl"
         with jsonl_path.open("w", encoding="utf-8") as fh:
             for r in rows:
+                fh.write(json.dumps(r, sort_keys=True) + "\n")
+        with (out_p / "train.jsonl").open("w", encoding="utf-8") as fh:
+            for r in train_rows:
+                fh.write(json.dumps(r, sort_keys=True) + "\n")
+        with (out_p / "test_unseen.jsonl").open("w", encoding="utf-8") as fh:
+            for r in unseen_rows:
                 fh.write(json.dumps(r, sort_keys=True) + "\n")
         (out_p / "apex_complex_manifest.json").write_text(
             json.dumps(summary, indent=2, sort_keys=True) + "\n",
@@ -2232,8 +2241,6 @@ def generate_apex_complex_dataset(
                     ("assistant_dsl", pa.string()),
                 ]
             )
-            train_rows = [r for r in rows if r["split"] == "seen_train"]
-            unseen_rows = [r for r in rows if r["split"] == "unseen_complex_holdout"]
             pq.write_table(pa.Table.from_pylist(rows, schema=apex_schema), out_p / "apex_complex_entities_v3_1.parquet")
             pq.write_table(pa.Table.from_pylist(train_rows, schema=apex_schema), out_p / "train.parquet")
             pq.write_table(pa.Table.from_pylist(unseen_rows, schema=apex_schema), out_p / "test_unseen.parquet")

@@ -144,6 +144,123 @@ class ExportTests(unittest.TestCase):
             with self.assertRaises(ExportError):
                 backend(scene())
 
+    def test_bedrock_and_geckolib_reconstruct_nested_rotated_mirrored_geometry_locators_and_animations(self):
+        from synccraft.backends import export_bedrock, export_geckolib
+        from synccraft.dsl.ast_nodes import BehaviorDecl, ClipDecl, Locator, TrackDecl
+        from synccraft.world.inverse_inference import AssetProvenance, ingest_external_asset
+
+        for target_prof, exporter_fn in (("bedrock_entity", export_bedrock), ("geckolib", export_geckolib)):
+            arm = Bone(
+                "arm_l",
+                rest_euler=(20.0, 30.0, -15.0),
+                attach=Attach("torso_box", (1.0, 0.5, 0.0), (-1.0, 0.0, 0.0)),
+                mirror_name="arm_r",
+                items=[
+                    Box("arm_l_box", (3, 2, 2), "mat", inflate=0.125),
+                    Locator("claw_tip_l", offset=(1.5, 0.0, 0.0), role="vfx_emitter"),
+                    Bone(
+                        "forearm_l",
+                        rest_euler=(10.0, -15.0, 25.0),
+                        attach=Attach("arm_l_box", (1.0, 0.0, 0.0), (-1.0, 0.0, 0.0)),
+                        mirror_name="forearm_r",
+                        items=[Box("forearm_l_box", (2, 1, 1), "mat")],
+                    ),
+                ],
+            )
+            prog = Program(
+                Meta("entity", target_prof, 16),
+                [Palette("mat", (0.62, 0.11, 35.0), 4)],
+                Bone(
+                    "body_root",
+                    pivot_local=(0.0, 10.0, 0.0),
+                    items=[
+                        Box("torso_box", (6, 8, 4), "mat"),
+                        Locator("rider_mount", offset=(0.0, 5.0, 0.0), role="rider_seat"),
+                        arm,
+                    ],
+                ),
+                behavior=BehaviorDecl(
+                    clips=(
+                        ClipDecl(
+                            "idle_sway",
+                            duration_s=1.6,
+                            loop=True,
+                            tracks=(TrackDecl("arm_l", "wave", "z", 12.0, 0.625, 0.0, 0.0),),
+                        ),
+                    )
+                ),
+            )
+            compiled = compile_geometry(prog)
+            bundle = exporter_fn(compiled, program=prog, animation_mode="keyframes", num_animation_frames=10)
+            self.assertEqual(bundle["geometry"]["format_version"], "1.12.0")
+            self.assertFalse(bundle["runtime_import_verified"])
+            self.assertLessEqual(bundle["serialized_vertex_max_error"], 1e-8)
+            self.assertIsNotNone(bundle["animations"])
+            anim_clip = next(iter(bundle["animations"]["animations"].values()))
+            self.assertTrue(anim_clip["loop"])
+            self.assertIn("arm_l", anim_clip["bones"])
+
+            # Independent roundtrip through Bedrock decompiler verifies 8-corner fidelity & locator survival
+            prov = AssetProvenance("rt_entity", "https://github.com/BaiTian6641/SyncCraft", "SyncCraft", "Apache-2.0")
+            rec = ingest_external_asset(
+                bundle["geometry"],
+                "bedrock_geojson",
+                prov,
+                animation_payload=bundle["animations"],
+            )
+            self.assertLess(rec.vertex_reconstruction_error, 1e-8)
+            rt_scene = compile_geometry(rec.program)
+            self.assertEqual(len(rt_scene.boxes), len(compiled.boxes))
+            unmatched = list(rt_scene.boxes)
+            for orig_bx in compiled.boxes:
+                best_idx = int(np.argmin([np.linalg.norm(rb.center - orig_bx.center) for rb in unmatched]))
+                rt_bx = unmatched.pop(best_idx)
+                err = float(
+                    np.max(
+                        np.linalg.norm(
+                            orig_bx.corners(include_inflate=False) - rt_bx.corners(include_inflate=False),
+                            axis=-1,
+                        )
+                    )
+                )
+                self.assertLess(err, 1e-8)
+            self.assertGreaterEqual(len(rt_scene.locators), 3)
+            self.assertIsNotNone(rec.program.behavior)
+
+            # Also verify Molang animation emission mode
+            molang_bundle = exporter_fn(compiled, program=prog, animation_mode="molang")
+            molang_clip = next(iter(molang_bundle["animations"]["animations"].values()))
+            molang_rot = molang_clip["bones"]["arm_l"]["rotation"]
+            self.assertTrue(any(isinstance(x, str) and "math.sin" in x for x in molang_rot))
+
+            # Mutated scene must be rejected before serialization
+            tampered = compile_geometry(prog)
+            tampered.boxes[0].center[0] += 1.0
+            with self.assertRaisesRegex(ExportError, "local/world center disagreement"):
+                exporter_fn(tampered, program=prog)
+
+    def test_bbmodel_animated_export_emits_keyframes_and_roundtrips_clips(self):
+        from synccraft.data_gen.complex_entity_and_asset_pack import build_apex_complex_program
+        from synccraft.world.inverse_inference import AssetProvenance, ingest_external_asset
+
+        prog = build_apex_complex_program("elemental_pocket_companion", seed=101)
+        compiled = compile_geometry(prog)
+        static_bb = export_bbmodel(compiled, name="static_companion")
+        self.assertNotIn("animations", static_bb)
+
+        anim_bb = export_bbmodel(compiled, name="anim_companion", program=prog, num_animation_frames=10)
+        self.assertIn("animations", anim_bb)
+        self.assertGreaterEqual(len(anim_bb["animations"]), 1)
+        first_anim = anim_bb["animations"][0]
+        self.assertGreater(len(first_anim["animators"]), 0)
+
+        prov = AssetProvenance("rt_bb", "https://github.com/BaiTian6641/SyncCraft", "SyncCraft", "Apache-2.0")
+        rec = ingest_external_asset(anim_bb, "bbmodel", prov)
+        self.assertLess(rec.vertex_reconstruction_error, 1e-8)
+        self.assertIsNotNone(rec.program.behavior)
+        assert rec.program.behavior is not None
+        self.assertGreaterEqual(len(rec.program.behavior.clips), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

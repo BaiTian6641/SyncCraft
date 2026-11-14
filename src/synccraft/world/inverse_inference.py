@@ -15,9 +15,12 @@ extracts localized ``StampOverride`` layers for artist-authored markings (eyes, 
 from __future__ import annotations
 
 import base64
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 import io
+import json
 import math
+from pathlib import Path
 import re
 from typing import Any
 
@@ -248,15 +251,22 @@ def _decompile_bbmodel(doc: dict[str, Any]) -> tuple[Program, dict[str, dict[str
     uv_map: dict[str, dict[str, list[float]]] = {}
     palettes = [Palette("mat_0", (0.62, 0.06, 220.0), 6)]
     expected_corners: dict[str, np.ndarray] = {}
+    group_uuid_to_safe_bone: dict[str, str] = {}
 
-    def _register_elem_uv(bname: str, elem: dict[str, Any], size_i: tuple[int, int, int]) -> None:
+    def _register_elem_uv(
+        bname: str,
+        elem: dict[str, Any],
+        size_i: tuple[int, int, int],
+        uv_size_i: tuple[int, int, int] | None = None,
+    ) -> None:
         f_dict = elem.get("faces") or {}
+        uv_dims = uv_size_i if uv_size_i is not None else size_i
         uv_map[bname] = {}
         for f in FACES:
             if f in f_dict and "uv" in f_dict[f]:
                 uv_map[bname][f] = [float(x) for x in f_dict[f]["uv"]]
             else:
-                wu, hv = face_uv_extents_units(size_i, f)
+                wu, hv = face_uv_extents_units(uv_dims, f)
                 uv_map[bname][f] = [0.0, 0.0, float(min(tex_w, wu)), float(min(tex_h, hv))]
 
     def _emit_elems_for_bone(
@@ -286,16 +296,18 @@ def _decompile_bbmodel(doc: dict[str, Any]) -> tuple[Program, dict[str, dict[str
             bname = _sanitize_ident(el.get("name", "cube"), "box", used_ids)
             lo = np.asarray(el["from"], dtype=np.float64)
             hi = np.asarray(el["to"], dtype=np.float64)
-            raw_span = np.maximum(1e-6, hi - lo)
-            span = np.maximum(1.0, np.rint(hi - lo))
+            raw_span = np.maximum(0.0, hi - lo)
+            uv_size_i = (max(0, int(round(raw_span[0]))), max(0, int(round(raw_span[1]))), max(0, int(round(raw_span[2]))))
+            span = np.maximum(1.0, np.rint(raw_span))
             size_i = (int(span[0]), int(span[1]), int(span[2]))
             ctr_unrot = 0.5 * (lo + hi)
             loc_ctr = ctr_unrot - bone_origin
             inflate = max(0.0, float(el.get("inflate", 0.0)))
-            _register_elem_uv(bname, el, size_i)
+            _register_elem_uv(bname, el, size_i, uv_size_i=uv_size_i)
 
             w_ctr = bone_world_piv + bone_world_rot @ loc_ctr
-            expected_corners[bname] = _obb_corners_world(w_ctr, bone_world_rot, raw_span)
+            eff_span = np.where(raw_span <= 1e-9, 1.0, raw_span)
+            expected_corners[bname] = _obb_corners_world(w_ctr, bone_world_rot, eff_span)
 
             if anchor_name is None:
                 pl = Place(None, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0), (float(loc_ctr[0]), float(loc_ctr[1]), float(loc_ctr[2])))
@@ -319,20 +331,22 @@ def _decompile_bbmodel(doc: dict[str, Any]) -> tuple[Program, dict[str, dict[str
             bname = _sanitize_ident(el.get("name", "cube"), "box", used_ids)
             lo = np.asarray(el["from"], dtype=np.float64)
             hi = np.asarray(el["to"], dtype=np.float64)
-            raw_span = np.maximum(1e-6, hi - lo)
-            span = np.maximum(1.0, np.rint(hi - lo))
+            raw_span = np.maximum(0.0, hi - lo)
+            uv_size_i = (max(0, int(round(raw_span[0]))), max(0, int(round(raw_span[1]))), max(0, int(round(raw_span[2]))))
+            span = np.maximum(1.0, np.rint(raw_span))
             size_i = (int(span[0]), int(span[1]), int(span[2]))
             ctr_unrot = 0.5 * (lo + hi)
             el_origin = np.asarray(el.get("origin", ctr_unrot.tolist()), dtype=np.float64)
             inflate = max(0.0, float(el.get("inflate", 0.0)))
-            _register_elem_uv(bname, el, size_i)
+            _register_elem_uv(bname, el, size_i, uv_size_i=uv_size_i)
 
             el_piv_loc = el_origin - bone_origin
             box_rel = ctr_unrot - el_origin
             r_el = euler_xyz_matrix(el_rot)
             w_rot = bone_world_rot @ r_el
             w_ctr = bone_world_piv + bone_world_rot @ el_piv_loc + w_rot @ box_rel
-            expected_corners[bname] = _obb_corners_world(w_ctr, w_rot, raw_span)
+            eff_span = np.where(raw_span <= 1e-9, 1.0, raw_span)
+            expected_corners[bname] = _obb_corners_world(w_ctr, w_rot, eff_span)
 
             rel_piv = el_piv_loc - anchor_loc
             sub_bname = _sanitize_ident(f"rot_{bname}", "bone", used_ids)
@@ -360,12 +374,15 @@ def _decompile_bbmodel(doc: dict[str, Any]) -> tuple[Program, dict[str, dict[str
         parent_anchor_is_locator: bool,
         is_root: bool,
     ) -> Bone | None:
-        grp = group_by_uuid.get(str(node.get("uuid", "")))
+        uid_str = str(node.get("uuid", ""))
+        grp = group_by_uuid.get(uid_str)
         if grp is None:
             return None
         g_origin = np.asarray(grp.get("origin", [0.0, 0.0, 0.0]), dtype=np.float64)
         g_rot = tuple(float(x) for x in grp.get("rotation", [0.0, 0.0, 0.0]))
         bone_name = _sanitize_ident(grp.get("name", "bone"), "bone", used_ids)
+        if uid_str:
+            group_uuid_to_safe_bone[uid_str] = bone_name
 
         local_trans = g_origin - parent_origin
         if is_root:
@@ -451,6 +468,11 @@ def _decompile_bbmodel(doc: dict[str, Any]) -> tuple[Program, dict[str, dict[str
     prog = validate_program(Program(Meta("block_multipart", "bbmodel_5", 16), palettes, root_bone))
     compiled = compile_geometry(prog)
     max_err = _max_corner_reconstruction_error(compiled, expected_corners)
+    anims_raw = doc.get("animations")
+    if isinstance(anims_raw, list) and anims_raw:
+        beh = decompile_bbmodel_animations_to_behavior(doc, prog, group_uuid_to_safe_bone=group_uuid_to_safe_bone)
+        if beh is not None:
+            prog = validate_program(replace(prog, behavior=beh))
     return prog, uv_map, embedded_rgba, max_err
 
 
@@ -474,9 +496,10 @@ def _decompile_java_json(doc: dict[str, Any]) -> tuple[Program, dict[str, dict[s
     for idx, el in enumerate(elements):
         lo = np.asarray(el["from"], dtype=np.float64)
         hi = np.asarray(el["to"], dtype=np.float64)
-        raw_span = np.maximum(1e-6, hi - lo)
-        span = np.maximum(1.0, np.rint(hi - lo))
+        raw_span = np.maximum(0.0, hi - lo)
+        span = np.maximum(1.0, np.rint(raw_span))
         size_i = (int(span[0]), int(span[1]), int(span[2]))
+        eff_span = np.where(raw_span <= 1e-9, 1.0, raw_span)
         ctr = 0.5 * (lo + hi)
         bname = _sanitize_ident(el.get("name", f"elem_{idx}"), "box", used_ids)
 
@@ -519,7 +542,7 @@ def _decompile_java_json(doc: dict[str, Any]) -> tuple[Program, dict[str, dict[s
             bone_split = [x for x in items if isinstance(x, Bone)]
             non_bone_split = [x for x in items if not isinstance(x, Bone)]
             items = [*non_bone_split, box_node, *bone_split]
-            expected_corners[bname] = _obb_corners_world(ctr, np.eye(3, dtype=np.float64), raw_span)
+            expected_corners[bname] = _obb_corners_world(ctr, np.eye(3, dtype=np.float64), eff_span)
         else:
             if first_bname is None:
                 loc_anchor = _sanitize_ident("java_origin", "locator", used_ids)
@@ -531,7 +554,7 @@ def _decompile_java_json(doc: dict[str, Any]) -> tuple[Program, dict[str, dict[s
             r_el = euler_xyz_matrix(rot_euler)
             box_loc = ctr - rot_origin
             w_ctr = rot_origin + r_el @ box_loc
-            expected_corners[bname] = _obb_corners_world(w_ctr, r_el, raw_span)
+            expected_corners[bname] = _obb_corners_world(w_ctr, r_el, eff_span)
 
             bone_name = _sanitize_ident(f"rot_{bname}", "bone", used_ids)
             rel_piv = rot_origin - first_ctr
@@ -555,15 +578,15 @@ def _decompile_java_json(doc: dict[str, Any]) -> tuple[Program, dict[str, dict[s
 
 def _infer_locator_role(raw_loc_name: str) -> str:
     low = raw_loc_name.lower()
-    if "seat" in low:
+    if any(tok in low for tok in ("seat", "mount", "rider", "saddle")):
         return "rider_seat"
-    if any(tok in low for tok in ("eye", "head", "camera", "look")):
+    if any(tok in low for tok in ("eye", "head", "camera", "look", "focus", "gaze")):
         return "camera_focus"
     if any(tok in low for tok in ("target", "hitbox", "hurtbox")):
         return "hitbox"
-    if any(tok in low for tok in ("foot", "paw", "talon", "hand", "claw", "ik")):
+    if any(tok in low for tok in ("foot", "paw", "talon", "hand", "claw", "ik", "effector", "toe", "hoof")):
         return "ik_effector"
-    if any(tok in low for tok in ("effect", "special", "breath", "muzzle", "flame", "beam", "vfx")):
+    if any(tok in low for tok in ("effect", "special", "breath", "muzzle", "flame", "beam", "vfx", "emitter")):
         return "vfx_emitter"
     return "socket"
 
@@ -603,21 +626,28 @@ def _decompile_bedrock_geojson(
 
     need_fallback_root_box = total_cubes == 0
 
-    def _register_bedrock_cube_uv(cname: str, cube: dict[str, Any], sz_i: tuple[int, int, int]) -> None:
+    def _register_bedrock_cube_uv(
+        cname: str,
+        cube: dict[str, Any],
+        sz_i: tuple[int, int, int],
+        uv_sz_i: tuple[int, int, int] | None = None,
+    ) -> None:
         uv_raw = cube.get("uv", [0, 0])
+        uv_dims = uv_sz_i if uv_sz_i is not None else sz_i
         uv_map[cname] = {}
         if isinstance(uv_raw, dict):
             for f in FACES:
                 if f in uv_raw and "uv" in uv_raw[f]:
                     u0, v0 = (float(x) for x in uv_raw[f]["uv"])
-                    su, sv = (float(x) for x in uv_raw[f].get("uv_size", [sz_i[0], sz_i[1]]))
+                    wu_def, hv_def = face_uv_extents_units(uv_dims, f)
+                    su, sv = (float(x) for x in uv_raw[f].get("uv_size", [wu_def, hv_def]))
                     uv_map[cname][f] = [u0, v0, u0 + su, v0 + sv]
                 else:
-                    wu, hv = face_uv_extents_units(sz_i, f)
+                    wu, hv = face_uv_extents_units(uv_dims, f)
                     uv_map[cname][f] = [0.0, 0.0, float(wu), float(hv)]
         else:
             ub, vb = float(uv_raw[0]), float(uv_raw[1])
-            sx, sy, sz = sz_i
+            sx, sy, sz = uv_dims
             uv_map[cname] = {
                 "up": [ub + sz, vb, ub + sz + sx, vb + sz],
                 "down": [ub + sz + sx, vb, ub + sz + 2 * sx, vb + sz],
@@ -636,11 +666,15 @@ def _decompile_bedrock_geojson(
             return []
         out_locs: list[Locator] = []
         for raw_lname, lspec in locs_raw.items():
-            safe_lname = _sanitize_ident(f"loc_{raw_lname}", "locator", used_ids)
-            role = _infer_locator_role(str(raw_lname))
+            raw_str = str(raw_lname)
+            base_lname = raw_str if raw_str.lower().startswith("loc_") else f"loc_{raw_str}"
+            safe_lname = _sanitize_ident(base_lname, "locator", used_ids)
             if isinstance(lspec, dict):
+                explicit_role = lspec.get("role")
+                role = str(explicit_role) if explicit_role in LOCATOR_ROLES else _infer_locator_role(raw_str)
                 pos_arr = np.asarray(lspec.get("offset", lspec.get("position", piv.tolist())), dtype=np.float64)
             else:
+                role = _infer_locator_role(raw_str)
                 pos_arr = np.asarray(lspec, dtype=np.float64)
             loc_local = pos_arr - piv
             out_locs.append(
@@ -693,17 +727,19 @@ def _decompile_bedrock_geojson(
 
             for c_idx, cube in unrot_cubes:
                 origin = np.asarray(cube["origin"], dtype=np.float64)
-                raw_sz = np.maximum(1e-6, np.asarray(cube["size"], dtype=np.float64))
+                raw_sz = np.maximum(0.0, np.asarray(cube["size"], dtype=np.float64))
+                uv_sz_i = (max(0, int(round(raw_sz[0]))), max(0, int(round(raw_sz[1]))), max(0, int(round(raw_sz[2]))))
                 sz_rnd = np.maximum(1.0, np.rint(raw_sz))
                 sz_i = (int(sz_rnd[0]), int(sz_rnd[1]), int(sz_rnd[2]))
                 ctr = origin + 0.5 * raw_sz
                 loc_c = ctr - piv
                 inflate = max(0.0, float(cube.get("inflate", 0.0)))
                 cname = _sanitize_ident(f"{safe_bname}_cube_{c_idx}", "box", used_ids)
-                _register_bedrock_cube_uv(cname, cube, sz_i)
+                _register_bedrock_cube_uv(cname, cube, sz_i, uv_sz_i=uv_sz_i)
 
                 w_ctr = world_piv + world_rot @ loc_c
-                expected_corners[cname] = _obb_corners_world(w_ctr, world_rot, raw_sz)
+                eff_sz = np.where(raw_sz <= 1e-9, 1.0, raw_sz)
+                expected_corners[cname] = _obb_corners_world(w_ctr, world_rot, eff_sz)
 
                 if fb_name is None:
                     pl = Place(None, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0), (float(loc_c[0]), float(loc_c[1]), float(loc_c[2])))
@@ -730,21 +766,23 @@ def _decompile_bedrock_geojson(
             fb_is_locator = fb_name not in uv_map
             for c_idx, cube, c_rot in rot_cubes:
                 origin = np.asarray(cube["origin"], dtype=np.float64)
-                raw_sz = np.maximum(1e-6, np.asarray(cube["size"], dtype=np.float64))
+                raw_sz = np.maximum(0.0, np.asarray(cube["size"], dtype=np.float64))
+                uv_sz_i = (max(0, int(round(raw_sz[0]))), max(0, int(round(raw_sz[1]))), max(0, int(round(raw_sz[2]))))
                 sz_rnd = np.maximum(1.0, np.rint(raw_sz))
                 sz_i = (int(sz_rnd[0]), int(sz_rnd[1]), int(sz_rnd[2]))
                 ctr = origin + 0.5 * raw_sz
                 c_piv = np.asarray(cube.get("pivot", ctr.tolist()), dtype=np.float64)
                 inflate = max(0.0, float(cube.get("inflate", 0.0)))
                 cname = _sanitize_ident(f"{safe_bname}_cube_{c_idx}", "box", used_ids)
-                _register_bedrock_cube_uv(cname, cube, sz_i)
+                _register_bedrock_cube_uv(cname, cube, sz_i, uv_sz_i=uv_sz_i)
 
                 c_piv_loc = c_piv - piv
                 c_ctr_rel = ctr - c_piv
                 r_cube = euler_xyz_matrix(c_rot)
                 w_rot_c = world_rot @ r_cube
                 w_ctr_c = world_piv + world_rot @ c_piv_loc + w_rot_c @ c_ctr_rel
-                expected_corners[cname] = _obb_corners_world(w_ctr_c, w_rot_c, raw_sz)
+                eff_sz = np.where(raw_sz <= 1e-9, 1.0, raw_sz)
+                expected_corners[cname] = _obb_corners_world(w_ctr_c, w_rot_c, eff_sz)
 
                 rel_c = c_piv_loc - fb_loc
                 cbone_name = _sanitize_ident(f"{safe_bname}_crot_{c_idx}", "bone", used_ids)
@@ -826,12 +864,123 @@ def _decompile_bedrock_geojson(
     return prog, uv_map, max_err, raw_to_safe_bone
 
 
-_MOLANG_TERM_RE = re.compile(
-    r"([+-]?\s*(?:\d+(?:\.\d+)?\s*\*\s*)*)math\.(sin|cos)\(([^()]{1,160})\)((?:\s*[*/]\s*[+-]?\d+(?:\.\d+)?)*)",
-    re.IGNORECASE,
-)
-_MUL_DIV_FACTOR_RE = re.compile(r"([*/])\s*([+-]?\d+(?:\.\d+)?)")
-_ANIM_TIME_RE = re.compile(r"\b(?:q|query|v|variable)\.anim_time\b", re.IGNORECASE)
+_ANIM_TIME_IDENTS: frozenset[str] = frozenset({
+    "q.anim_time",
+    "query.anim_time",
+    "v.anim_time",
+    "variable.anim_time",
+})
+_ARITH_TOKEN_RE = re.compile(r"\s*(?:(\d+(?:\.\d+)?|\.\d+)|([A-Za-z_][A-Za-z0-9_.]*)|([+\-*/()]))")
+_TRIG_START_RE = re.compile(r"\bmath\.(sin|cos)\s*\(", re.IGNORECASE)
+
+
+def _eval_linear_molang_expr(expr_str: str, t_val: float) -> float | None:
+    """Zero-eval bounded recursive-descent arithmetic evaluator for affine Molang sub-expressions."""
+    s = expr_str.strip()
+    if not s or len(s) > 384:
+        return None
+    tokens: list[tuple[str, float | str]] = []
+    pos = 0
+    n_chars = len(s)
+    while pos < n_chars:
+        if s[pos:].isspace():
+            break
+        m = _ARITH_TOKEN_RE.match(s, pos)
+        if m is None:
+            return None
+        num_s, ident_s, op_s = m.groups()
+        if num_s is not None:
+            tokens.append(("NUM", float(num_s)))
+        elif ident_s is not None:
+            low_id = ident_s.lower()
+            if low_id in _ANIM_TIME_IDENTS:
+                tokens.append(("NUM", float(t_val)))
+            elif low_id == "math.pi":
+                tokens.append(("NUM", 180.0))
+            else:
+                return None
+        elif op_s is not None:
+            tokens.append(("OP", op_s))
+        pos = m.end()
+        if len(tokens) > 128:
+            return None
+
+    if not tokens:
+        return None
+
+    idx = 0
+
+    def _parse_expr(depth: int) -> float | None:
+        nonlocal idx
+        if depth > 32:
+            return None
+        lhs = _parse_mul(depth + 1)
+        if lhs is None:
+            return None
+        while idx < len(tokens) and tokens[idx][0] == "OP" and tokens[idx][1] in ("+", "-"):
+            op = tokens[idx][1]
+            idx += 1
+            rhs = _parse_mul(depth + 1)
+            if rhs is None:
+                return None
+            lhs = lhs + rhs if op == "+" else lhs - rhs
+        return lhs
+
+    def _parse_mul(depth: int) -> float | None:
+        nonlocal idx
+        if depth > 32:
+            return None
+        lhs = _parse_unary(depth + 1)
+        if lhs is None:
+            return None
+        while idx < len(tokens) and tokens[idx][0] == "OP" and tokens[idx][1] in ("*", "/"):
+            op = tokens[idx][1]
+            idx += 1
+            rhs = _parse_unary(depth + 1)
+            if rhs is None:
+                return None
+            if op == "*":
+                lhs = lhs * rhs
+            else:
+                if abs(rhs) <= 1e-12:
+                    return None
+                lhs = lhs / rhs
+        return lhs
+
+    def _parse_unary(depth: int) -> float | None:
+        nonlocal idx
+        if depth > 32 or idx >= len(tokens):
+            return None
+        tok_kind, tok_val = tokens[idx]
+        if tok_kind == "OP" and tok_val in ("+", "-"):
+            idx += 1
+            sub = _parse_unary(depth + 1)
+            if sub is None:
+                return None
+            return -sub if tok_val == "-" else sub
+        return _parse_primary(depth + 1)
+
+    def _parse_primary(depth: int) -> float | None:
+        nonlocal idx
+        if depth > 32 or idx >= len(tokens):
+            return None
+        tok_kind, tok_val = tokens[idx]
+        if tok_kind == "NUM":
+            idx += 1
+            return float(tok_val)
+        if tok_kind == "OP" and tok_val == "(":
+            idx += 1
+            inner = _parse_expr(depth + 1)
+            if inner is None or idx >= len(tokens) or tokens[idx] != ("OP", ")"):
+                return None
+            idx += 1
+            return inner
+        return None
+
+    result = _parse_expr(0)
+    if result is None or idx != len(tokens) or not math.isfinite(result):
+        return None
+    return float(result)
 
 
 def _unwrap_molang_clamp(text: str) -> tuple[str, tuple[float, float] | None]:
@@ -858,17 +1007,12 @@ def _unwrap_molang_clamp(text: str) -> tuple[str, tuple[float, float] | None]:
         if not valid_parens or depth != 0 or len(commas) != 2:
             break
         arg0 = inner[: commas[0]].strip()
-        arg1 = inner[commas[0] + 1 : commas[1]].strip().replace(" ", "")
-        arg2 = inner[commas[1] + 1 :].strip().replace(" ", "")
-        try:
-            lo = float(arg1)
-            hi = float(arg2)
-        except ValueError:
-            break
-        if not (math.isfinite(lo) and math.isfinite(hi)) or lo > hi:
+        lo_val = _eval_linear_molang_expr(inner[commas[0] + 1 : commas[1]], 0.0)
+        hi_val = _eval_linear_molang_expr(inner[commas[1] + 1 :], 0.0)
+        if lo_val is None or hi_val is None or lo_val > hi_val:
             break
         cur = arg0
-        bounds = (lo, hi) if bounds is None else (max(bounds[0], lo), min(bounds[1], hi))
+        bounds = (lo_val, hi_val) if bounds is None else (max(bounds[0], lo_val), min(bounds[1], hi_val))
     return cur, bounds
 
 
@@ -887,7 +1031,7 @@ def _split_top_level_additive_terms(expr_str: str) -> list[str]:
             depth = max(0, depth - 1)
             buf.append(ch)
             prev_nonspace = ch
-        elif depth == 0 and ch in "+-" and buf and prev_nonspace not in ("", "*", "/", "("):
+        elif depth == 0 and ch in "+-" and buf and prev_nonspace not in ("", "+", "-", "*", "/", "("):
             term = "".join(buf).strip()
             if term:
                 terms.append(term)
@@ -903,57 +1047,95 @@ def _split_top_level_additive_terms(expr_str: str) -> list[str]:
     return terms
 
 
-def _sum_standalone_constant_terms(rem: str) -> float:
-    """Sum only standalone top-level numeric literal terms, ignoring variable/harmonic subterms."""
-    total = 0.0
-    for term in _split_top_level_additive_terms(rem):
-        compact = term.replace(" ", "")
-        try:
-            val = float(compact)
-            if math.isfinite(val):
-                total += val
-        except ValueError:
+def _unwrap_signed_parens(expr_str: str) -> tuple[float, str]:
+    """Strip leading unary signs and outer balanced parentheses while tracking sign."""
+    sign = 1.0
+    cur = expr_str.strip()
+    for _ in range(8):
+        if not cur:
+            break
+        if cur[0] in "+-":
+            if cur[0] == "-":
+                sign = -sign
+            cur = cur[1:].strip()
             continue
-    return total
+        if cur.startswith("(") and cur.endswith(")"):
+            depth = 0
+            wraps_all = True
+            for i, ch in enumerate(cur):
+                if ch == "(":
+                    depth += 1
+                elif ch == ")":
+                    depth -= 1
+                    if depth < 0:
+                        wraps_all = False
+                        break
+                    if depth == 0 and i < len(cur) - 1:
+                        wraps_all = False
+                        break
+            if wraps_all and depth == 0:
+                cur = cur[1:-1].strip()
+                continue
+        break
+    return sign, cur
 
 
-def _parse_molang_inside_arg(inside_arg: str) -> tuple[float, float | None, float]:
-    """Return (phase_shift_deg, freq_hz_override_or_None, sign_flip_for_sin) from trig argument."""
-    phase_deg = 0.0
-    freq_hz: float | None = None
-    sin_sign = 1.0
-    for term in _split_top_level_additive_terms(inside_arg):
-        compact = term.replace(" ", "")
-        try:
-            val = float(compact)
-            if math.isfinite(val):
-                phase_deg += val
-            continue
-        except ValueError:
-            pass
-        if _ANIM_TIME_RE.search(term) and freq_hz is None:
-            # Multiplicative angular velocity in deg/sec (Molang trig operates in degrees)
-            cleaned = _ANIM_TIME_RE.sub("1.0", term)
-            cleaned_low = cleaned.lower().replace("math.pi", "180.0")
-            parts_mul = cleaned_low.split("*")
-            speed = 1.0
-            ok = True
-            for part in parts_mul:
-                sub_div = part.split("/")
-                try:
-                    num = float(sub_div[0].replace(" ", ""))
-                    for denom_s in sub_div[1:]:
-                        d_val = float(denom_s.replace(" ", ""))
-                        num = num / d_val if abs(d_val) > 1e-9 else 0.0
-                    speed *= num
-                except ValueError:
-                    ok = False
-                    break
-            if ok and math.isfinite(speed) and abs(speed) > 1e-6:
-                if speed < 0.0:
-                    sin_sign = -1.0
-                freq_hz = round(float(np.clip(abs(speed) / 360.0, 0.05, 20.0)), 4)
-    return phase_deg, freq_hz, sin_sign
+def _flatten_additive_terms(expr_str: str, outer_sign: float = 1.0, depth: int = 0) -> list[tuple[float, str]]:
+    """Flatten nested signed additive groups into (sign, term_core) pairs without eval."""
+    sgn, core = _unwrap_signed_parens(expr_str)
+    eff_sign = outer_sign * sgn
+    if not core:
+        return []
+    parts = _split_top_level_additive_terms(core)
+    if len(parts) > 1 and depth < 4:
+        out: list[tuple[float, str]] = []
+        for p in parts:
+            out.extend(_flatten_additive_terms(p, eff_sign, depth + 1))
+        return out
+    return [(eff_sign, core)]
+
+
+def _find_balanced_trig_call(term: str) -> tuple[int, int, str, str] | None:
+    """Locate math.sin(...) or math.cos(...) with nested balanced parentheses."""
+    m = _TRIG_START_RE.search(term)
+    if m is None:
+        return None
+    trig_fn = m.group(1).lower()
+    open_idx = m.end() - 1
+    depth = 0
+    close_idx = -1
+    for i in range(open_idx, len(term)):
+        ch = term[i]
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                close_idx = i
+                break
+    if close_idx < 0 or depth != 0:
+        return None
+    inside_arg = term[open_idx + 1 : close_idx]
+    return (m.start(), close_idx + 1, trig_fn, inside_arg)
+
+
+def _parse_molang_inside_arg(inside_arg: str) -> tuple[float, float | None, float] | None:
+    """Evaluate affine inside-trig argument f(t) = speed * t + phase0 without eval."""
+    y0 = _eval_linear_molang_expr(inside_arg, 0.0)
+    y1 = _eval_linear_molang_expr(inside_arg, 1.0)
+    y2 = _eval_linear_molang_expr(inside_arg, 2.0)
+    if y0 is None or y1 is None or y2 is None:
+        return None
+    if abs((y2 - y1) - (y1 - y0)) > 1e-4:
+        return None
+    speed = y1 - y0
+    phase_deg = y0
+    if abs(speed) <= 1e-6:
+        return (phase_deg, None, 1.0)
+    sin_sign = -1.0 if speed < 0.0 else 1.0
+    eff_phase_deg = -phase_deg if speed < 0.0 else phase_deg
+    freq_hz = round(float(np.clip(abs(speed) / 360.0, 0.05, 20.0)), 4)
+    return (eff_phase_deg, freq_hz, sin_sign)
 
 
 def _parse_molang_channel_zero_eval(
@@ -962,6 +1144,9 @@ def _parse_molang_channel_zero_eval(
 ) -> tuple[str, float, float, float, float | None] | None:
     """Zero-eval bounded parser translating Bedrock/Cobblemon Molang rotation channel to TrackDecl parameters.
 
+    Supports arbitrarily nested parentheses inside trig calls (e.g.
+    ``math.sin((q.anim_time - 0.25) * 90 * 4) * 10``), unary/binary signs,
+    ``0 - math.sin(...)``, multi-harmonic expressions, and ``math.clamp(...)``.
     Returns ``(law, amp_deg, phase_offset_unit, bias_deg, freq_hz_override)`` or ``None``.
     """
     if isinstance(expr, bool) or expr is None:
@@ -971,69 +1156,68 @@ def _parse_molang_channel_zero_eval(
         if not math.isfinite(val) or abs(val) < 0.25:
             return None
         return ("hinge", 0.0, 0.0, float(np.clip(val, -180.0, 180.0)), None)
-    if not isinstance(expr, str) or len(expr) > 256:
+    if not isinstance(expr, str) or len(expr) > 512:
         return None
     raw_text = expr.strip()
     if not raw_text:
         return None
 
     text, clamp_bounds = _unwrap_molang_clamp(raw_text)
-    try:
-        const_val = float(text.replace(" ", ""))
-        if not math.isfinite(const_val):
-            return None
-        if clamp_bounds is not None:
-            const_val = float(np.clip(const_val, clamp_bounds[0], clamp_bounds[1]))
-        if abs(const_val) < 0.25:
-            return None
-        return ("hinge", 0.0, 0.0, float(np.clip(const_val, -180.0, 180.0)), None)
-    except ValueError:
-        pass
 
-    matches = list(_MOLANG_TERM_RE.finditer(text))
-    if not matches:
+    # Pure constant expression (without anim_time or trig)
+    if _TRIG_START_RE.search(text) is None:
+        v0 = _eval_linear_molang_expr(text, 0.0)
+        v1 = _eval_linear_molang_expr(text, 1.0)
+        if v0 is not None and v1 is not None and abs(v1 - v0) <= 1e-6:
+            const_val = v0
+            if clamp_bounds is not None:
+                const_val = float(np.clip(const_val, clamp_bounds[0], clamp_bounds[1]))
+            if abs(const_val) < 0.25:
+                return None
+            return ("hinge", 0.0, 0.0, float(np.clip(const_val, -180.0, 180.0)), None)
         return None
 
-    m0 = matches[0]
-    lead_str, trig_fn, inside_arg, trail_str = m0.groups()
-    lead_clean = lead_str.replace(" ", "")
-    if lead_clean in ("", "+"):
-        scale_pre = 1.0
-    elif lead_clean == "-":
-        scale_pre = -1.0
-    else:
-        scale_pre = 1.0
-        for tok in lead_clean.rstrip("*").split("*"):
-            if tok in ("", "+"):
-                continue
-            if tok == "-":
-                scale_pre *= -1.0
-            else:
-                scale_pre *= float(tok)
+    bias_total = 0.0
+    trig_candidates: list[tuple[float, float, float | None, bool]] = []
 
-    scale_post = 1.0
-    if trail_str:
-        for op_ch, num_s in _MUL_DIV_FACTOR_RE.findall(trail_str):
-            f_val = float(num_s)
-            if op_ch == "*":
-                scale_post *= f_val
-            elif abs(f_val) > 1e-9:
-                scale_post /= f_val
+    for term_sign, term_core in _flatten_additive_terms(text):
+        trig_hit = _find_balanced_trig_call(term_core)
+        if trig_hit is None:
+            c0 = _eval_linear_molang_expr(term_core, 0.0)
+            c1 = _eval_linear_molang_expr(term_core, 1.0)
+            if c0 is not None and c1 is not None and abs(c1 - c0) <= 1e-6:
+                bias_total += term_sign * c0
+            continue
 
-    arg_phase_deg, freq_override, sin_sign = _parse_molang_inside_arg(inside_arg)
-    is_cos = trig_fn.lower() == "cos"
-    amp_raw = scale_pre * scale_post * (1.0 if is_cos else sin_sign)
+        t_start, t_end, trig_fn, inside_arg = trig_hit
+        replaced = term_core[:t_start] + "(1.0)" + term_core[t_end:]
+        s0 = _eval_linear_molang_expr(replaced, 0.0)
+        s1 = _eval_linear_molang_expr(replaced, 1.0)
+        if s0 is None or s1 is None or abs(s1 - s0) > 1e-6:
+            continue
+        scale = term_sign * s0
+        parsed_in = _parse_molang_inside_arg(inside_arg)
+        if parsed_in is None:
+            continue
+        arg_phase_deg, freq_override, sin_sign = parsed_in
+        is_cos = trig_fn == "cos"
+        if freq_override is None:
+            bias_total += scale * (math.cos(math.radians(arg_phase_deg)) if is_cos else math.sin(math.radians(arg_phase_deg)))
+        else:
+            amp_i = scale * (1.0 if is_cos else sin_sign)
+            trig_candidates.append((amp_i, arg_phase_deg, freq_override, is_cos))
+
+    if not trig_candidates:
+        if abs(bias_total) >= 0.25:
+            if clamp_bounds is not None:
+                bias_total = float(np.clip(bias_total, clamp_bounds[0], clamp_bounds[1]))
+            if abs(bias_total) >= 0.25:
+                return ("hinge", 0.0, 0.0, round(float(np.clip(bias_total, -180.0, 180.0)), 4), None)
+        return None
+
+    amp_raw, arg_phase_deg, freq_override, is_cos = max(trig_candidates, key=lambda item: abs(item[0]))
     amp = float(np.clip(amp_raw, -180.0, 180.0))
-
-    # Strip ALL matched trig terms before summing standalone constant bias terms
-    rem_chunks: list[str] = []
-    cursor = 0
-    for mt in matches:
-        rem_chunks.append(text[cursor : mt.start()])
-        cursor = mt.end()
-    rem_chunks.append(text[cursor:])
-    remainder = " ".join(rem_chunks).strip()
-    bias = float(np.clip(_sum_standalone_constant_terms(remainder), -180.0, 180.0))
+    bias = float(np.clip(bias_total, -180.0, 180.0))
 
     if clamp_bounds is not None:
         c_lo, c_hi = clamp_bounds
@@ -1054,13 +1238,64 @@ def _parse_molang_channel_zero_eval(
     return (wf, round(amp, 4), round(phase_offset, 4), round(bias, 4), freq_override)
 
 
+def _unwrap_keyframe_vec3(raw: Any) -> list[Any] | None:
+    """Unwrap 3-component vector from plain list or Blockbench/Cobblemon 1-element nested list [[x, y, z]]."""
+    cur = raw
+    for _ in range(3):
+        if isinstance(cur, (list, tuple)) and len(cur) == 1 and isinstance(cur[0], (list, tuple)):
+            cur = cur[0]
+        else:
+            break
+    if isinstance(cur, (list, tuple)) and len(cur) == 3:
+        return [cur[0], cur[1], cur[2]]
+    return None
+
+
+def _extract_keyframe_vec3_entries(k_val: Any) -> list[list[Any]]:
+    """Extract 3-channel keyframe vector(s) from plain vectors, Catmull-Rom pre/post dicts, or GeckoLib vector dicts."""
+    if isinstance(k_val, dict):
+        pre_v = _unwrap_keyframe_vec3(k_val.get("pre")) if "pre" in k_val else None
+        post_v = _unwrap_keyframe_vec3(k_val.get("post")) if "post" in k_val else None
+        if pre_v is not None and post_v is not None:
+            return [pre_v, post_v] if pre_v != post_v else [post_v]
+        if post_v is not None:
+            return [post_v]
+        if pre_v is not None:
+            return [pre_v]
+        if "vector" in k_val:
+            vec_v = _unwrap_keyframe_vec3(k_val.get("vector"))
+            if vec_v is not None:
+                return [vec_v]
+        return []
+    plain = _unwrap_keyframe_vec3(k_val)
+    return [plain] if plain is not None else []
+
+
+def _try_numeric_deg(val: Any) -> float | None:
+    if isinstance(val, bool) or val is None:
+        return None
+    if isinstance(val, (int, float)):
+        f = float(val)
+        return f if math.isfinite(f) else None
+    if isinstance(val, str):
+        s = val.strip().replace(" ", "")
+        if not s:
+            return None
+        try:
+            f = float(s)
+            return f if math.isfinite(f) else None
+        except ValueError:
+            return None
+    return None
+
+
 def decompile_bedrock_animation_to_behavior(
     anim_doc: dict[str, Any],
     program: Program,
     *,
     raw_to_safe_bone: dict[str, str] | None = None,
 ) -> BehaviorDecl:
-    """Convert Bedrock / Cobblemon .animation.json into a validated @behavior BehaviorDecl (zero eval)."""
+    """Convert Bedrock / Cobblemon / GeckoLib .animation.json into a validated @behavior BehaviorDecl (zero eval)."""
     anims = anim_doc.get("animations")
     if not isinstance(anims, dict) or not anims:
         raise ValueError("Bedrock .animation.json missing non-empty 'animations' dictionary")
@@ -1099,7 +1334,8 @@ def decompile_bedrock_animation_to_behavior(
         short_name = str(raw_clip_name).split(".")[-1]
         cand_short = f"{short_name}_clip" if short_name in used_clip_ids else short_name
         clip_name = _sanitize_ident(cand_short, "clip", used_clip_ids)
-        loop_val = bool(spec.get("loop", True))
+        loop_raw = spec.get("loop", True)
+        loop_val = loop_raw in (True, "loop", "hold_on_last_frame")
         dur = float(spec.get("animation_length", 1.5))
         dur = float(np.clip(dur if dur > 0 else 1.5, 0.1, 60.0))
         base_freq_hz = round(float(np.clip(1.0 / dur, 0.05, 20.0)), 4)
@@ -1112,9 +1348,10 @@ def decompile_bedrock_animation_to_behavior(
                 if target_b is None or target_b == program.root.name or not isinstance(channels, dict):
                     continue
                 rot_ch = channels.get("rotation")
-                if isinstance(rot_ch, (list, tuple)) and len(rot_ch) == 3:
+                rot_vec_direct = _unwrap_keyframe_vec3(rot_ch)
+                if rot_vec_direct is not None:
                     for ax_idx, ax_name in enumerate(("x", "y", "z")):
-                        parsed = _parse_molang_channel_zero_eval(rot_ch[ax_idx], target_b)
+                        parsed = _parse_molang_channel_zero_eval(rot_vec_direct[ax_idx], target_b)
                         if parsed is not None:
                             wf, amp, ph, bs, freq_ov = parsed
                             tracks.append(
@@ -1129,46 +1366,97 @@ def decompile_bedrock_animation_to_behavior(
                                 )
                             )
                 elif isinstance(rot_ch, dict) and rot_ch:
-                    kf_rows: list[tuple[float, list[float]]] = []
+                    raw_kf_rows: list[tuple[float, int, list[Any]]] = []
+                    seq_idx = 0
                     for t_str, k_val in rot_ch.items():
                         try:
                             t_num = float(t_str)
                         except (TypeError, ValueError):
                             continue
-                        vec_raw = k_val.get("post", k_val.get("lerp_mode")) if isinstance(k_val, dict) else k_val
-                        if isinstance(vec_raw, (list, tuple)) and len(vec_raw) == 3:
-                            try:
-                                kf_rows.append((t_num, [float(vec_raw[0]), float(vec_raw[1]), float(vec_raw[2])]))
-                            except (TypeError, ValueError):
-                                continue
-                    kf_rows.sort(key=lambda item: item[0])
-                    if len(kf_rows) >= 2:
+                        if not math.isfinite(t_num):
+                            continue
+                        for vec_entry in _extract_keyframe_vec3_entries(k_val):
+                            raw_kf_rows.append((t_num, seq_idx, vec_entry))
+                            seq_idx += 1
+                    raw_kf_rows.sort(key=lambda item: (item[0], item[1]))
+                    if raw_kf_rows:
                         for ax_idx, ax_name in enumerate(("x", "y", "z")):
-                            vals = [row[1][ax_idx] for row in kf_rows]
-                            vmin, vmax = min(vals), max(vals)
-                            span = vmax - vmin
-                            if span < 0.25:
-                                continue
-                            v_start, v_end = vals[0], vals[-1]
-                            if abs(v_start - vmin) < 0.2 * span and abs(v_end - vmin) < 0.2 * span:
-                                wf = "hinge"
-                                bs = float(np.clip(vmin, -90.0, 90.0))
-                                amp = float(np.clip(span, -120.0, 120.0))
-                            else:
-                                wf = "flap" if "wing" in target_b.lower() else "wave"
-                                bs = float(np.clip(0.5 * (vmax + vmin), -90.0, 90.0))
-                                amp = float(np.clip(0.5 * span, -120.0, 120.0))
-                            tracks.append(
-                                TrackDecl(
-                                    bone=target_b,
-                                    law=wf,
-                                    axis=ax_name,
-                                    amp_deg=round(amp, 4),
-                                    freq_hz=base_freq_hz,
-                                    phase_deg=0.0,
-                                    bias_deg=round(bs, 4),
+                            ax_items = [row[2][ax_idx] for row in raw_kf_rows]
+                            num_vals: list[float] = []
+                            molang_parsed_list: list[tuple[str, float, float, float, float | None]] = []
+                            for cell in ax_items:
+                                num_v = _try_numeric_deg(cell)
+                                if num_v is not None:
+                                    num_vals.append(num_v)
+                                else:
+                                    p_mol = _parse_molang_channel_zero_eval(cell, target_b)
+                                    if p_mol is not None:
+                                        molang_parsed_list.append(p_mol)
+
+                            if molang_parsed_list:
+                                wf, amp, ph, bs, freq_ov = max(
+                                    molang_parsed_list, key=lambda p: (abs(p[1]), abs(p[3]))
                                 )
-                            )
+                                tracks.append(
+                                    TrackDecl(
+                                        bone=target_b,
+                                        law=wf,
+                                        axis=ax_name,
+                                        amp_deg=float(np.clip(amp, -120.0, 120.0)),
+                                        freq_hz=freq_ov if freq_ov is not None else base_freq_hz,
+                                        phase_deg=round(ph * 360.0, 2),
+                                        bias_deg=float(np.clip(bs, -90.0, 90.0)),
+                                    )
+                                )
+                            elif len(num_vals) >= 2:
+                                vmin, vmax = min(num_vals), max(num_vals)
+                                span = vmax - vmin
+                                if span < 0.25:
+                                    if abs(num_vals[0]) >= 0.25:
+                                        tracks.append(
+                                            TrackDecl(
+                                                bone=target_b,
+                                                law="hinge",
+                                                axis=ax_name,
+                                                amp_deg=0.0,
+                                                freq_hz=base_freq_hz,
+                                                phase_deg=0.0,
+                                                bias_deg=round(float(np.clip(num_vals[0], -90.0, 90.0)), 4),
+                                            )
+                                        )
+                                    continue
+                                v_start, v_end = num_vals[0], num_vals[-1]
+                                if abs(v_start - vmin) < 0.2 * span and abs(v_end - vmin) < 0.2 * span:
+                                    wf = "hinge"
+                                    bs = float(np.clip(vmin, -90.0, 90.0))
+                                    amp = float(np.clip(span, -120.0, 120.0))
+                                else:
+                                    wf = "flap" if "wing" in target_b.lower() else "wave"
+                                    bs = float(np.clip(0.5 * (vmax + vmin), -90.0, 90.0))
+                                    amp = float(np.clip(0.5 * span, -120.0, 120.0))
+                                tracks.append(
+                                    TrackDecl(
+                                        bone=target_b,
+                                        law=wf,
+                                        axis=ax_name,
+                                        amp_deg=round(amp, 4),
+                                        freq_hz=base_freq_hz,
+                                        phase_deg=0.0,
+                                        bias_deg=round(bs, 4),
+                                    )
+                                )
+                            elif len(num_vals) == 1 and abs(num_vals[0]) >= 0.25:
+                                tracks.append(
+                                    TrackDecl(
+                                        bone=target_b,
+                                        law="hinge",
+                                        axis=ax_name,
+                                        amp_deg=0.0,
+                                        freq_hz=base_freq_hz,
+                                        phase_deg=0.0,
+                                        bias_deg=round(float(np.clip(num_vals[0], -90.0, 90.0)), 4),
+                                    )
+                                )
 
         if not tracks:
             non_root_bones = sorted(valid_bones - {program.root.name})
@@ -1189,6 +1477,81 @@ def decompile_bedrock_animation_to_behavior(
     if not clips:
         raise ValueError("No valid animation clips found in .animation.json")
     return BehaviorDecl(clips=tuple(clips))
+
+
+def decompile_bbmodel_animations_to_behavior(
+    doc: dict[str, Any],
+    program: Program,
+    *,
+    group_uuid_to_safe_bone: dict[str, str] | None = None,
+) -> BehaviorDecl | None:
+    """Convert Blockbench 5.0 .bbmodel ``animations`` list into a validated @behavior BehaviorDecl (zero eval)."""
+    anims_list = doc.get("animations")
+    if not isinstance(anims_list, list) or not anims_list:
+        return None
+
+    bed_anims: dict[str, Any] = {}
+    raw_to_safe: dict[str, str] = dict(group_uuid_to_safe_bone or {})
+
+    for idx, anim in enumerate(anims_list):
+        if not isinstance(anim, dict):
+            continue
+        aname = str(anim.get("name") or f"clip_{idx}")
+        loop_mode = anim.get("loop", "loop")
+        is_loop = loop_mode in (True, "loop", "hold")
+        length_s = float(anim.get("length", 1.5) or 1.5)
+        animators = anim.get("animators") or {}
+        bones_dict: dict[str, dict[str, Any]] = {}
+        if isinstance(animators, dict):
+            for anim_key, animator in animators.items():
+                if not isinstance(animator, dict):
+                    continue
+                bone_key = raw_to_safe.get(str(anim_key)) or str(animator.get("name") or anim_key)
+                kfs = animator.get("keyframes") or []
+                if not isinstance(kfs, list):
+                    continue
+                rot_timeline: dict[str, Any] = {}
+                for kf in kfs:
+                    if not isinstance(kf, dict) or kf.get("channel") != "rotation":
+                        continue
+                    t_key = f"{float(kf.get('time', 0.0)):.6f}"
+                    dps = kf.get("data_points") or []
+                    if not isinstance(dps, list) or not dps or not isinstance(dps[0], dict):
+                        continue
+                    vecs: list[list[Any]] = []
+                    for dp in dps[:2]:
+                        if isinstance(dp, dict):
+                            vx = dp.get("x", 0.0)
+                            vy = dp.get("y", 0.0)
+                            vz = dp.get("z", 0.0)
+                            nx, ny, nz = _try_numeric_deg(vx), _try_numeric_deg(vy), _try_numeric_deg(vz)
+                            vecs.append([
+                                nx if nx is not None else vx,
+                                ny if ny is not None else vy,
+                                nz if nz is not None else vz,
+                            ])
+                    if len(vecs) == 2:
+                        rot_timeline[t_key] = {"pre": vecs[0], "post": vecs[1], "lerp_mode": str(kf.get("interpolation", "linear"))}
+                    elif len(vecs) == 1:
+                        rot_timeline[t_key] = vecs[0]
+                if rot_timeline:
+                    bones_dict[bone_key] = {"rotation": rot_timeline}
+        bed_anims[aname] = {
+            "loop": is_loop,
+            "animation_length": length_s,
+            "bones": bones_dict,
+        }
+
+    if not bed_anims:
+        return None
+    try:
+        return decompile_bedrock_animation_to_behavior(
+            {"animations": bed_anims},
+            program,
+            raw_to_safe_bone=raw_to_safe,
+        )
+    except ValueError:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -1278,6 +1641,8 @@ def infer_material_posterior(
         for face in FACES:
             uv_rect = uv_map[box.name].get(face)
             if not uv_rect:
+                continue
+            if abs(float(uv_rect[2]) - float(uv_rect[0])) < 1e-6 or abs(float(uv_rect[3]) - float(uv_rect[1])) < 1e-6:
                 continue
             x0 = int(np.clip(min(uv_rect[0], uv_rect[2]), 0, w_img - 1))
             x1 = int(np.clip(math.ceil(max(uv_rect[0], uv_rect[2])), x0 + 1, w_img))
@@ -1562,3 +1927,121 @@ def ingest_external_asset(
         license_track=resolved_track,
         commercial_weights_eligible=(resolved_track == "clean_room_permissive"),
     )
+
+
+def build_quarantined_research_nc_dataset(
+    assets: Sequence[dict[str, Any]],
+    *,
+    output_dir: Path | str | None = None,
+    upgrade_with_artist_loop: bool = False,
+    seed: int = 404,
+) -> dict[str, Any]:
+    """Ingest, verify, and package external CC-BY-NC (e.g. Cobblemon) assets in a quarantined split.
+
+    Enforces ADR 0003 & ADR 0006 non-commercial quarantine rules:
+    - Rejects any Mojang, proprietary, or unattributed CC-BY-NC asset via ``LicenseGateError``.
+    - Forces all output splits under ``research_nc/`` (never ``train``/``val``/``test_unseen``).
+    - Marks the shard ``commercial_weights_eligible=False`` so Apache-2.0 commercial checkpoints
+      cannot accidentally consume CC-BY-NC supervision.
+    """
+    from synccraft.audit.sync_audit import audit_scene
+    from synccraft.dsl.parser import format_program
+
+    if not assets:
+        raise ValueError("build_quarantined_research_nc_dataset requires at least one asset specification")
+
+    rows: list[dict[str, Any]] = []
+    seen_licenses: set[str] = set()
+
+    for idx, spec in enumerate(assets):
+        prov_raw = spec.get("provenance")
+        if isinstance(prov_raw, AssetProvenance):
+            prov = prov_raw
+        elif isinstance(prov_raw, dict):
+            prov = AssetProvenance(
+                asset_id=str(prov_raw.get("asset_id", "")),
+                source_url=str(prov_raw.get("source_url", "")),
+                author=str(prov_raw.get("author", "")),
+                license_spdx=str(prov_raw.get("license_spdx", "")),
+                attribution_notice=str(prov_raw.get("attribution_notice", "")),
+            )
+        else:
+            raise LicenseGateError(f"Asset index {idx} missing valid AssetProvenance")
+
+        rec = ingest_external_asset(
+            spec["payload"],
+            str(spec.get("format_kind", "bedrock_geojson")),
+            prov,
+            atlas_png=spec.get("atlas_png"),
+            labpbr_n_png=spec.get("labpbr_n_png"),
+            labpbr_s_png=spec.get("labpbr_s_png"),
+            animation_payload=spec.get("animation_payload"),
+            license_policy="research_nc",
+            seed=seed + idx * 17,
+        )
+        seen_licenses.add(prov.license_spdx)
+
+        sc = compile_geometry(rec.program)
+        static_aud = audit_scene(sc, enforce_physical_contact=False)
+        raw_split = str(spec.get("split", "train")).strip().strip("/")
+        if raw_split.startswith("research_nc/"):
+            quarantined_split = raw_split
+        else:
+            quarantined_split = f"research_nc/{raw_split}"
+
+        upgraded_dsl: str | None = None
+        if upgrade_with_artist_loop:
+            from synccraft.world.artist_loop import run_looped_artist_enhancement
+
+            loop_res = run_looped_artist_enhancement(rec.program, max_iterations=4)
+            upgraded_dsl = str(loop_res["final_program_dsl"])
+
+        row: dict[str, Any] = {
+            "sample_id": f"research_nc_{prov.asset_id}",
+            "asset_id": prov.asset_id,
+            "family": str(spec.get("family", prov.asset_id)),
+            "split": quarantined_split,
+            "license_spdx": prov.license_spdx,
+            "license_track": "research_nc",
+            "commercial_weights_eligible": False,
+            "source_url": prov.source_url,
+            "author": prov.author,
+            "attribution_notice": prov.attribution_notice,
+            "format_kind": rec.format_kind,
+            "vertex_reconstruction_error": round(float(rec.vertex_reconstruction_error), 8),
+            "box_count": len(sc.boxes),
+            "bone_count": len(sc.bones),
+            "locator_count": len(sc.locators),
+            "clip_count": len(rec.program.behavior.clips) if rec.program.behavior is not None else 0,
+            "static_sat_collision_free": len(static_aud["collision_pairs"]) == 0,
+            "identifiability_score": round(float(rec.identifiability_score), 4),
+            "dominant_material_family": rec.material_hypotheses[0].spec.family,
+            "program_dsl": format_program(rec.program),
+        }
+        if upgraded_dsl is not None:
+            row["upgraded_program_dsl"] = upgraded_dsl
+        rows.append(row)
+
+    manifest: dict[str, Any] = {
+        "schema_version": "synccraft.research_nc_quarantine.v3_1",
+        "license_quarantine": "research_nc",
+        "commercial_weights_eligible": False,
+        "total_rows": len(rows),
+        "spdx_licenses": sorted(seen_licenses),
+        "rows": rows,
+    }
+
+    if output_dir is not None:
+        q_dir = Path(output_dir) / "research_nc"
+        q_dir.mkdir(parents=True, exist_ok=True)
+        jsonl_path = q_dir / "quarantined_assets_v3_1.jsonl"
+        manifest_path = q_dir / "quarantine_manifest.json"
+        jsonl_path.write_text(
+            "\n".join(json.dumps(r, sort_keys=True) for r in rows) + "\n",
+            encoding="utf-8",
+        )
+        manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        manifest["jsonl_path"] = str(jsonl_path)
+        manifest["manifest_path"] = str(manifest_path)
+
+    return manifest

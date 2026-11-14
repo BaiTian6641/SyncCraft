@@ -72,7 +72,9 @@ from synccraft.world import (
     action_from_dict,
     analyze_artist_project,
     build_progressive_from_scratch_trajectory,
+    build_quarantined_research_nc_dataset,
     decompile_bedrock_animation_to_behavior,
+    export_artist_project_bundle,
     ingest_external_asset,
     run_looped_artist_enhancement,
     step_world,
@@ -870,6 +872,359 @@ class TestAdversarialRegressionGuardsV31(unittest.TestCase):
         assert upgraded.behavior is not None
         self.assertTrue(audit_scene(up_sc, enforce_physical_contact=True)["passed"])
         self.assertTrue(audit_behavior_clip(upgraded, upgraded.behavior.clips[0].name, num_frames=12)["passed"])
+
+
+class TestCobblemonRealWorldIdiomsAndClosedLoopRoundtrip(unittest.TestCase):
+    """Verify real-world Cobblemon (.geo.json / .animation.json) idioms, CC-BY-NC quarantine builder, and roundtrip export."""
+
+    def test_real_world_cobblemon_nested_parens_molang_catmullrom_and_timestamped_molang_keyframes(self) -> None:
+        skel_prog = validate_program(
+            Program(
+                Meta("entity", "bedrock_entity", 16),
+                [Palette("mat", (0.6, 0.1, 40.0), 4)],
+                Bone(
+                    "body_root",
+                    items=[
+                        Box("body_bx", (6, 6, 8), "mat"),
+                        Bone("tail_1", attach=Attach("body_bx", (0, 0, -1), (0, 0, 1)), items=[Box("tail_bx", (2, 2, 6), "mat")]),
+                        Bone("wing_l", attach=Attach("body_bx", (1, 0, 0), (-1, 0, 0)), items=[Box("wing_bx", (6, 1, 4), "mat")]),
+                        Bone("ear_r", attach=Attach("body_bx", (-1, 1, 0), (1, -1, 0)), items=[Box("ear_bx", (1, 3, 2), "mat")]),
+                        Bone("crest", attach=Attach("body_bx", (0, 1, 0), (0, -1, 0)), items=[Box("crest_bx", (1, 3, 3), "mat")]),
+                        Bone("jaw", attach=Attach("body_bx", (0, -1, 1), (0, 1, -1)), items=[Box("jaw_bx", (3, 1, 3), "mat")]),
+                    ],
+                ),
+            )
+        )
+        anim_payload = {
+            "format_version": "1.8.0",
+            "animations": {
+                "animation.cobble_creature.air_idle": {
+                    "loop": True,
+                    "animation_length": 2.0,
+                    "bones": {
+                        "tail_1": {
+                            "rotation": [
+                                "math.sin((q.anim_time - 0.25) * 90 * 4) * 10",
+                                "0 - math.sin((query.anim_time + 0.125) * 360) * 8",
+                                "-(4 + math.cos(q.anim_time * 180) * -6)",
+                            ]
+                        },
+                        "wing_l": {
+                            "rotation": {
+                                "0.0": {"pre": [0, 0, 0], "post": [[18, 0, -6]], "lerp_mode": "catmullrom"},
+                                "1.0": {"pre": [[18, 0, -6]], "post": [-14, 0, 8], "lerp_mode": "catmullrom"},
+                                "2.0": {"pre": [0, 0, 0], "lerp_mode": "catmullrom"},
+                            }
+                        },
+                        "ear_r": {
+                            "rotation": {
+                                "0.0": ["math.sin((q.anim_time - 0.2) * 360) * 12", 0, "math.sin(q.anim_time * 180) * -5"],
+                            }
+                        },
+                        "crest": {
+                            "rotation": {
+                                "0.0": {"vector": [0, 0, 7.5]},
+                            }
+                        },
+                        "jaw": {
+                            "rotation": [12.5, 0, 0],
+                        },
+                    },
+                }
+            },
+        }
+        beh = decompile_bedrock_animation_to_behavior(anim_payload, skel_prog)
+        self.assertIsNotNone(beh)
+        assert beh is not None
+        tracks = {(t.bone, t.axis): t for t in beh.clips[0].tracks}
+
+        # 1. Nested-paren Molang: math.sin((t - 0.25) * 360) * 10 -> freq=1.0Hz, phase=270 deg (-90 mod 360), amp=10
+        t_tail_x = tracks[("tail_1", "x")]
+        self.assertAlmostEqual(t_tail_x.freq_hz, 1.0, places=5)
+        self.assertAlmostEqual(t_tail_x.phase_deg, 270.0, places=4)
+        self.assertAlmostEqual(t_tail_x.amp_deg, 10.0, places=5)
+
+        # 2. Leading 0 - math.sin((t + 0.125) * 360) * 8 -> negated amplitude (-8.0), freq=1.0Hz, phase=45 deg
+        t_tail_y = tracks[("tail_1", "y")]
+        self.assertAlmostEqual(t_tail_y.freq_hz, 1.0, places=5)
+        self.assertAlmostEqual(t_tail_y.phase_deg, 45.0, places=4)
+        self.assertAlmostEqual(t_tail_y.amp_deg, -8.0, places=5)
+
+        # 3. Signed outer parens + negative trailing multiplier: -(4 + cos(180*t)*-6) = -4 + 6*cos(180*t)
+        t_tail_z = tracks[("tail_1", "z")]
+        self.assertAlmostEqual(t_tail_z.bias_deg, -4.0, places=5)
+        self.assertAlmostEqual(t_tail_z.freq_hz, 0.5, places=5)
+        self.assertAlmostEqual(t_tail_z.amp_deg, 6.0, places=5)
+
+        # 4. Catmull-Rom wrapped-post [[18, 0, -6]] + pre-only final keyframe
+        self.assertIn(("wing_l", "x"), tracks)
+        self.assertIn(("wing_l", "z"), tracks)
+        self.assertGreater(abs(tracks[("wing_l", "x")].amp_deg), 10.0)
+
+        # 5. Timestamped Molang keyframe dict {"0.0": ["math.sin((q.anim_time - 0.2) * 360) * 12", ...]}
+        t_ear_x = tracks[("ear_r", "x")]
+        self.assertAlmostEqual(t_ear_x.freq_hz, 1.0, places=5)
+        self.assertAlmostEqual(t_ear_x.amp_deg, 12.0, places=5)
+        t_ear_z = tracks[("ear_r", "z")]
+        self.assertAlmostEqual(t_ear_z.amp_deg, -5.0, places=5)
+
+        # 6. GeckoLib {"vector": ...} single keyframe & constant pose vector
+        self.assertAlmostEqual(tracks[("crest", "z")].bias_deg, 7.5, places=5)
+        self.assertAlmostEqual(tracks[("jaw", "x")].bias_deg, 12.5, places=5)
+
+    def test_planar_zero_thickness_cobblemon_cubes_preserve_box_uv_strips_and_vertex_fidelity(self) -> None:
+        import io
+        from PIL import Image
+
+        atlas_rgba = np.zeros((32, 32, 4), dtype=np.uint8)
+        # Distinct teal pigment on the exact planar fin strip [u=0..12, v=0..8] for size=[0, 8, 12] at uv=[0, 0]
+        atlas_rgba[0:8, 0:24] = np.array([30, 195, 175, 255], dtype=np.uint8)
+        atlas_rgba[8:32, :] = np.array([180, 70, 50, 255], dtype=np.uint8)
+        buf = io.BytesIO()
+        Image.fromarray(atlas_rgba, mode="RGBA").save(buf, format="PNG")
+        atlas_png = buf.getvalue()
+
+        geo_planar = {
+            "format_version": "1.12.0",
+            "minecraft:geometry": [
+                {
+                    "description": {"identifier": "geometry.cobble.finling", "texture_width": 32, "texture_height": 32},
+                    "bones": [
+                        {
+                            "name": "body",
+                            "pivot": [0, 6, 0],
+                            "cubes": [
+                                {"origin": [-3, 3, -4], "size": [6, 6, 8], "uv": [0, 12]},
+                                {"origin": [0, 9, -6], "size": [0, 8, 12], "uv": [0, 0]},
+                                {"origin": [-4, 9, 4], "size": [8, 6, 0], "uv": [8, 12]},
+                            ],
+                        }
+                    ],
+                }
+            ],
+        }
+        prov = AssetProvenance(
+            asset_id="cobble_finling",
+            source_url="https://gitlab.com/cable-mc/cobblemon-assets-example/finling",
+            author="CobbleContributor",
+            license_spdx="CC-BY-NC-4.0",
+            attribution_notice="CC-BY-NC-4.0 CobbleContributor",
+        )
+        rec = ingest_external_asset(
+            geo_planar,
+            "bedrock_geojson",
+            prov,
+            atlas_png=atlas_png,
+            license_policy="research_nc",
+        )
+        # Valid planar 0-thickness quads achieve < 1e-9 corner reconstruction error (not 0.5u false positive!)
+        self.assertLess(rec.vertex_reconstruction_error, 1e-9)
+        sc = compile_geometry(rec.program)
+        # Midplane center of origin=[0, 9, -6], size=[0, 8, 12] is strictly [0.0, 13.0, 0.0]
+        fin_box = sc.boxes[1]
+        np.testing.assert_allclose(fin_box.center, np.array([0.0, 13.0, 0.0]), atol=1e-9)
+
+        # Conversely, non-zero fractional cube size [2.4, 6, 8] MUST honestly report ~0.2u quantization error
+        geo_frac = {
+            "format_version": "1.12.0",
+            "minecraft:geometry": [
+                {
+                    "description": {"identifier": "geometry.cobble.frac", "texture_width": 32, "texture_height": 32},
+                    "bones": [{"name": "body", "pivot": [0, 6, 0], "cubes": [{"origin": [-1.2, 3, -4], "size": [2.4, 6, 8], "uv": [0, 0]}]}],
+                }
+            ],
+        }
+        rec_frac = ingest_external_asset(geo_frac, "bedrock_geojson", prov, license_policy="research_nc")
+        self.assertAlmostEqual(rec_frac.vertex_reconstruction_error, 0.2, places=5)
+
+    def test_build_quarantined_research_nc_dataset_on_cobblemon_entity_and_block_assets(self) -> None:
+        creature_geo = {
+            "format_version": "1.12.0",
+            "minecraft:geometry": [
+                {
+                    "description": {"identifier": "geometry.cobblemon.mossback", "texture_width": 64, "texture_height": 64},
+                    "bones": [
+                        {
+                            "name": "torso",
+                            "pivot": [0, 7, 0],
+                            "cubes": [{"origin": [-4, 3, -5], "size": [8, 7, 10], "uv": [0, 0]}],
+                            "locators": {"seat_1": [0, 10, 0], "target": [0, 6, -5]},
+                        },
+                        {
+                            "name": "head",
+                            "parent": "torso",
+                            "pivot": [0, 9, -5],
+                            "cubes": [
+                                {"origin": [-3, 7, -10], "size": [6, 5, 5], "uv": [0, 18]},
+                                {"origin": [0, 12, -9], "size": [0, 4, 5], "uv": [24, 18]},
+                            ],
+                        },
+                    ],
+                }
+            ],
+        }
+        creature_anim = {
+            "format_version": "1.8.0",
+            "animations": {
+                "animation.mossback.ground_idle": {
+                    "loop": True,
+                    "animation_length": 2.0,
+                    "bones": {
+                        "head": {"rotation": ["math.sin((q.anim_time - 0.25) * 90 * 2) * 6", 0, 0]}
+                    },
+                }
+            },
+        }
+        block_geo = {
+            "format_version": "1.12.0",
+            "minecraft:geometry": [
+                {
+                    "description": {"identifier": "geometry.cobblemon.healing_machine", "texture_width": 64, "texture_height": 64},
+                    "bones": [
+                        {
+                            "name": "pedestal",
+                            "pivot": [0, 0, 0],
+                            "cubes": [
+                                {"origin": [-7, 0, -7], "size": [14, 10, 14], "uv": [0, 0]},
+                                {"origin": [-5, 10, -5], "size": [10, 3, 10], "uv": [0, 24]},
+                            ],
+                            "locators": {"ball_slot_1": [-2, 13, -2], "ball_slot_2": [2, 13, -2]},
+                        }
+                    ],
+                }
+            ],
+        }
+        items = [
+            {
+                "payload": creature_geo,
+                "format_kind": "bedrock_geojson",
+                "animation_payload": creature_anim,
+                "provenance": AssetProvenance(
+                    "cobblemon_mossback",
+                    "https://gitlab.com/cable-mc/cobblemon/-/blob/main/common/src/main/resources/assets/cobblemon/bedrock/pokemon/models/mossback.geo.json",
+                    "Cobblemon Team",
+                    "CC-BY-NC-4.0",
+                    "Cobblemon Assets (CC-BY-NC-4.0) - Non-Commercial Research Quarantine",
+                ),
+            },
+            {
+                "payload": block_geo,
+                "format_kind": "bedrock_geojson",
+                "provenance": AssetProvenance(
+                    "cobblemon_healing_machine",
+                    "https://gitlab.com/cable-mc/cobblemon/-/blob/main/common/src/main/resources/assets/cobblemon/bedrock/block/models/healing_machine.geo.json",
+                    "Cobblemon Team",
+                    "CC-BY-NC-4.0",
+                    "Cobblemon Assets (CC-BY-NC-4.0) - Non-Commercial Research Quarantine",
+                ),
+            },
+        ]
+
+        # Must reject Mojang or unattributed CC-BY-NC records in quarantined builder
+        with self.assertRaises(LicenseGateError):
+            build_quarantined_research_nc_dataset(
+                [
+                    {
+                        "payload": creature_geo,
+                        "format_kind": "bedrock_geojson",
+                        "provenance": AssetProvenance(
+                            "bad_no_attr",
+                            "https://example.org/model",
+                            "Author",
+                            "CC-BY-NC-4.0",
+                            "",
+                        ),
+                    }
+                ]
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            bundle = build_quarantined_research_nc_dataset(items, output_dir=tmp)
+            self.assertEqual(bundle["total_rows"], 2)
+            self.assertFalse(bundle["commercial_weights_eligible"])
+            self.assertTrue((Path(tmp) / "research_nc" / "quarantined_assets_v3_1.jsonl").is_file())
+            self.assertTrue((Path(tmp) / "research_nc" / "quarantine_manifest.json").is_file())
+            for r in bundle["rows"]:
+                self.assertTrue(r["split"].startswith("research_nc/"))
+                self.assertFalse(r["commercial_weights_eligible"])
+                self.assertLess(r["vertex_reconstruction_error"], 1e-9)
+
+    def test_closed_loop_artist_roundtrip_export_bedrock_geckolib_and_animated_bbmodel(self) -> None:
+        # Import a Cobblemon-style Bedrock entity -> run closed-loop artist enhancement -> export & roundtrip all 3 formats
+        raw_geo = {
+            "format_version": "1.12.0",
+            "minecraft:geometry": [
+                {
+                    "description": {"identifier": "geometry.artist.drakelet", "texture_width": 64, "texture_height": 64},
+                    "bones": [
+                        {
+                            "name": "torso",
+                            "pivot": [0, 9, 0],
+                            "cubes": [{"origin": [-4, 6, -5], "size": [8, 6, 10], "uv": [0, 0]}],
+                            "locators": {"rider_seat": [0, 12, 0]},
+                        },
+                        {
+                            "name": "head",
+                            "parent": "torso",
+                            "pivot": [0, 10, -5],
+                            "cubes": [{"origin": [-3, 8, -10], "size": [6, 5, 5], "uv": [0, 16]}],
+                        },
+                        {
+                            "name": "leg_l",
+                            "parent": "torso",
+                            "pivot": [3, 6, -2],
+                            "cubes": [{"origin": [2, 0, -3], "size": [2, 6, 2], "uv": [24, 16]}],
+                        },
+                        {
+                            "name": "leg_r",
+                            "parent": "torso",
+                            "pivot": [-3, 6, -2],
+                            "cubes": [{"origin": [-4, 0, -3], "size": [2, 6, 2], "uv": [32, 16]}],
+                        },
+                    ],
+                }
+            ],
+        }
+        raw_anim = {
+            "format_version": "1.8.0",
+            "animations": {
+                "animation.drakelet.idle": {
+                    "loop": True,
+                    "animation_length": 2.0,
+                    "bones": {
+                        "head": {"rotation": ["math.sin((q.anim_time - 0.1) * 180) * 6", 0, 0]},
+                    },
+                }
+            },
+        }
+        prov = AssetProvenance(
+            "artist_drakelet",
+            "https://example.org/artist_drakelet",
+            "StudioArtist",
+            "CC-BY-NC-4.0",
+            "CC-BY-NC-4.0 StudioArtist",
+        )
+        loop_out = run_looped_artist_enhancement(
+            raw_geo,
+            format_kind="bedrock_geojson",
+            animation_payload=raw_anim,
+            provenance=prov,
+            license_policy="research_nc",
+            max_iterations=4,
+        )
+        enhanced_prog: Program = loop_out["final_program"]
+        self.assertGreater(loop_out["final_readiness_score"], loop_out["initial_readiness_score"])
+
+        for target_fmt in ("bedrock_entity", "geckolib", "bbmodel_5"):
+            exp = export_artist_project_bundle(
+                enhanced_prog,
+                export_format=target_fmt,
+                name="drakelet_enhanced",
+            )
+            self.assertFalse(exp["runtime_import_verified"])
+            self.assertTrue(exp["static_audit_passed"])
+            self.assertLess(exp["roundtrip_vertex_max_error"], 1e-8)
+            self.assertGreaterEqual(exp["roundtrip_clip_count"], 1)
 
 
 if __name__ == "__main__":
