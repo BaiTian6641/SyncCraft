@@ -554,7 +554,12 @@ def compile_vanilla_atlas(
         u_px = (np.arange(w_px, dtype=np.float64) + 0.5) * dx_px
         v_px = (np.arange(h_px, dtype=np.float64) + 0.5) * dx_px
         ug, vg = np.meshgrid(u_px, v_px)
-        edge_d = np.minimum(np.minimum(ug, grid.width_units - ug), np.minimum(vg, grid.height_units - vg))
+        eff_w_u = max(dx_px, float(grid.width_units))
+        eff_h_u = max(dx_px, float(grid.height_units))
+        edge_d = np.maximum(
+            0.0,
+            np.minimum(np.minimum(ug, eff_w_u - ug), np.minimum(vg, eff_h_u - vg)),
+        )
 
         shaded_lin = shade_patch_ggx_linear(
             patch,

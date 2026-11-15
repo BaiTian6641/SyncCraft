@@ -581,6 +581,148 @@ class TestScientificOpticalAndSurfaceValidation(unittest.TestCase):
         # Honest quantization floor: 1e-4 roughness tweak collapses under 5-step OKLab ramp quantization
         self.assertFalse(report["sub_lsb_roughness_micro"]["survives_vanilla_16px"])
 
+    def test_h6_zero_thickness_plane_all_material_families_and_gray_scott(self) -> None:
+        """H6 regression: 0.0-thickness v3.2 planes (X/Y/Z normals + mirrored twins) must never NaN in Gray-Scott or shading."""
+        from contextlib import ExitStack
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        from synccraft.kinematics.se3_chain import Scene, WorldBone, WorldBox
+        from synccraft.shading.compiler import compile_vanilla_atlas
+
+        has_v32_plane = hasattr(Box("probe", (1, 1, 1), "m"), "plane_normal")
+        if has_v32_plane:
+            prog_ast = validate_program(
+                Program(
+                    Meta("entity", "bedrock_entity", 16, dsl_version="3.2", size_step=0.5),  # type: ignore[call-arg]
+                    [Palette("coat_mat", (0.66, 0.11, 72.0), 6)],
+                    Bone(
+                        "root",
+                        pivot_local=(0.0, 8.0, 0.0),
+                        items=[
+                            Box("torso", (6, 5, 8), "coat_mat"),
+                            Box(
+                                "dorsal_fin",
+                                (0, 4, 3),
+                                "coat_mat",
+                                place=Place("torso", (0.0, 1.0, 0.0), (0.0, -1.0, 0.0)),
+                                plane_normal="x",  # type: ignore[call-arg]
+                            ),
+                            Box(
+                                "collar_frill",
+                                (3, 0, 4),
+                                "coat_mat",
+                                place=Place("torso", (0.0, -1.0, 0.0), (0.0, 0.0, 0.0)),
+                                plane_normal="y",  # type: ignore[call-arg]
+                            ),
+                            Bone(
+                                "ear_l",
+                                attach=Attach("torso", (-1.0, 1.0, 0.5), (0.0, -1.0, 0.0)),
+                                mirror_name="ear_r",
+                                items=[
+                                    Box("ear_plane", (2.5, 4.5, 0), "coat_mat", plane_normal="z"),  # type: ignore[call-arg]
+                                ],
+                            ),
+                        ],
+                    ),
+                )
+            )
+            dsl_plane = format_program(prog_ast)
+            self.assertIn("plane ", dsl_plane)
+            prog = parse_program(dsl_plane)
+            patch_ctx = ExitStack()
+        else:
+            prog = validate_program(
+                Program(
+                    Meta("entity", "bedrock_entity", 16),
+                    [Palette("coat_mat", (0.66, 0.11, 72.0), 6)],
+                    Bone("root", pivot_local=(0.0, 8.0, 0.0), items=[Box("torso", (6, 5, 8), "coat_mat")]),
+                )
+            )
+            eye = np.eye(3, dtype=np.float64)
+            bones = (
+                WorldBone("root", None, np.array([0.0, 8.0, 0.0]), eye, np.array([0.0, 8.0, 0.0]), np.zeros(3)),
+                WorldBone("ear_l", "root", np.array([-3.0, 10.5, 2.0]), eye, np.array([-3.0, 2.5, 2.0]), np.zeros(3)),
+                WorldBone("ear_r", "root", np.array([3.0, 10.5, 2.0]), eye, np.array([3.0, 2.5, 2.0]), np.zeros(3), mirrored=True),
+            )
+
+            def _mk_plane(
+                name: str,
+                bone_name: str,
+                center: list[float],
+                size: list[float],
+                local_center: list[float],
+                normal_axis: str,
+                *,
+                mirrored: bool = False,
+            ) -> WorldBox:
+                wb = WorldBox(
+                    name=name,
+                    bone_name=bone_name,
+                    center=np.asarray(center, dtype=np.float64),
+                    rotation=eye.copy(),
+                    size=np.asarray(size, dtype=np.float64),
+                    inflate=0.0,
+                    local_center=np.asarray(local_center, dtype=np.float64),
+                    material="coat_mat",
+                    mirrored=mirrored,
+                )
+                object.__setattr__(wb, "plane_normal", normal_axis)
+                return wb
+
+            boxes = (
+                WorldBox("torso", "root", np.array([0.0, 8.0, 0.0]), eye.copy(), np.array([6.0, 5.0, 8.0]), 0.0, np.zeros(3), "coat_mat"),
+                _mk_plane("dorsal_fin", "root", [0.0, 12.5, 0.0], [0.0, 4.0, 3.0], [0.0, 4.5, 0.0], "x"),
+                _mk_plane("collar_frill", "root", [0.0, 5.5, 0.0], [3.0, 0.0, 4.0], [0.0, -2.5, 0.0], "y"),
+                _mk_plane("ear_plane", "ear_l", [-3.0, 12.75, 2.0], [2.5, 4.5, 0.0], [0.0, 2.25, 0.0], "z"),
+                _mk_plane("ear_r__ear_plane", "ear_r", [3.0, 12.75, 2.0], [2.5, 4.5, 0.0], [0.0, 2.25, 0.0], "z", mirrored=True),
+            )
+            fake_meta = SimpleNamespace(archetype="entity", target_profile="bedrock_entity", texel_density=16, size_step=0.5)
+            plane_scene = Scene(boxes=boxes, bones=bones, adjacency=frozenset(), meta=fake_meta)
+            patch_ctx = ExitStack()
+            patch_ctx.enter_context(patch("synccraft.surface.domain.compile_geometry", return_value=plane_scene))
+            patch_ctx.enter_context(patch("synccraft.surface.domain.compile_posed_geometry", return_value=plane_scene))
+
+        with patch_ctx:
+            for sym_mode in ("mirrored", "independent_seed"):
+                for fam in sorted(MATERIAL_FAMILIES):
+                    if fam != "patterned_skin" and sym_mode == "independent_seed":
+                        continue
+                    spec = MaterialSpec(
+                        name="coat_mat",
+                        family=fam,
+                        symmetry_mode=sym_mode,
+                        seed=313,
+                    )
+                    mp = MaterialProgram(materials={"coat_mat": spec})
+                    dom = build_surface_domain(prog, mp, subdivisions_per_unit=4)
+                    # Verify 0-area plane edge faces exist and have zero width or height
+                    self.assertEqual(float(dom.faces[("ear_plane", "east")].width_units), 0.0)
+                    self.assertEqual(float(dom.faces[("dorsal_fin", "north")].width_units), 0.0)
+                    self.assertEqual(float(dom.faces[("collar_frill", "north")].height_units), 0.0)
+
+                    ws = WorldState(
+                        program=prog,
+                        material_program=mp,
+                        surface_state=initialize_surface_state(dom),
+                    )
+                    van_desc, van_png = compile_vanilla_atlas(ws)
+                    self.assertGreater(len(van_png), 64)
+                    self.assertGreaterEqual(van_desc["width"], 16)
+
+                    # Check finite non-NaN Gray-Scott state on degenerate 0-area edge faces
+                    if fam == "patterned_skin":
+                        for fk, st_patch in ws.surface_state.patches.items():
+                            self.assertTrue(st_patch.rd_initialized, msg=f"uninitialized RD patch on {fk}")
+                            self.assertTrue(np.isfinite(st_patch.rd_u).all(), msg=f"NaN rd_u on {fk}")
+                            self.assertTrue(np.isfinite(st_patch.rd_v).all(), msg=f"NaN rd_v on {fk}")
+
+                    if fam in ("patterned_skin", "lichen_biofilm"):
+                        pbr_bundle = export_labpbr_1_3(ws)
+                        self.assertTrue(np.isfinite(pbr_bundle["arrays"]["atlas"]).all())
+                        gltf_bundle = export_gltf_pbr(ws)
+                        self.assertEqual(gltf_bundle["gltf"]["asset"]["version"], "2.0")
+
 
 if __name__ == "__main__":
     unittest.main()

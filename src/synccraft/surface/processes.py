@@ -280,17 +280,22 @@ def _seed_gray_scott_component(
     lo = all_pts.min(axis=0)
     hi = all_pts.max(axis=0)
     span = np.maximum(0.5, hi - lo)
-    approx_area = sum(domain.faces[fk].width_units * domain.faces[fk].height_units for fk in comp_list)
+    approx_area = sum(max(0.0, float(domain.faces[fk].width_units) * float(domain.faces[fk].height_units)) for fk in comp_list)
     n_spots = max(3, min(36, int(round(approx_area / max(4.0, 9.0 / spec.feature_scale)))))
     spot_radius = 0.75 / max(0.35, spec.feature_scale)
 
     # Pick deterministic 3D surface-proximate centers by sampling points on the analytical surface
     # parameterized in continuous normalized (face_idx, u_frac, v_frac) — independent of dx!
     face_areas = np.array(
-        [float(domain.faces[fk].width_units * domain.faces[fk].height_units) for fk in comp_list],
+        [max(0.0, float(domain.faces[fk].width_units) * float(domain.faces[fk].height_units)) for fk in comp_list],
         dtype=np.float64,
     )
-    probs = face_areas / face_areas.sum()
+    area_sum = float(face_areas.sum())
+    if area_sum <= 1e-12:
+        # Degenerate 0-area plane edge faces form isolated 1-face components on v3.2 planes
+        probs = np.full(len(comp_list), 1.0 / float(max(1, len(comp_list))), dtype=np.float64)
+    else:
+        probs = face_areas / area_sum
     # Stratified face assignment so every major face receives deterministic nucleation centers
     base_faces = [idx for idx, area in enumerate(face_areas) if area >= 12.0]
     if base_faces and len(base_faces) <= n_spots:
@@ -307,8 +312,10 @@ def _seed_gray_scott_component(
         fk = comp_list[int(chosen_faces[s_idx])]
         g = domain.faces[fk]
         b = rest_boxes[g.box_name]
-        uc = (u_fracs[s_idx] - 0.5) * g.width_units
-        vc = (v_fracs[s_idx] - 0.5) * g.height_units
+        eff_wu = max(float(g.dx), float(g.width_units))
+        eff_hv = max(float(g.dx), float(g.height_units))
+        uc = (u_fracs[s_idx] - 0.5) * eff_wu
+        vc = (v_fracs[s_idx] - 0.5) * eff_hv
         noff = float(np.abs(g.normal_box) @ (np.asarray(b.size, dtype=np.float64) / 2.0))
         p_box = uc * g.tangent_right_box + vc * g.tangent_down_box + noff * g.normal_box
         if g.mirrored and spec.symmetry_mode == "mirrored":
@@ -638,7 +645,8 @@ def evaluate_optical_fields(
         rows, cols = grid.shape
 
         p3 = _material_coords_3d(grid, spec)
-        u_m = (grid.width_units - grid.u_units) if (grid.mirrored and spec.symmetry_mode == "mirrored") else grid.u_units
+        eff_wu_grid = max(float(grid.dx), float(grid.width_units))
+        u_m = (eff_wu_grid - grid.u_units) if (grid.mirrored and spec.symmetry_mode == "mirrored") else grid.u_units
         v_m = grid.v_units
 
         c_sub = oklch_to_linear_srgb(spec.substrate_lch)

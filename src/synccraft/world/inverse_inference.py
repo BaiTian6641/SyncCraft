@@ -3459,10 +3459,13 @@ def infer_material_posterior(
                 if 0.02 <= outlier_frac <= 0.35:
                     rs, cs = np.where(outlier)
                     wu, hv = face_uv_extents_units(box.size, face)
-                    u_min = float(cs.min()) / lab.shape[1] * wu
-                    u_max = float(cs.max() + 1) / lab.shape[1] * wu
-                    v_min = float(rs.min()) / lab.shape[0] * hv
-                    v_max = float(rs.max() + 1) / lab.shape[0] * hv
+                    px_unit = 16.0 / max(1, int(program.meta.texel_density))
+                    wu_eff = max(px_unit, float(wu))
+                    hv_eff = max(px_unit, float(hv))
+                    u_min = float(cs.min()) / lab.shape[1] * wu_eff
+                    u_max = float(cs.max() + 1) / lab.shape[1] * wu_eff
+                    v_min = float(rs.min()) / lab.shape[0] * hv_eff
+                    v_max = float(rs.max() + 1) / lab.shape[0] * hv_eff
                     mean_out_lin = lin[outlier].mean(axis=0)
                     out_lch = linear_srgb_to_oklch(mean_out_lin)
                     aspect = (u_max - u_min) / max(1e-6, v_max - v_min)
