@@ -782,16 +782,35 @@ class TestChallengerNotebookEndToEndArtifactAudits(unittest.TestCase):
         cls.temp_dir_obj.cleanup()
 
     def test_01_cost_ledger_in_executed_notebook_monotonic_and_populated(self):
-        """Verify that CostLedger in the executed notebook was updated monotonically and accurately."""
+        """Verify that CostLedger in the executed notebook was updated monotonically and accurately under <=3 bounded repair."""
         ledger = self.global_scope.get("cost_ledger")
         self.assertIsInstance(ledger, CostLedger)
         self.assertGreater(ledger.accepted_tokens, 0)
         expected_unseen_probes = len(UNSEEN_STATIC_FAMILIES)
-        self.assertEqual(ledger.compiler_calls, expected_unseen_probes)
         self.assertEqual(ledger.initial_audit_calls, expected_unseen_probes)
-        self.assertEqual(ledger.discarded_tokens, 0)
-        self.assertEqual(ledger.repair_tokens, 0)
-        self.assertEqual(ledger.total_generated_tokens, ledger.accepted_tokens)
+        self.assertGreaterEqual(ledger.reaudit_calls, 0)
+        self.assertLessEqual(ledger.reaudit_calls, 3 * expected_unseen_probes)
+        self.assertGreaterEqual(ledger.compiler_calls, expected_unseen_probes + ledger.reaudit_calls)
+        self.assertGreaterEqual(ledger.discarded_tokens, 0)
+        self.assertGreaterEqual(ledger.repair_tokens, 0)
+        self.assertEqual(
+            ledger.total_generated_tokens,
+            ledger.accepted_tokens + ledger.discarded_tokens + ledger.repair_tokens,
+        )
+
+    def test_04_world_benchmark_and_smoke_publish_refusal(self):
+        """Verify 7-level world capability report is written and smoke mode refuses HF Hub uploads."""
+        world_report_path = self.temp_dir / "runs" / "world_model_eval_report.json"
+        self.assertTrue(world_report_path.is_file(), f"Missing {world_report_path}")
+        world_data = json.loads(world_report_path.read_text(encoding="utf-8"))
+        self.assertTrue(
+            "model_results" in world_data or "overall_model_score" in world_data,
+            f"Unexpected world report schema: {list(world_data.keys())}",
+        )
+        self.assertFalse(self.global_scope.get("dataset_published_successfully", True))
+        self.assertFalse(self.global_scope.get("published_successfully", True))
+        self.assertEqual(self.global_scope.get("dataset_publish_refused_reason"), "refused_smoke_or_cpu_mode")
+        self.assertEqual(self.global_scope.get("model_publish_refused_reason"), "refused_smoke_or_cpu_mode")
 
     def test_02_gate_g2_report_persisted_and_valid(self):
         """Verify runs/gate_g2_report.json is correctly saved and contains valid Gate G2 decision."""
