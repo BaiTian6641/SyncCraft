@@ -1853,7 +1853,7 @@ def _generate_authors_index_and_readme(
     readme_md = f"""---
 license: other
 license_name: multi-license-quarantined-cc-and-nc
-license_link: ATTRIBUTION_CREDITS.csv
+license_link: https://huggingface.co/datasets/{dataset_repo_id}/blob/main/ATTRIBUTION_CREDITS.csv
 task_categories:
 - text-generation
 language:
