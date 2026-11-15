@@ -1,7 +1,11 @@
-"""NumPy reference implementation of Block-DSL v3 rigid transforms.
+"""NumPy reference implementation of Block-DSL v3.2 rigid transforms.
 
 All public AST Euler angles are degrees. Column vectors use Rz @ Ry @ Rx.
-The differentiable PyTorch implementation is a future milestone; these routines
+Supports versioned ``size_step`` grids, zero-thickness planar quads (``plane_normal``),
+per-box local ``rotate`` & ``pivot`` without extra bone synthesis, ``joint(...)``
+attachments, ``mirror(axis=x|z)`` with exact O(3) -> SO(3) parity, ``radial(count=K, axis=...)``
+cyclic expansions, and optional keyframe ``pose_position_deltas`` / ``pose_scale_factors``.
+The differentiable PyTorch implementation is a separate module; these routines
 are deliberately not described as differentiable or used to claim PGD results.
 """
 
@@ -13,7 +17,7 @@ from typing import Any
 
 import numpy as np
 
-from synccraft.dsl.ast_nodes import Bone, Box, Locator, Program, validate_program
+from synccraft.dsl.ast_nodes import Bone, Box, Locator, Program, RadialSpec, validate_program
 
 
 def _vec(value: Any) -> np.ndarray:
@@ -34,6 +38,52 @@ def euler_xyz_matrix(euler_degrees: Any) -> np.ndarray:
     return rz @ ry @ rx
 
 
+def _angle_sign_from_reflection(sign: np.ndarray) -> np.ndarray:
+    """Return proper SO(3) Euler angle parity for diagonal reflection diag(sx, sy, sz).
+
+    For S = diag(sx, sy, sz) with s_i in {-1, +1},
+    S @ R_xyz(rx, ry, rz) @ S == R_xyz(sy*sz*rx, sx*sz*ry, sx*sy*rz) with det == +1.
+    """
+    sx, sy, sz = float(sign[0]), float(sign[1]), float(sign[2])
+    return np.array((sy * sz, sx * sz, sx * sy), dtype=np.float64)
+
+
+def _stored_cullfaces(cullfaces: tuple[str, ...], sign: np.ndarray, mirrored: bool) -> tuple[str, ...]:
+    """Store cullface directions compatible with backends.common.reflected_cullfaces(box).
+
+    ``reflected_cullfaces`` swaps east/west whenever ``box.mirrored`` is True.
+    For X-mirrors ``(sign[0] < 0) == mirrored``, so ``cullfaces`` is stored verbatim;
+    for Z-mirrors ``north``/``south`` swap and ``east``/``west`` pre-compensate ``mirrored``.
+    """
+    if not cullfaces:
+        return ()
+    flip_x = (float(sign[0]) < 0.0) != mirrored
+    flip_y = float(sign[1]) < 0.0
+    flip_z = float(sign[2]) < 0.0
+    if not (flip_x or flip_y or flip_z):
+        return cullfaces
+    out: list[str] = []
+    for face in cullfaces:
+        f = face
+        if flip_x:
+            if f == "east":
+                f = "west"
+            elif f == "west":
+                f = "east"
+        if flip_y:
+            if f == "up":
+                f = "down"
+            elif f == "down":
+                f = "up"
+        if flip_z:
+            if f == "south":
+                f = "north"
+            elif f == "north":
+                f = "south"
+        out.append(f)
+    return tuple(out)
+
+
 @dataclass(frozen=True)
 class WorldBox:
     name: str
@@ -46,6 +96,13 @@ class WorldBox:
     material: str
     cullface: tuple[str, ...] = ()
     mirrored: bool = False
+    local_euler: np.ndarray = field(default_factory=lambda: np.zeros(3, dtype=np.float64))
+    local_pivot: np.ndarray | None = None
+    unrotated_local_center: np.ndarray | None = None
+    plane_normal: str | None = None
+    uv: tuple[float, float] | None = None
+    uv_faces: dict[str, tuple[float, float, float, float]] = field(default_factory=dict)
+    texture: str | None = None
 
     @property
     def half_extents(self) -> np.ndarray:
@@ -57,13 +114,31 @@ class WorldBox:
         return (signs * extents) @ self.rotation.T + self.center
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "name": self.name, "bone_name": self.bone_name,
-            "center": self.center.tolist(), "rotation": self.rotation.tolist(),
-            "size": self.size.tolist(), "inflate": self.inflate,
-            "local_center": self.local_center.tolist(), "material": self.material,
-            "cullface": list(self.cullface), "mirrored": self.mirrored,
+        payload: dict[str, Any] = {
+            "name": self.name,
+            "bone_name": self.bone_name,
+            "center": self.center.tolist(),
+            "rotation": self.rotation.tolist(),
+            "size": self.size.tolist(),
+            "inflate": self.inflate,
+            "local_center": self.local_center.tolist(),
+            "material": self.material,
+            "cullface": list(self.cullface),
+            "mirrored": self.mirrored,
         }
+        if np.any(np.abs(self.local_euler) > 1e-12):
+            payload["local_euler"] = self.local_euler.tolist()
+        if self.local_pivot is not None:
+            payload["local_pivot"] = self.local_pivot.tolist()
+        if self.plane_normal is not None:
+            payload["plane_normal"] = self.plane_normal
+        if self.uv is not None:
+            payload["uv"] = list(self.uv)
+        if self.uv_faces:
+            payload["uv_faces"] = {k: list(v) for k, v in self.uv_faces.items()}
+        if self.texture is not None:
+            payload["texture"] = self.texture
+        return payload
 
 
 @dataclass(frozen=True)
@@ -78,10 +153,13 @@ class WorldBone:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "name": self.name, "parent_name": self.parent_name,
-            "pivot_world": self.pivot_world.tolist(), "rotation": self.rotation.tolist(),
+            "name": self.name,
+            "parent_name": self.parent_name,
+            "pivot_world": self.pivot_world.tolist(),
+            "rotation": self.rotation.tolist(),
             "local_translation": self.local_translation.tolist(),
-            "local_euler": self.local_euler.tolist(), "mirrored": self.mirrored,
+            "local_euler": self.local_euler.tolist(),
+            "mirrored": self.mirrored,
         }
 
 
@@ -129,15 +207,20 @@ class Scene:
         return {loc.name: loc for loc in self.locators}
 
     def to_dict(self) -> dict[str, Any]:
+        meta_dict: dict[str, Any] = {
+            "archetype": self.meta.archetype,
+            "target_profile": self.meta.target_profile,
+            "texel_density": self.meta.texel_density,
+        }
+        if getattr(self.meta, "size_step", 1.0) != 1.0:
+            meta_dict["size_step"] = float(self.meta.size_step)
+        if getattr(self.meta, "audit_profile", "strict") != "strict":
+            meta_dict["audit_profile"] = str(self.meta.audit_profile)
         payload: dict[str, Any] = {
             "schema": "synccraft.scene/0.1",
             "coordinate_system": "right_handed_y_up_column_vectors",
             "angle_units": "degrees",
-            "meta": {
-                "archetype": self.meta.archetype,
-                "target_profile": self.meta.target_profile,
-                "texel_density": self.meta.texel_density,
-            },
+            "meta": meta_dict,
             "boxes": [box.to_dict() for box in self.boxes],
             "bones": [bone.to_dict() for bone in self.bones],
             "adjacency": [
@@ -166,22 +249,71 @@ def _clamp_delta_to_joint_limits(
     delta_euler: np.ndarray,
     joint_limits: Any,
     *,
-    mirrored: bool,
+    mirrored: bool = False,
+    angle_sign: np.ndarray | None = None,
 ) -> np.ndarray:
-    rx_lo, rx_hi = float(joint_limits[0][0]), float(joint_limits[0][1])
-    ry_lo, ry_hi = float(joint_limits[1][0]), float(joint_limits[1][1])
-    rz_lo, rz_hi = float(joint_limits[2][0]), float(joint_limits[2][1])
-    if mirrored:
-        ry_lo, ry_hi = -ry_hi, -ry_lo
-        rz_lo, rz_hi = -rz_hi, -rz_lo
-    return np.array(
-        (
-            float(np.clip(delta_euler[0], rx_lo, rx_hi)),
-            float(np.clip(delta_euler[1], ry_lo, ry_hi)),
-            float(np.clip(delta_euler[2], rz_lo, rz_hi)),
-        ),
-        dtype=np.float64,
+    eff_sign = (
+        angle_sign
+        if angle_sign is not None
+        else (np.array((1.0, -1.0, -1.0), dtype=np.float64) if mirrored else np.ones(3, dtype=np.float64))
     )
+    clamped = np.zeros(3, dtype=np.float64)
+    for idx in range(3):
+        lo, hi = float(joint_limits[idx][0]), float(joint_limits[idx][1])
+        if float(eff_sign[idx]) < 0.0:
+            lo, hi = -hi, -lo
+        clamped[idx] = float(np.clip(delta_euler[idx], lo, hi))
+    return clamped
+
+
+def _validate_physical_size(
+    size: np.ndarray,
+    size_step: float,
+    plane_normal: str | None,
+    effective_inflate: float,
+    box_name: str,
+) -> None:
+    if not np.isfinite(effective_inflate):
+        raise ValueError(f"{box_name}: inflation creates invalid extents")
+    if plane_normal is None:
+        if size_step == 1.0:
+            if np.any(size <= 0) or np.any(size != np.floor(size)):
+                raise ValueError(f"{box_name}: size must contain positive integers")
+        else:
+            steps = np.round(size / size_step)
+            if np.any(size <= 0) or np.any(steps < 1) or not np.allclose(steps * size_step, size, atol=1e-9, rtol=0):
+                raise ValueError(f"{box_name}: size must align to positive multiples of size_step={size_step}")
+        if np.any(size / 2.0 + effective_inflate <= 0.0):
+            raise ValueError(f"{box_name}: inflation creates invalid extents")
+    else:
+        n_idx = {"x": 0, "y": 1, "z": 2}[plane_normal]
+        if abs(float(size[n_idx])) > 1e-12:
+            raise ValueError(f"{box_name}: planar box normal axis {plane_normal!r} must have 0 thickness")
+        if float(size[n_idx]) / 2.0 + effective_inflate < 0.0:
+            raise ValueError(f"{box_name}: planar box normal half_extent cannot be negative")
+        for idx in range(3):
+            if idx == n_idx:
+                continue
+            comp = float(size[idx])
+            if size_step == 1.0:
+                if comp <= 0.0 or comp != float(np.floor(comp)):
+                    raise ValueError(f"{box_name}: planar tangential sizes must be positive integers")
+            else:
+                steps_c = round(comp / size_step)
+                if comp <= 0.0 or steps_c < 1 or abs(steps_c * size_step - comp) > 1e-9:
+                    raise ValueError(f"{box_name}: planar size {comp} not aligned to size_step={size_step}")
+            if comp / 2.0 + effective_inflate <= 0.0:
+                raise ValueError(f"{box_name}: inflation creates invalid tangential extents")
+
+
+def _radial_rotation_matrix(axis: str, theta_deg: float, parent_angle_sign: np.ndarray) -> np.ndarray:
+    if axis == "x":
+        eul = np.array((theta_deg, 0.0, 0.0), dtype=np.float64)
+    elif axis == "y":
+        eul = np.array((0.0, theta_deg, 0.0), dtype=np.float64)
+    else:
+        eul = np.array((0.0, 0.0, theta_deg), dtype=np.float64)
+    return euler_xyz_matrix(eul * parent_angle_sign)
 
 
 def compile_geometry(
@@ -190,24 +322,25 @@ def compile_geometry(
     pose_euler_deltas: dict[str, Any] | None = None,
     box_inflate_deltas: dict[str, float] | None = None,
     root_translation_delta: Any | None = None,
+    pose_position_deltas: dict[str, Any] | None = None,
+    pose_scale_factors: dict[str, Any] | None = None,
     clamp_joint_limits: bool = True,
 ) -> Scene:
-    """Expand validated boxes, locators, explicit placements, child bones, and mirrors.
+    """Expand validated boxes, planes, locators, placements, child bones, mirrors, and radials.
 
-    ``mirror_x(right)`` creates a sibling reflected across the parent's local-X
-    plane with exact O(3) parity toggling at arbitrary nesting depth.
-    Descendant names use ``right__original_name`` (and ``outer__inner__name`` for
-    nested mirrors). Integer box sizes remain strictly immutable; ``inflate`` and
-    optional ``box_inflate_deltas`` adjust physical clearances/muscle bulges only.
+    ``mirror_x(right)`` and ``mirror(axis=x|z)`` create siblings reflected across the
+    parent's local X or Z plane with exact O(3) -> SO(3) parity toggling at arbitrary
+    nesting depth. ``radial(count=K, axis=...)`` expands K-fold cyclic siblings around
+    the parent axis. Per-box ``rotate`` and ``pivot`` compile directly into ``WorldBox``
+    orientations without synthesizing extra bones.
     """
     validate_program(program)
+    size_step = float(getattr(program.meta, "size_step", 1.0))
     boxes: list[WorldBox] = []
     bones: list[WorldBone] = []
     locators: list[WorldLocator] = []
     adjacency: dict[tuple[str, str], str] = {}
     names: set[str] = set()
-    reflect = np.array((-1.0, 1.0, 1.0))
-    angle_reflect = np.array((1.0, -1.0, -1.0))
     root_delta_vec = _vec(root_translation_delta) if root_translation_delta is not None else np.zeros(3)
 
     def reserve(name: str) -> None:
@@ -225,49 +358,75 @@ def compile_geometry(
         parent_local_locators: dict[str, WorldLocator],
         inherited_attachment_box: WorldBox | None,
         *,
-        mirrored: bool = False,
+        sign: np.ndarray,
+        parent_scale: np.ndarray,
         prefix: str | None = None,
         renamed_root: str | None = None,
+        radial_rot: np.ndarray | None = None,
     ) -> None:
         name = renamed_root or (f"{prefix}__{bone.name}" if prefix else bone.name)
         reserve(name)
-        sign = reflect if mirrored else np.ones(3)
-        euler = _vec(bone.rest_euler) * (angle_reflect if mirrored else 1.0)
+        mirrored = bool(float(sign[0] * sign[1] * sign[2]) < 0.0)
+        angle_sign = _angle_sign_from_reflection(sign)
+
+        local_scale = np.ones(3, dtype=np.float64)
+        if pose_scale_factors and name in pose_scale_factors:
+            local_scale = _vec(pose_scale_factors[name])
+            if np.any(local_scale <= 0.0):
+                raise ValueError(f"{name}: pose_scale_factors must be strictly positive")
+        cumulative_scale = parent_scale * local_scale
+
+        euler = _vec(bone.rest_euler) * angle_sign
         local_rotation = euler_xyz_matrix(euler)
         if pose_euler_deltas and name in pose_euler_deltas:
             delta_euler = _vec(pose_euler_deltas[name])
             if clamp_joint_limits and bone.joint_limits is not None:
                 delta_euler = _clamp_delta_to_joint_limits(
-                    delta_euler, bone.joint_limits, mirrored=mirrored
+                    delta_euler, bone.joint_limits, angle_sign=angle_sign
                 )
             local_rotation = local_rotation @ euler_xyz_matrix(delta_euler)
             euler = _recover_euler_xyz_degrees(local_rotation)
+
+        if radial_rot is not None:
+            local_rotation = radial_rot @ local_rotation
+            euler = _recover_euler_xyz_degrees(local_rotation)
+
+        pos_delta = np.zeros(3, dtype=np.float64)
+        if pose_position_deltas and name in pose_position_deltas:
+            pos_delta = _vec(pose_position_deltas[name]) * sign
+
         if parent is None:
             if bone.attach is not None:
                 raise ValueError("The root bone cannot have an attachment")
-            translation = _vec(bone.pivot_local) + root_delta_vec
+            translation = _vec(bone.pivot_local) + root_delta_vec + pos_delta
             world_pivot = translation.copy()
             world_rotation = local_rotation
             align = np.zeros(3)
             attachment_base: WorldBox | None = None
         else:
             if bone.attach is None:
-                raise ValueError(f"Child bone {bone.name} requires attach(...)")
+                raise ValueError(f"Child bone {bone.name} requires attach(...) or joint(...)")
             spec = bone.attach
             if spec.parent_box in parent_local_boxes:
                 attachment_base = parent_local_boxes[spec.parent_box]
-                translation = (
-                    attachment_base.local_center
-                    + 0.5 * attachment_base.size * _vec(spec.anchor) * sign
-                    + _vec(spec.offset) * sign
+                r_parent_box = euler_xyz_matrix(attachment_base.local_euler)
+                rel_attach = (
+                    r_parent_box @ (0.5 * attachment_base.size * (_vec(spec.anchor) * sign))
+                    + _vec(spec.offset) * sign * parent_scale
                 )
+                if radial_rot is not None:
+                    rel_attach = radial_rot @ rel_attach
+                translation = attachment_base.local_center + rel_attach + pos_delta * parent_scale
             elif spec.parent_box in parent_local_locators:
                 if np.any(_vec(spec.anchor) != 0):
                     raise ValueError(
                         f"{bone.name}: attaching to locator {spec.parent_box!r} requires anchor=[0,0,0]"
                     )
                 loc_base = parent_local_locators[spec.parent_box]
-                translation = loc_base.local_offset + _vec(spec.offset) * sign
+                rel_loc = loc_base.local_offset + _vec(spec.offset) * sign * parent_scale
+                if radial_rot is not None:
+                    rel_loc = radial_rot @ rel_loc
+                translation = rel_loc + pos_delta * parent_scale
                 attachment_base = None if spec.detached else inherited_attachment_box
             else:
                 raise ValueError(
@@ -276,35 +435,44 @@ def compile_geometry(
             world_pivot = parent.pivot_world + parent.rotation @ translation
             world_rotation = parent.rotation @ local_rotation
             align = _vec(spec.align) * sign
+
         compiled_bone = WorldBone(
-            name, parent.name if parent else None, world_pivot, world_rotation,
-            translation, euler, mirrored,
+            name,
+            parent.name if parent else None,
+            world_pivot,
+            world_rotation,
+            translation,
+            euler,
+            mirrored,
         )
         bones.append(compiled_bone)
         local_boxes: dict[str, WorldBox] = {}
         local_locators: dict[str, WorldLocator] = {}
         primary: WorldBox | None = None
+
         for item in bone.items:
             if isinstance(item, Box):
                 box_name = f"{prefix}__{item.name}" if prefix else item.name
                 reserve(box_name)
-                size = _vec(item.size)
-                if np.any(size <= 0) or np.any(size != np.floor(size)):
-                    raise ValueError(f"{item.name}: size must contain positive integers")
+                raw_size = _vec(item.size)
                 extra_inflate = float(box_inflate_deltas.get(box_name, 0.0)) if box_inflate_deltas else 0.0
                 effective_inflate = float(item.inflate) + extra_inflate
-                if not np.isfinite(effective_inflate) or np.any(size / 2 + effective_inflate <= 0):
-                    raise ValueError(f"{item.name}: inflation creates invalid extents")
+                _validate_physical_size(raw_size, size_step, item.plane_normal, effective_inflate, item.name)
+                size = raw_size * cumulative_scale
+
                 if item.place is None:
                     if primary is not None:
                         raise ValueError(f"{item.name}: subsequent boxes require place(...)")
-                    local_center = -0.5 * size * align
+                    unrot_local_center = -0.5 * size * align
                 else:
                     spec = item.place
                     if spec.base_box:
                         if spec.base_box in local_boxes:
                             base = local_boxes[spec.base_box]
-                            reference = base.local_center + 0.5 * base.size * _vec(spec.anchor) * sign
+                            r_base_local = euler_xyz_matrix(base.local_euler)
+                            reference = base.local_center + r_base_local @ (
+                                0.5 * base.size * (_vec(spec.anchor) * sign)
+                            )
                         elif spec.base_box in local_locators:
                             if np.any(_vec(spec.anchor) != 0):
                                 raise ValueError(
@@ -319,24 +487,55 @@ def compile_geometry(
                         if np.any(_vec(spec.anchor) != 0):
                             raise ValueError("place without base_box requires anchor=[0,0,0]")
                         reference = np.zeros(3)
-                    local_center = reference - 0.5 * size * _vec(spec.align) * sign + _vec(spec.offset) * sign
+                    unrot_local_center = (
+                        reference
+                        - 0.5 * size * _vec(spec.align) * sign
+                        + _vec(spec.offset) * sign * cumulative_scale
+                    )
+
+                box_local_euler = _vec(item.rotate) * angle_sign
+                r_box_local = euler_xyz_matrix(box_local_euler)
+                if item.pivot is not None:
+                    box_local_pivot = _vec(item.pivot) * sign * cumulative_scale
+                    local_center = box_local_pivot + r_box_local @ (unrot_local_center - box_local_pivot)
+                else:
+                    box_local_pivot = None
+                    local_center = unrot_local_center
+
+                box_world_center = world_pivot + world_rotation @ local_center
+                box_world_rot = world_rotation @ r_box_local
                 compiled_box = WorldBox(
-                    box_name, name, world_pivot + world_rotation @ local_center,
-                    world_rotation.copy(), size, effective_inflate, local_center,
-                    item.material, tuple(item.cullface), mirrored,
+                    box_name,
+                    name,
+                    box_world_center,
+                    box_world_rot,
+                    size,
+                    effective_inflate,
+                    local_center,
+                    item.material,
+                    _stored_cullfaces(tuple(item.cullface), sign, mirrored),
+                    mirrored,
+                    local_euler=box_local_euler,
+                    local_pivot=box_local_pivot,
+                    unrotated_local_center=unrot_local_center,
+                    plane_normal=item.plane_normal,
+                    uv=item.uv,
+                    uv_faces=item.uv_faces_dict,
+                    texture=item.texture,
                 )
                 boxes.append(compiled_box)
                 local_boxes[item.name] = compiled_box
                 if primary is None:
                     primary = compiled_box
-                    if attachment_base is not None and not bone.attach.detached:
-                        edge(attachment_base.name, box_name, "attach")
+                    if attachment_base is not None and bone.attach is not None and not bone.attach.detached:
+                        reason = "joint" if bone.attach.joint_mode else "attach"
+                        edge(attachment_base.name, box_name, reason)
                 if item.place is not None and item.place.base_box and item.place.base_box in local_boxes:
                     edge(local_boxes[item.place.base_box].name, box_name, "place")
             elif isinstance(item, Locator):
                 loc_name = f"{prefix}__{item.name}" if prefix else item.name
                 reserve(loc_name)
-                local_offset = _vec(item.offset) * sign
+                local_offset = _vec(item.offset) * sign * cumulative_scale
                 compiled_loc = WorldLocator(
                     name=loc_name,
                     bone_name=name,
@@ -356,8 +555,14 @@ def compile_geometry(
                     local_boxes,
                     local_locators,
                     child_inherited,
-                    mirrored=mirrored,
+                    sign=sign,
+                    parent_scale=cumulative_scale,
                     prefix=prefix,
+                )
+                m_flip = (
+                    np.array((-1.0, 1.0, 1.0), dtype=np.float64)
+                    if item.mirror_axis == "x"
+                    else np.array((1.0, 1.0, -1.0), dtype=np.float64)
                 )
                 if item.mirror_name:
                     m_prefix = f"{prefix}__{item.mirror_name}" if prefix else item.mirror_name
@@ -367,16 +572,58 @@ def compile_geometry(
                         local_boxes,
                         local_locators,
                         child_inherited,
-                        mirrored=not mirrored,
+                        sign=sign * m_flip,
+                        parent_scale=cumulative_scale,
                         prefix=m_prefix,
                         renamed_root=m_prefix,
                     )
+                if isinstance(item.radial, RadialSpec):
+                    for k in range(1, item.radial.count):
+                        theta_k = 360.0 * float(k) / float(item.radial.count)
+                        r_rad = _radial_rotation_matrix(item.radial.axis, theta_k, angle_sign)
+                        r_base_name = f"{item.name}_r{k}"
+                        r_prefix = f"{prefix}__{r_base_name}" if prefix else r_base_name
+                        walk(
+                            item,
+                            compiled_bone,
+                            local_boxes,
+                            local_locators,
+                            child_inherited,
+                            sign=sign,
+                            parent_scale=cumulative_scale,
+                            prefix=r_prefix,
+                            renamed_root=r_prefix,
+                            radial_rot=r_rad,
+                        )
+                        if item.mirror_name:
+                            rm_base_name = f"{item.mirror_name}_r{k}"
+                            rm_prefix = f"{prefix}__{rm_base_name}" if prefix else rm_base_name
+                            walk(
+                                item,
+                                compiled_bone,
+                                local_boxes,
+                                local_locators,
+                                child_inherited,
+                                sign=sign * m_flip,
+                                parent_scale=cumulative_scale,
+                                prefix=rm_prefix,
+                                renamed_root=rm_prefix,
+                                radial_rot=r_rad,
+                            )
             else:
                 raise ValueError(f"Unsupported geometry node: {type(item).__name__}")
         if primary is None and not local_locators:
             raise ValueError(f"Bone {bone.name} must contain at least one box or locator")
 
-    walk(program.root, None, {}, {}, None)
+    walk(
+        program.root,
+        None,
+        {},
+        {},
+        None,
+        sign=np.ones(3, dtype=np.float64),
+        parent_scale=np.ones(3, dtype=np.float64),
+    )
     return Scene(
         tuple(boxes),
         tuple(bones),
@@ -393,10 +640,12 @@ def compile_posed_geometry(
     *,
     box_inflate_deltas: dict[str, float] | None = None,
     root_translation_delta: Any | None = None,
+    pose_position_deltas: dict[str, Any] | None = None,
+    pose_scale_factors: dict[str, Any] | None = None,
     clamp_joint_limits: bool = True,
 ) -> Scene:
     """Compile a posed Scene sharing the exact SE(3) chain with rest compilation."""
-    if pose_euler_deltas or box_inflate_deltas:
+    if pose_euler_deltas or box_inflate_deltas or pose_position_deltas or pose_scale_factors:
         valid_bones: set[str] = set()
         valid_boxes: set[str] = set()
 
@@ -412,12 +661,29 @@ def compile_posed_geometry(
                     if child.mirror_name:
                         m_prefix = f"{prefix}__{child.mirror_name}" if prefix else child.mirror_name
                         _collect(child, prefix=m_prefix, renamed=m_prefix)
+                    if isinstance(child.radial, RadialSpec):
+                        for k in range(1, child.radial.count):
+                            r_name = f"{child.name}_r{k}"
+                            r_prefix = f"{prefix}__{r_name}" if prefix else r_name
+                            _collect(child, prefix=r_prefix, renamed=r_prefix)
+                            if child.mirror_name:
+                                rm_name = f"{child.mirror_name}_r{k}"
+                                rm_prefix = f"{prefix}__{rm_name}" if prefix else rm_name
+                                _collect(child, prefix=rm_prefix, renamed=rm_prefix)
 
         _collect(program.root)
         if pose_euler_deltas:
             unknown = sorted(set(pose_euler_deltas) - valid_bones)
             if unknown:
                 raise ValueError(f"Unknown bone(s) in pose_euler_deltas: {unknown}")
+        if pose_position_deltas:
+            unknown_pos = sorted(set(pose_position_deltas) - valid_bones)
+            if unknown_pos:
+                raise ValueError(f"Unknown bone(s) in pose_position_deltas: {unknown_pos}")
+        if pose_scale_factors:
+            unknown_sc = sorted(set(pose_scale_factors) - valid_bones)
+            if unknown_sc:
+                raise ValueError(f"Unknown bone(s) in pose_scale_factors: {unknown_sc}")
         if box_inflate_deltas:
             unknown_boxes = sorted(set(box_inflate_deltas) - valid_boxes)
             if unknown_boxes:
@@ -427,5 +693,7 @@ def compile_posed_geometry(
         pose_euler_deltas=pose_euler_deltas,
         box_inflate_deltas=box_inflate_deltas,
         root_translation_delta=root_translation_delta,
+        pose_position_deltas=pose_position_deltas,
+        pose_scale_factors=pose_scale_factors,
         clamp_joint_limits=clamp_joint_limits,
     )

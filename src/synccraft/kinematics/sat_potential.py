@@ -3,6 +3,8 @@
 SAT penetration depth is a distance along a separating-axis candidate. It is
 not intersection volume. The soft minimum is a lower bound and can miss small
 positive overlaps; only the raw minimum is used by the deterministic audit.
+Supports zero-thickness planar quads (``WorldBox.plane_normal in {"x", "y", "z"}``)
+where the normal half-extent may be ``0.0`` while tangential half-extents remain ``> 0``.
 """
 
 from __future__ import annotations
@@ -40,8 +42,19 @@ def _validate_box(box: WorldBox) -> None:
         raise ValueError("Invalid OBB center or rotation shape")
     if not all(np.isfinite(value).all() for value in (box.center, box.rotation, box.half_extents)):
         raise ValueError("Nonfinite OBB data")
-    if box.half_extents.shape != (3,) or np.any(box.half_extents <= 0):
+    if box.half_extents.shape != (3,):
         raise ValueError("OBB extents must be positive")
+    plane_normal = getattr(box, "plane_normal", None)
+    if plane_normal in ("x", "y", "z"):
+        n_idx = {"x": 0, "y": 1, "z": 2}[plane_normal]
+        if float(box.half_extents[n_idx]) < 0.0:
+            raise ValueError("Planar OBB normal extent must be nonnegative")
+        for idx in range(3):
+            if idx != n_idx and float(box.half_extents[idx]) <= 0.0:
+                raise ValueError("Planar OBB tangential extents must be positive")
+    else:
+        if np.any(box.half_extents <= 0):
+            raise ValueError("OBB extents must be positive")
     if not np.allclose(box.rotation.T @ box.rotation, np.eye(3), atol=1e-9, rtol=0):
         raise ValueError("OBB rotation must be orthonormal")
     if not np.isclose(np.linalg.det(box.rotation), 1.0, atol=1e-9, rtol=0):
@@ -70,7 +83,9 @@ def sat_obb(
         raise ValueError("beta must be finite and positive")
     if (
         not np.isfinite((collision_tolerance, energy_tolerance, cross_axis_tolerance)).all()
-        or collision_tolerance < 0 or energy_tolerance < 0 or cross_axis_tolerance <= 0
+        or collision_tolerance < 0
+        or energy_tolerance < 0
+        or cross_axis_tolerance <= 0
     ):
         raise ValueError("Tolerances must be nonnegative (cross-axis tolerance positive)")
     axes: list[np.ndarray] = [left.rotation[:, i] for i in range(3)]

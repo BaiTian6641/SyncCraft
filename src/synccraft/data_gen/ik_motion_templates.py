@@ -1,9 +1,9 @@
-"""Analytical + damped-Jacobian 2-bone IK and parameterized joint trajectories (P1-03d).
+"""Analytical + damped-Jacobian 2-bone and N-bone IK & joint trajectories (P1-03d / v3.2).
 
 Shares SyncCraft's exact right-handed SE(3) kinematics (`compile_posed_geometry`).
-Note: Textual `@motion` DSL grammar and full quadruped stance-foot lock benchmarks
-remain tracked under ADR 0003 / P3-01; this module provides typed trajectory and
-IK operators for action-conditioned WorldState evolution.
+Generalizes IK solving to arbitrary contiguous N >= 2 bone chains with optional
+`pole_world` plane steering and exact `joint_limits` clamping, while preserving the
+fast Law-of-Cosines + 4-DOF solver when `len(bones) == 2` and `pole_world is None`.
 """
 
 from __future__ import annotations
@@ -14,8 +14,9 @@ from typing import Any
 
 import numpy as np
 
-from synccraft.dsl.ast_nodes import Bone, Program, Vec3
+from synccraft.dsl.ast_nodes import Bone, Program, RadialSpec, Vec3
 from synccraft.kinematics.se3_chain import (
+    _angle_sign_from_reflection,
     _clamp_delta_to_joint_limits,
     compile_posed_geometry,
     euler_xyz_matrix,
@@ -35,16 +36,69 @@ class TwoBoneIKResult:
     iterations: int
 
 
+@dataclass(frozen=True)
+class NBoneIKResult:
+    """Result of solving generalized N-bone (N >= 2) chain IK to a world-space target."""
+
+    bones: tuple[str, ...]
+    pose_euler_deltas: dict[str, Vec3]
+    achieved_world: Vec3
+    target_world: Vec3
+    clamped_target_world: Vec3
+    reachable: bool
+    position_error: float
+    iterations: int
+    pole_world: Vec3 | None = None
+
+
 def _effector_world(
     program: Program,
     pose_deltas: dict[str, Vec3],
-    lower_bone_name: str,
+    tip_bone_name: str,
     effector_local: np.ndarray,
 ) -> tuple[np.ndarray, Any]:
     scene = compile_posed_geometry(program, pose_deltas)
-    lower = scene.bone_by_name[lower_bone_name]
-    eff_w = lower.pivot_world + lower.rotation @ effector_local
+    tip = scene.bone_by_name[tip_bone_name]
+    eff_w = tip.pivot_world + tip.rotation @ effector_local
     return eff_w, scene
+
+
+def _collect_expanded_limits_and_signs(program: Program) -> dict[str, tuple[Any, np.ndarray]]:
+    """Map expanded bone name -> (joint_limits, angle_sign) across mirror_x, mirror(axis=z), and radial."""
+    out: dict[str, tuple[Any, np.ndarray]] = {}
+
+    def _walk(
+        node: Bone,
+        *,
+        sign: np.ndarray,
+        prefix: str | None = None,
+        renamed: str | None = None,
+    ) -> None:
+        exp_name = renamed or (f"{prefix}__{node.name}" if prefix else node.name)
+        out[exp_name] = (node.joint_limits, _angle_sign_from_reflection(sign))
+        for ch in node.items:
+            if isinstance(ch, Bone):
+                _walk(ch, sign=sign, prefix=prefix)
+                m_flip = (
+                    np.array((-1.0, 1.0, 1.0), dtype=np.float64)
+                    if ch.mirror_axis == "x"
+                    else np.array((1.0, 1.0, -1.0), dtype=np.float64)
+                )
+                if ch.mirror_name:
+                    mp = f"{prefix}__{ch.mirror_name}" if prefix else ch.mirror_name
+                    _walk(ch, sign=sign * m_flip, prefix=mp, renamed=mp)
+                if isinstance(ch.radial, RadialSpec):
+                    for k in range(1, ch.radial.count):
+                        rn = f"{ch.name}_r{k}"
+                        rp = f"{prefix}__{rn}" if prefix else rn
+                        _walk(ch, sign=sign, prefix=rp, renamed=rp)
+                        if ch.mirror_name:
+                            rmn = f"{ch.mirror_name}_r{k}"
+                            rmp = f"{prefix}__{rmn}" if prefix else rmn
+                            _walk(ch, sign=sign * m_flip, prefix=rmp, renamed=rmp)
+
+    _walk(program.root, sign=np.ones(3, dtype=np.float64))
+    return out
 
 
 def solve_two_bone_ik(
@@ -62,7 +116,7 @@ def solve_two_bone_ik(
     """Solve 2-bone limb IK (3-DOF upper joint + 1-DOF lower hinge) in exact SE(3).
 
     Uses Law-of-Cosines reachability clamping + damped Levenberg-Marquardt updates
-    through ``compile_posed_geometry`` so mirror_x reflections and arbitrary rest_euler
+    through ``compile_posed_geometry`` so mirror reflections and arbitrary rest_euler
     frames agree to machine precision.
     """
     axis_idx = {"x": 0, "y": 1, "z": 2}.get(hinge_axis)
@@ -102,7 +156,6 @@ def solve_two_bone_ik(
     else:
         clamped_tgt = tgt_w.copy()
 
-    # Analytical Law-of-Cosines warmstart for elbow/knee flexion angle
     d_clamp = float(np.linalg.norm(clamped_tgt - root_p))
     if l1 > 1e-6 and l2 > 1e-6:
         cos_knee = float(np.clip((d_clamp * d_clamp - l1 * l1 - l2 * l2) / (2.0 * l1 * l2), -1.0, 1.0))
@@ -110,7 +163,6 @@ def solve_two_bone_ik(
     else:
         knee_deg = 0.0
 
-    # Precompute exact zero-delta chain matrices for associative SO(3) inner-loop evaluation
     zero_poses = dict(poses)
     zero_poses[upper_bone] = (0.0, 0.0, 0.0)
     zero_poses[lower_bone] = (0.0, 0.0, 0.0)
@@ -121,23 +173,10 @@ def solve_two_bone_ik(
     r_lo_local_rest = r_up_0.T @ lo_0.rotation
     t_lo = lo_0.local_translation
 
-    limits_by_expanded: dict[str, Any] = {}
+    limits_by_expanded = _collect_expanded_limits_and_signs(program)
+    up_lim, up_asign = limits_by_expanded.get(upper_bone, (None, np.ones(3)))
+    lo_lim, lo_asign = limits_by_expanded.get(lower_bone, (None, np.ones(3)))
 
-    def _collect_limits(node: Bone, prefix: str | None = None, renamed: str | None = None) -> None:
-        exp_name = renamed or (f"{prefix}__{node.name}" if prefix else node.name)
-        limits_by_expanded[exp_name] = node.joint_limits
-        for ch in node.items:
-            if isinstance(ch, Bone):
-                _collect_limits(ch, prefix=prefix)
-                if ch.mirror_name:
-                    mp = f"{prefix}__{ch.mirror_name}" if prefix else ch.mirror_name
-                    _collect_limits(ch, prefix=mp, renamed=mp)
-
-    _collect_limits(program.root)
-    up_lim = limits_by_expanded.get(upper_bone)
-    lo_lim = limits_by_expanded.get(lower_bone)
-
-    # Parameter vector q = [upper_rx, upper_ry, upper_rz, lower_hinge]
     u0 = poses[upper_bone]
     l0 = poses[lower_bone]
     best_q: np.ndarray | None = None
@@ -146,21 +185,21 @@ def solve_two_bone_ik(
     def _fast_eff(vec_q: np.ndarray) -> np.ndarray:
         du = vec_q[:3]
         if up_lim is not None:
-            du = _clamp_delta_to_joint_limits(du, up_lim, mirrored=up_0.mirrored)
+            du = _clamp_delta_to_joint_limits(du, up_lim, angle_sign=up_asign)
         dl = np.array([l0[0], l0[1], l0[2]], dtype=np.float64)
         dl[axis_idx] = float(vec_q[3])
         if lo_lim is not None:
-            dl = _clamp_delta_to_joint_limits(dl, lo_lim, mirrored=lo_0.mirrored)
+            dl = _clamp_delta_to_joint_limits(dl, lo_lim, angle_sign=lo_asign)
         r_u = r_up_0 @ euler_xyz_matrix(du)
         p_l = root_p + r_u @ t_lo
         r_l = r_u @ r_lo_local_rest @ euler_xyz_matrix(dl)
         return p_l + r_l @ eff_loc
 
+    iters_used = 0
     for sign_try in (1.0, -1.0):
         q = np.array([u0[0], u0[1], u0[2], l0[axis_idx] + sign_try * knee_deg * 0.5], dtype=np.float64)
         lam = 1e-2
         eps = 1e-4
-        iters_used = 0
 
         cur_eff = _fast_eff(q)
         cur_err = float(np.linalg.norm(cur_eff - clamped_tgt))
@@ -179,7 +218,6 @@ def solve_two_bone_ik(
             residual = clamped_tgt - cur_eff
             lhs = jac.T @ jac + lam * np.eye(4, dtype=np.float64)
             dq = np.linalg.solve(lhs, jac.T @ residual)
-            # Limit single-step angle jump for smooth convergence
             dq_norm = float(np.linalg.norm(dq))
             if dq_norm > 25.0:
                 dq *= 25.0 / dq_norm
@@ -203,10 +241,15 @@ def solve_two_bone_ik(
 
     assert best_q is not None
     final_poses = dict(poses)
-    final_poses[upper_bone] = (float(best_q[0]), float(best_q[1]), float(best_q[2]))
-    lo_final = list(l0)
+    du_final = best_q[:3]
+    if up_lim is not None:
+        du_final = _clamp_delta_to_joint_limits(du_final, up_lim, angle_sign=up_asign)
+    final_poses[upper_bone] = (float(du_final[0]), float(du_final[1]), float(du_final[2]))
+    lo_final = np.array([l0[0], l0[1], l0[2]], dtype=np.float64)
     lo_final[axis_idx] = float(best_q[3])
-    final_poses[lower_bone] = (lo_final[0], lo_final[1], lo_final[2])
+    if lo_lim is not None:
+        lo_final = _clamp_delta_to_joint_limits(lo_final, lo_lim, angle_sign=lo_asign)
+    final_poses[lower_bone] = (float(lo_final[0]), float(lo_final[1]), float(lo_final[2]))
     achieved_w, _ = _effector_world(program, final_poses, lower_bone, eff_loc)
 
     return TwoBoneIKResult(
@@ -217,6 +260,294 @@ def solve_two_bone_ik(
         reachable=reachable,
         position_error=float(np.linalg.norm(achieved_w - clamped_tgt)),
         iterations=iters_used,
+    )
+
+
+def solve_n_bone_ik(
+    program: Program,
+    bones: tuple[str, ...] | list[str],
+    effector_local: Vec3,
+    target_world: Vec3,
+    *,
+    base_pose_deltas: dict[str, Vec3] | None = None,
+    hinge_axis: str = "x",
+    pole_world: Vec3 | None = None,
+    max_iters: int = 40,
+    tol: float = 1e-5,
+) -> NBoneIKResult:
+    """Solve generalized N-bone (N >= 2) chain IK in exact SE(3) with joint_limits and pole steering.
+
+    Delegates directly to fast ``solve_two_bone_ik`` when ``len(bones) == 2`` and
+    ``pole_world is None``. For ``N >= 3`` (or when ``pole_world`` is provided), runs
+    damped Levenberg-Marquardt with nullspace pole-plane steering across the exact
+    chained SO(3) bone frames and verifies final world effector coordinates via
+    ``compile_posed_geometry``.
+    """
+    chain_bones = tuple(str(b) for b in bones)
+    n_bones = len(chain_bones)
+    if n_bones < 2:
+        raise ValueError(f"solve_n_bone_ik requires at least 2 bones, got {n_bones}")
+
+    axis_idx = {"x": 0, "y": 1, "z": 2}.get(hinge_axis)
+    if axis_idx is None:
+        raise ValueError(f"hinge_axis must be 'x', 'y', or 'z', got {hinge_axis!r}")
+
+    if n_bones == 2 and pole_world is None:
+        res2 = solve_two_bone_ik(
+            program,
+            chain_bones[0],
+            chain_bones[1],
+            effector_local,
+            target_world,
+            base_pose_deltas=base_pose_deltas,
+            hinge_axis=hinge_axis,
+            max_iters=max_iters,
+            tol=tol,
+        )
+        return NBoneIKResult(
+            bones=chain_bones,
+            pose_euler_deltas=res2.pose_euler_deltas,
+            achieved_world=res2.achieved_world,
+            target_world=res2.target_world,
+            clamped_target_world=res2.clamped_target_world,
+            reachable=res2.reachable,
+            position_error=res2.position_error,
+            iterations=res2.iterations,
+            pole_world=None,
+        )
+
+    eff_loc = np.asarray(effector_local, dtype=np.float64)
+    tgt_w = np.asarray(target_world, dtype=np.float64)
+
+    poses: dict[str, Vec3] = dict(base_pose_deltas or {})
+    for b in chain_bones:
+        poses.setdefault(b, (0.0, 0.0, 0.0))
+
+    init_scene = compile_posed_geometry(program, poses)
+    for idx_b, b_name in enumerate(chain_bones):
+        if b_name not in init_scene.bone_by_name:
+            raise KeyError(f"Unknown IK bone {b_name!r}")
+        if idx_b > 0 and init_scene.bone_by_name[b_name].parent_name != chain_bones[idx_b - 1]:
+            raise ValueError(
+                f"IK chain bone {b_name!r} must be a direct child of {chain_bones[idx_b - 1]!r}"
+            )
+
+    zero_poses = dict(poses)
+    for b in chain_bones:
+        zero_poses[b] = (0.0, 0.0, 0.0)
+    zero_scene = compile_posed_geometry(program, zero_poses)
+
+    root_b0 = zero_scene.bone_by_name[chain_bones[0]]
+    root_p = root_b0.pivot_world.copy()
+    r_0_base = root_b0.rotation.copy()
+
+    t_local: list[np.ndarray] = [np.zeros(3, dtype=np.float64)]
+    r_local_rest: list[np.ndarray] = [np.eye(3, dtype=np.float64)]
+    seg_lengths: list[float] = []
+    for i in range(1, n_bones):
+        bi = zero_scene.bone_by_name[chain_bones[i]]
+        bip = zero_scene.bone_by_name[chain_bones[i - 1]]
+        tl = bi.local_translation.copy()
+        t_local.append(tl)
+        r_local_rest.append(bip.rotation.T @ bi.rotation)
+        seg_lengths.append(float(np.linalg.norm(tl)))
+    seg_lengths.append(float(np.linalg.norm(eff_loc)))
+
+    total_len = sum(seg_lengths)
+    max_seg = max(seg_lengths) if seg_lengths else 0.0
+    max_reach = max(1e-6, total_len - 1e-4)
+    min_reach = max(0.0, 2.0 * max_seg - total_len) + 1e-4
+
+    delta_vec = tgt_w - root_p
+    dist = float(np.linalg.norm(delta_vec))
+    reachable = (min_reach - 1e-3) <= dist <= (total_len + 1e-3)
+    if dist > max_reach and dist > 1e-9:
+        clamped_tgt = root_p + delta_vec * (max_reach / dist)
+    elif dist < min_reach and dist > 1e-9:
+        clamped_tgt = root_p + delta_vec * (min_reach / dist)
+    elif dist <= 1e-9:
+        clamped_tgt = root_p + np.array([0.0, -max(min_reach, 1e-3), 0.0], dtype=np.float64)
+    else:
+        clamped_tgt = tgt_w.copy()
+
+    limits_by_expanded = _collect_expanded_limits_and_signs(program)
+    chain_limits = [limits_by_expanded.get(b, (None, np.ones(3))) for b in chain_bones]
+
+    pole_active = False
+    n_pole = np.zeros(3, dtype=np.float64)
+    b_plane = np.zeros(3, dtype=np.float64)
+    chord_mid = root_p + 0.5 * (clamped_tgt - root_p)
+    desired_bulge = 0.0
+    pole_tuple: Vec3 | None = None
+    if pole_world is not None:
+        pole_w = np.asarray(pole_world, dtype=np.float64)
+        pole_tuple = (float(pole_w[0]), float(pole_w[1]), float(pole_w[2]))
+        chord = clamped_tgt - root_p
+        chord_len = float(np.linalg.norm(chord))
+        u_hat = chord / chord_len if chord_len > 1e-6 else np.array([0.0, -1.0, 0.0], dtype=np.float64)
+        pole_rel = pole_w - root_p
+        pole_perp = pole_rel - float(np.dot(pole_rel, u_hat)) * u_hat
+        perp_norm = float(np.linalg.norm(pole_perp))
+        if perp_norm > 1e-6:
+            pole_active = True
+            n_pole = pole_perp / perp_norm
+            b_plane = np.cross(u_hat, n_pole)
+            slack_sq = max(0.0, total_len * total_len - chord_len * chord_len)
+            desired_bulge = max(0.04 * total_len, 0.30 * math.sqrt(slack_sq))
+
+    n_dof = 3 * n_bones
+
+    def _clamp_q(vec_q: np.ndarray) -> np.ndarray:
+        out = vec_q.copy()
+        for i in range(n_bones):
+            jlim, asign = chain_limits[i]
+            if jlim is not None:
+                out[3 * i : 3 * i + 3] = _clamp_delta_to_joint_limits(
+                    out[3 * i : 3 * i + 3], jlim, angle_sign=asign
+                )
+        return out
+
+    def _fast_chain(vec_q: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        qc = _clamp_q(vec_q)
+        p_cur = root_p
+        r_cur = r_0_base @ euler_xyz_matrix(qc[0:3])
+        mid_sum = np.zeros(3, dtype=np.float64)
+        for i in range(1, n_bones):
+            p_cur = p_cur + r_cur @ t_local[i]
+            mid_sum = mid_sum + p_cur
+            r_cur = r_cur @ r_local_rest[i] @ euler_xyz_matrix(qc[3 * i : 3 * i + 3])
+        eff_pt = p_cur + r_cur @ eff_loc
+        mid_pt = mid_sum / float(max(1, n_bones - 1))
+        return eff_pt, mid_pt
+
+    def _secondary_cost(vec_q: np.ndarray, mid_pt: np.ndarray) -> float:
+        reg = 1e-6 * float(np.dot(vec_q, vec_q))
+        if not pole_active:
+            return reg
+        plane_dev = float(np.dot(mid_pt - root_p, b_plane))
+        bulge_proj = float(np.dot(mid_pt - chord_mid, n_pole))
+        bulge_shortfall = max(0.0, desired_bulge - bulge_proj)
+        return reg + 0.5 * plane_dev * plane_dev + 0.5 * bulge_shortfall * bulge_shortfall
+
+    d_clamp = float(np.linalg.norm(clamped_tgt - root_p))
+    slack_ratio = max(0.0, 1.0 - d_clamp / max(1e-6, total_len))
+    arch_deg = 32.0 * math.sqrt(slack_ratio)
+
+    q_base = np.zeros(n_dof, dtype=np.float64)
+    for i, b in enumerate(chain_bones):
+        pb = poses[b]
+        q_base[3 * i : 3 * i + 3] = (float(pb[0]), float(pb[1]), float(pb[2]))
+
+    best_q: np.ndarray | None = None
+    best_score = float("inf")
+    best_err = float("inf")
+    iters_used = 0
+
+    warmstarts = [1.0, -1.0]
+    if pole_active:
+        warmstarts = [1.0, -1.0, 0.4]
+
+    for sign_try in warmstarts:
+        q = q_base.copy()
+        for i in range(1, n_bones):
+            q[3 * i + axis_idx] += sign_try * arch_deg
+        q = _clamp_q(q)
+        lam = 1e-2
+        eps = 1e-4
+
+        cur_eff, cur_mid = _fast_chain(q)
+        cur_err = float(np.linalg.norm(cur_eff - clamped_tgt))
+        cur_sec = _secondary_cost(q, cur_mid)
+
+        for it in range(1, max_iters + 1):
+            iters_used = it
+            if cur_err <= tol and (not pole_active or it >= 12):
+                break
+            jac = np.zeros((3, n_dof), dtype=np.float64)
+            grad_sec = np.zeros(n_dof, dtype=np.float64)
+            for j in range(n_dof):
+                q_plus = q.copy()
+                q_plus[j] += eps
+                eff_p, mid_p = _fast_chain(q_plus)
+                jac[:, j] = (eff_p - cur_eff) / eps
+                if pole_active:
+                    sec_p = _secondary_cost(q_plus, mid_p)
+                    grad_sec[j] = (sec_p - cur_sec) / eps
+                else:
+                    grad_sec[j] = 2e-6 * q[j]
+
+            residual = clamped_tgt - cur_eff
+            jj_t = jac @ jac.T + lam * np.eye(3, dtype=np.float64)
+            j_pinv = jac.T @ np.linalg.inv(jj_t)
+            dq_prim = j_pinv @ residual
+
+            null_proj = np.eye(n_dof, dtype=np.float64) - j_pinv @ jac
+            sec_gain = 18.0 if pole_active else 1.0
+            dq_null = null_proj @ (-sec_gain * grad_sec)
+            dq_null_norm = float(np.linalg.norm(dq_null))
+            if dq_null_norm > 8.0:
+                dq_null *= 8.0 / dq_null_norm
+
+            dq = dq_prim + dq_null
+            dq_norm = float(np.linalg.norm(dq))
+            if dq_norm > 25.0:
+                dq *= 25.0 / dq_norm
+
+            q_cand = _clamp_q(q + dq)
+            cand_eff, cand_mid = _fast_chain(q_cand)
+            cand_err = float(np.linalg.norm(cand_eff - clamped_tgt))
+            cand_sec = _secondary_cost(q_cand, cand_mid)
+
+            improved = (cand_err < cur_err - 1e-9) or (
+                cand_err <= max(tol, cur_err + 1e-6) and cand_sec < cur_sec - 1e-9
+            )
+            if improved:
+                q = q_cand
+                cur_eff = cand_eff
+                cur_mid = cand_mid
+                cur_err = cand_err
+                cur_sec = cand_sec
+                lam = max(1e-6, lam * 0.5)
+            else:
+                # Fallback pure primary step without nullspace perturbation
+                q_cand_p = _clamp_q(q + dq_prim * min(1.0, 20.0 / max(1e-9, float(np.linalg.norm(dq_prim)))))
+                p_eff, p_mid = _fast_chain(q_cand_p)
+                p_err = float(np.linalg.norm(p_eff - clamped_tgt))
+                if p_err < cur_err:
+                    q = q_cand_p
+                    cur_eff = p_eff
+                    cur_mid = p_mid
+                    cur_err = p_err
+                    cur_sec = _secondary_cost(q, cur_mid)
+                    lam = max(1e-6, lam * 0.7)
+                else:
+                    lam = min(1e2, lam * 4.0)
+
+        combo_score = cur_err + (0.01 * cur_sec if pole_active else 1e-5 * cur_sec)
+        if combo_score < best_score:
+            best_score = combo_score
+            best_err = cur_err
+            best_q = q.copy()
+        if best_err <= tol and not pole_active:
+            break
+
+    assert best_q is not None
+    q_final = _clamp_q(best_q)
+    final_poses = dict(poses)
+    for i, b in enumerate(chain_bones):
+        final_poses[b] = (float(q_final[3 * i]), float(q_final[3 * i + 1]), float(q_final[3 * i + 2]))
+    achieved_w, _ = _effector_world(program, final_poses, chain_bones[-1], eff_loc)
+
+    return NBoneIKResult(
+        bones=chain_bones,
+        pose_euler_deltas=final_poses,
+        achieved_world=(float(achieved_w[0]), float(achieved_w[1]), float(achieved_w[2])),
+        target_world=(float(tgt_w[0]), float(tgt_w[1]), float(tgt_w[2])),
+        clamped_target_world=(float(clamped_tgt[0]), float(clamped_tgt[1]), float(clamped_tgt[2])),
+        reachable=reachable,
+        position_error=float(np.linalg.norm(achieved_w - clamped_tgt)),
+        iterations=iters_used,
+        pole_world=pole_tuple,
     )
 
 
