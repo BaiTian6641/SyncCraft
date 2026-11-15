@@ -421,6 +421,26 @@ class TestInverseInferenceAndTrajectoryDataset(unittest.TestCase):
         with self.assertRaises(LicenseGateError):
             ingest_artist_project_record(noai_doc, format_kind="bedrock_geojson")
 
+    def test_h12_larger_presets_pilot_200_and_world_1200_zero_compositional_leakage(self) -> None:
+        for preset_name, min_expected in (("pilot_200", 210), ("world_1200", 1200)):
+            ds = build_world_capability_ladder_dataset(
+                preset=preset_name,
+                seed=2026,
+                render_observations=False,
+            )
+            self.assertTrue(ds["zero_compositional_leakage"])
+            self.assertGreaterEqual(ds["total_trajectories"], min_expected)
+            train_triples = {r["compositional_triple"] for r in ds["rows"] if r["split"] == "train"}
+            ood_triples = {
+                r["compositional_triple"]
+                for r in ds["rows"]
+                if r["split"] == "held_out_compositional_val" and r["level"] != "level_7_human_transfer"
+            }
+            self.assertTrue(train_triples.isdisjoint(ood_triples))
+            self.assertTrue(
+                all(r["level"] != "level_7_human_transfer" for r in ds["rows"] if r["split"] == "train")
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

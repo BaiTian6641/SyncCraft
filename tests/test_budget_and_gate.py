@@ -350,6 +350,64 @@ class BudgetGateTests(unittest.TestCase):
         self.assertFalse(dup_check["passed"])
         self.assertTrue(any("memorized_or_duplicate_completion" in v for v in dup_check["violations"]))
 
+        # 5. Regression (#12 H5): 1-bone 16-box static generic p0..p15 stack MUST fail creature/fauna & reference_dsl prompts
+        tower_items: list[Box | Locator | Bone] = [Box("p0", (4, 2, 4), "m")]
+        for idx in range(1, 16):
+            tower_items.append(Box(f"p{idx}", (4, 2, 4), "m", place=Place(f"p{idx - 1}", (0.0, 1.0, 0.0), (0.0, -1.0, 0.0))))
+        tower_prog = validate_program(
+            Program(
+                Meta("block_multipart", "bbmodel_5", 16),
+                [Palette("m", (0.6, 0.05, 200.0), 4)],
+                Bone("r", pivot_local=(0.0, 1.0, 0.0), items=tower_items),
+            )
+        )
+        tower_sc = compile_geometry(tower_prog)
+        self.assertEqual(len(tower_sc.boxes), 16)
+
+        adv_wyvern = verify_prompt_adherence(
+            tower_prog,
+            tower_sc,
+            "Design an articulated winged wyvern dragon creature with >= 16 parts.",
+        )
+        self.assertFalse(adv_wyvern["passed"])
+        self.assertTrue(any("domain_archetype_conflict" in v for v in adv_wyvern["violations"]))
+        self.assertTrue(any("min_bones_not_met" in v for v in adv_wyvern["violations"]))
+        self.assertTrue(any("missing_requested_anatomy" in v for v in adv_wyvern["violations"]))
+
+        adv_wolf = verify_prompt_adherence(
+            tower_prog,
+            tower_sc,
+            {
+                "prompt": "Create a four-legged wolf hound with >= 16 boxes.",
+                "domain": "animal",
+                "family_id": "dire_wolf_hound",
+                "min_boxes": 16,
+            },
+        )
+        self.assertFalse(adv_wolf["passed"])
+        self.assertTrue(any("domain_archetype_conflict" in v for v in adv_wolf["violations"]))
+        self.assertTrue(any("min_bones_not_met" in v for v in adv_wolf["violations"]))
+        self.assertTrue(any("missing_requested_symmetry" in v for v in adv_wolf["violations"]))
+        self.assertTrue(any("missing_requested_anatomy" in v for v in adv_wolf["violations"]))
+
+        adv_ref = verify_prompt_adherence(
+            tower_prog,
+            tower_sc,
+            {"prompt": "Synthesize target asset.", "reference_dsl": format_program(wyvern)},
+        )
+        self.assertFalse(adv_ref["passed"])
+        self.assertTrue(any("archetype_mismatch" in v for v in adv_ref["violations"]))
+        self.assertTrue(any("min_bones_not_met" in v for v in adv_ref["violations"]))
+
+        # Also verify building/natural taxonomy domains reject unrequested entity archetype
+        adv_building = verify_prompt_adherence(
+            wyvern,
+            wyvern_scene,
+            {"prompt": "Construct a stone watchtower.", "domain": "building", "min_boxes": 16},
+        )
+        self.assertFalse(adv_building["passed"])
+        self.assertTrue(any("domain_archetype_conflict" in v for v in adv_building["violations"]))
+
     def test_c3_runtime_gate_prerequisites_and_artifact_derived_evidence(self) -> None:
         prereqs = inspect_runtime_gate_prerequisites()
         self.assertTrue(prereqs["repair_pgd_policy_preregistered"])
@@ -415,7 +473,42 @@ class BudgetGateTests(unittest.TestCase):
         self.assertTrue(ev["matched_raw_budgets_enforced"])
         # Gate decision remains blocked until full_static_audit_implemented is true
         self.assertEqual(decide_gate(ev)["decision"], "blocked")
-        _ = sha_2
+
+        # Regression (#12 C3): omitted prompt_adherence_passed, empty canonical_ast_sha256, or omitted reference_boxes MUST fail
+        ev_strict = derive_gate_g2_evidence(
+            [
+                {
+                    "sample_id": "missing_adh",
+                    "reference_boxes": 18,
+                    "boxes": 17,
+                    "sat_collision_passed": True,
+                    "reaudits_used": 0,
+                    "canonical_ast_sha256": sha_2,
+                },
+                {
+                    "sample_id": "empty_sha",
+                    "reference_boxes": 18,
+                    "boxes": 17,
+                    "sat_collision_passed": True,
+                    "prompt_adherence_passed": True,
+                    "reaudits_used": 0,
+                    "canonical_ast_sha256": "",
+                },
+                {
+                    "sample_id": "missing_ref_boxes",
+                    "boxes": 17,
+                    "sat_collision_passed": True,
+                    "prompt_adherence_passed": True,
+                    "reaudits_used": 0,
+                    "canonical_ast_sha256": "f" * 64,
+                },
+            ],
+            dataset_manifest=ds_manifest,
+            cost_ledger=ledger,
+            expected_benchmark_count=3,
+        )
+        self.assertEqual(ev_strict["passed"], 0)
+        self.assertFalse(ev_strict["all_samples_have_at_least_16_parts"])
 
 
 if __name__ == "__main__":

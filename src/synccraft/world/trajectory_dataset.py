@@ -214,6 +214,7 @@ def _build_family_world(
     extra_distal_segment: bool = False,
     gait_stride_override: float | None = None,
     gait_amp_override: float | None = None,
+    need_surface_domain: bool = True,
 ) -> dict[str, Any]:
     """Build a diverse, deterministic WorldState with sockets, optional IK/gait, and clean pivots."""
     sx = int(rng.integers(4, 9))
@@ -753,10 +754,14 @@ def _build_family_world(
         wear_susceptibility=0.82 if mat_family in ("painted_metal", "thin_film_iridescence") else 0.36,
         oxidation_rate=0.58 if mat_family in ("painted_metal", "brushed_metal") else 0.0,
         biofilm_affinity=0.52 if mat_family in ("weathered_stone", "solid_wood", "lichen_biofilm") else 0.08,
-        rd_initial_time=6.0,
+        rd_initial_time=6.0 if need_surface_domain else 0.0,
     )
     mp = mp.with_material(p_spec)
-    dom = build_surface_domain(prog, mp, subdivisions_per_unit=2)
+    if not need_surface_domain:
+        for mname, mspec in list(mp.materials.items()):
+            if mspec.rd_initial_time > 0.0:
+                mp = mp.with_material(replace(mspec, rd_initial_time=0.0))
+    dom = build_surface_domain(prog, mp, subdivisions_per_unit=2 if need_surface_domain else 1)
     ws = WorldState(
         program=prog,
         material_program=mp,
@@ -779,6 +784,8 @@ def _build_authored_transfer_world(
     mat_family: str,
     rng: np.random.Generator,
     seed: int,
+    *,
+    need_surface_domain: bool = True,
 ) -> dict[str, Any]:
     """Build an artist-authored-style rig (audit_profile='authored') for Level 7 Human Transfer.
 
@@ -947,10 +954,14 @@ def _build_authored_transfer_world(
         wear_susceptibility=0.78 if mat_family in ("painted_metal", "thin_film_iridescence") else 0.35,
         oxidation_rate=0.54 if mat_family in ("painted_metal", "brushed_metal") else 0.0,
         biofilm_affinity=0.48 if mat_family in ("weathered_stone", "solid_wood", "lichen_biofilm") else 0.08,
-        rd_initial_time=6.0,
+        rd_initial_time=6.0 if need_surface_domain else 0.0,
     )
     mp = mp.with_material(p_spec)
-    dom = build_surface_domain(prog, mp, subdivisions_per_unit=2)
+    if not need_surface_domain:
+        for mname, mspec in list(mp.materials.items()):
+            if mspec.rd_initial_time > 0.0:
+                mp = mp.with_material(replace(mspec, rd_initial_time=0.0))
+    dom = build_surface_domain(prog, mp, subdivisions_per_unit=2 if need_surface_domain else 1)
     ws = WorldState(
         program=prog,
         material_program=mp,
@@ -1648,11 +1659,18 @@ def build_world_capability_ladder_dataset(
         row_counter += 1
         return rid
 
+    def _needs_surface(task_lvl: str) -> bool:
+        return task_lvl == "level_4_predict_surface" or (
+            task_lvl == "level_5_invert_observation" and render_observations
+        )
+
     # 1. Train split: strictly synthetic Levels 1..6 on in-distribution triples (0 Level-7 authored leak!)
     for idx in range(n_train):
         geo_fam, mat_fam, act_fam = in_dist_triples[(idx * 11) % len(in_dist_triples)]
         lvl = CORE_SIX_LEVELS[idx % len(CORE_SIX_LEVELS)]
-        bundle = _build_family_world(geo_fam, mat_fam, rng, seed + idx * 31 + 7)
+        bundle = _build_family_world(
+            geo_fam, mat_fam, rng, seed + idx * 31 + 7, need_surface_domain=_needs_surface(lvl)
+        )
         rows.append(
             _build_single_level_record(
                 sample_id=_next_id(),
@@ -1674,7 +1692,9 @@ def build_world_capability_ladder_dataset(
     for idx in range(n_id_val):
         geo_fam, mat_fam, act_fam = in_dist_triples[(idx * 17 + 5) % len(in_dist_triples)]
         lvl = CORE_SIX_LEVELS[idx % len(CORE_SIX_LEVELS)]
-        bundle = _build_family_world(geo_fam, mat_fam, rng, seed + 10000 + idx * 37)
+        bundle = _build_family_world(
+            geo_fam, mat_fam, rng, seed + 10000 + idx * 37, need_surface_domain=_needs_surface(lvl)
+        )
         rows.append(
             _build_single_level_record(
                 sample_id=_next_id(),
@@ -1696,7 +1716,9 @@ def build_world_capability_ladder_dataset(
     for idx in range(n_ood_core):
         geo_fam, mat_fam, act_fam = heldout_triples[idx % len(heldout_triples)]
         lvl = CORE_SIX_LEVELS[idx % len(CORE_SIX_LEVELS)]
-        bundle = _build_family_world(geo_fam, mat_fam, rng, seed + 20000 + idx * 41)
+        bundle = _build_family_world(
+            geo_fam, mat_fam, rng, seed + 20000 + idx * 41, need_surface_domain=_needs_surface(lvl)
+        )
         rows.append(
             _build_single_level_record(
                 sample_id=_next_id(),
@@ -1719,7 +1741,9 @@ def build_world_capability_ladder_dataset(
         auth_fam = AUTHORED_TRANSFER_FAMILIES[idx % len(AUTHORED_TRANSFER_FAMILIES)]
         _, mat_fam, act_fam = heldout_triples[idx % len(heldout_triples)]
         sub_lvl = CORE_SIX_LEVELS[idx % len(CORE_SIX_LEVELS)]
-        bundle = _build_authored_transfer_world(auth_fam, mat_fam, rng, seed + 30000 + idx * 43)
+        bundle = _build_authored_transfer_world(
+            auth_fam, mat_fam, rng, seed + 30000 + idx * 43, need_surface_domain=_needs_surface(sub_lvl)
+        )
         rows.append(
             _build_single_level_record(
                 sample_id=_next_id(),
@@ -1750,12 +1774,15 @@ def build_world_capability_ladder_dataset(
         p_seed = seed + 40000 + p_idx * 53
 
         if ptype == "level_1_append_distal_segment":
-            _, mat_fam, act_fam = heldout_triples[p_idx % len(heldout_triples)]
-            geo_fam = "mechanism_arm"
+            geo_fam, mat_fam, act_fam = heldout_triples[p_idx % len(heldout_triples)]
             rng_a = np.random.default_rng(p_seed)
             rng_b = np.random.default_rng(p_seed)
-            b_base = _build_family_world(geo_fam, mat_fam, rng_a, p_seed, extra_distal_segment=False)
-            b_pert = _build_family_world(geo_fam, mat_fam, rng_b, p_seed, extra_distal_segment=True)
+            b_base = _build_family_world(
+                geo_fam, mat_fam, rng_a, p_seed, extra_distal_segment=False, need_surface_domain=False
+            )
+            b_pert = _build_family_world(
+                geo_fam, mat_fam, rng_b, p_seed, extra_distal_segment=True, need_surface_domain=False
+            )
             rec_base = _build_single_level_record(
                 sample_id=_next_id(),
                 split_name="held_out_compositional_val",
@@ -1791,7 +1818,9 @@ def build_world_capability_ladder_dataset(
 
         elif ptype == "level_2_increase_joint_elevation":
             geo_fam, mat_fam, act_fam = "mechanism_arm", "patterned_skin", "pose_ik_reposition"
-            b_shared = _build_family_world(geo_fam, mat_fam, np.random.default_rng(p_seed), p_seed)
+            b_shared = _build_family_world(
+                geo_fam, mat_fam, np.random.default_rng(p_seed), p_seed, need_surface_domain=False
+            )
             rec_base = _build_single_level_record(
                 sample_id=_next_id(),
                 split_name="held_out_compositional_val",
@@ -1836,6 +1865,7 @@ def build_world_capability_ladder_dataset(
                 p_seed,
                 gait_stride_override=0.8,
                 gait_amp_override=6.0,
+                need_surface_domain=False,
             )
             b_pert = _build_family_world(
                 geo_fam,
@@ -1844,6 +1874,7 @@ def build_world_capability_ladder_dataset(
                 p_seed,
                 gait_stride_override=3.2,
                 gait_amp_override=28.0,
+                need_surface_domain=False,
             )
             rec_base = _build_single_level_record(
                 sample_id=_next_id(),

@@ -63,6 +63,106 @@ _WING_ANATOMY_MARKERS: tuple[str, ...] = (
     "patagium",
     "elytra",
     "feather",
+    "membrane",
+    "spar",
+)
+
+_LIMB_ANATOMY_MARKERS: tuple[str, ...] = (
+    "leg",
+    "thigh",
+    "shank",
+    "shin",
+    "femur",
+    "tibia",
+    "paw",
+    "hoof",
+    "foot",
+    "limb",
+    "foreleg",
+    "hind",
+    "arm",
+)
+
+_ENTITY_CREATURE_DOMAINS: tuple[str, ...] = (
+    "animal",
+    "dragon",
+    "humanoid",
+    "biological",
+    "fauna",
+    "creature",
+    "creatures",
+)
+
+_NON_ENTITY_DOMAINS: tuple[str, ...] = (
+    "artificial",
+    "industrial",
+    "building",
+    "natural",
+    "architecture",
+    "furniture",
+    "flora",
+    "vehicles",
+    "weapons",
+)
+
+_STATIC_NON_ENTITY_DOMAINS: tuple[str, ...] = (
+    "building",
+    "natural",
+    "architecture",
+    "furniture",
+    "flora",
+    "weapons",
+)
+
+_CREATURE_PROMPT_CUES: tuple[str, ...] = (
+    "wyvern",
+    "dragon",
+    "drake",
+    "griffin",
+    "wolf",
+    "hound",
+    "rhino",
+    "tortoise",
+    "turtle",
+    "spider",
+    "arachnid",
+    "scorpion",
+    "crab",
+    "crustacean",
+    "boar",
+    "bear",
+    "elephant",
+    "stag",
+    "quadruped",
+    "biped",
+    "hexapod",
+    "four-legged",
+    "creature",
+    "companion",
+    "humanoid",
+)
+
+_WINGED_REQUEST_CUES: tuple[str, ...] = (
+    "winged",
+    "wyvern",
+    "dragon",
+    "drake",
+    "griffin",
+    "avian",
+)
+
+_LEGGED_REQUEST_CUES: tuple[str, ...] = (
+    "four-legged",
+    "quadruped",
+    "biped",
+    "hexapod",
+    "wolf",
+    "hound",
+    "rhino",
+    "boar",
+    "bear",
+    "stag",
+    "spider",
 )
 
 _WINGLESS_TERRESTRIAL_CUES: tuple[str, ...] = (
@@ -207,22 +307,27 @@ def verify_prompt_adherence(
     violations: list[str] = []
     checked: dict[str, Any] = {}
 
-    # 1. Minimum / exact box count from prompt or reference (never self-selected by model!)
+    # 1. Minimum / exact box count & reference structure from prompt or reference_dsl (never self-selected!)
     min_boxes = int(spec["min_boxes"]) if "min_boxes" in spec and spec["min_boxes"] is not None else 0
     if bool(spec.get("gate_g2_dense", False)):
         min_boxes = max(min_boxes, 16)
     ref_boxes = spec.get("reference_boxes", spec.get("reference_box_count"))
     if isinstance(ref_boxes, int) and ref_boxes >= 16 and "min_boxes" not in spec:
         min_boxes = max(min_boxes, 16)
-    if isinstance(spec.get("reference_dsl"), str) and "min_boxes" not in spec:
+
+    ref_prog_parsed: Program | None = None
+    ref_scene_compiled: Scene | None = None
+    if isinstance(spec.get("reference_dsl"), str):
         try:
             from synccraft.dsl.parser import parse_program
 
-            ref_sc = compile_geometry(parse_program(spec["reference_dsl"]))
-            if len(ref_sc.boxes) >= 16:
+            ref_prog_parsed = parse_program(spec["reference_dsl"])
+            ref_scene_compiled = compile_geometry(ref_prog_parsed)
+            if len(ref_scene_compiled.boxes) >= 16 and "min_boxes" not in spec:
                 min_boxes = max(min_boxes, 16)
         except Exception:
-            pass
+            ref_prog_parsed = None
+            ref_scene_compiled = None
 
     for m in re.finditer(r"(?:at\s+least|>=|minimum(?:\s+of)?)\s*(\d+)\s*(?:boxes|parts|cuboids|primitives)", prompt_low):
         min_boxes = max(min_boxes, int(m.group(1)))
@@ -249,17 +354,22 @@ def verify_prompt_adherence(
             violations.append(f"exact_boxes_mismatch: observed {n_boxes} vs required {exact_boxes} (tol={tol})")
 
     min_bones = int(spec.get("min_bones", 0) or 0)
-    if min_bones > 0:
-        checked["min_bones"] = min_bones
-        if n_bones < min_bones:
-            violations.append(f"min_bones_not_met: observed {n_bones} < required {min_bones}")
+    if ref_scene_compiled is not None and len(ref_scene_compiled.bones) >= 4 and "min_bones" not in spec:
+        min_bones = max(min_bones, 2)
+    if "articulated" in f"{domain_low} {family_low} {prompt_low}" and "min_bones" not in spec:
+        min_bones = max(min_bones, 2)
 
     # 2. Target profile and archetype adherence
-    expected_archetype = spec.get("archetype")
-    if expected_archetype is None:
+    explicit_archetype = spec.get("archetype")
+    if explicit_archetype is None:
         m_arch = re.search(r"\barchetype\s*[:=]\s*(entity|weapon_3d|block_multipart|item_extruded)\b", prompt_low)
         if m_arch:
-            expected_archetype = m_arch.group(1)
+            explicit_archetype = m_arch.group(1)
+    expected_archetype = (
+        explicit_archetype
+        if explicit_archetype is not None
+        else (ref_prog_parsed.meta.archetype if ref_prog_parsed is not None else None)
+    )
     if expected_archetype:
         checked["archetype"] = str(expected_archetype)
         if program.meta.archetype != str(expected_archetype):
@@ -284,6 +394,8 @@ def verify_prompt_adherence(
 
     # 3. Symmetry / bilateral mirror constraints
     req_sym = spec.get("requires_symmetry", spec.get("requires_mirror"))
+    if req_sym is None and ref_scene_compiled is not None and _has_geometric_bilateral_symmetry(ref_scene_compiled):
+        req_sym = True
     if req_sym is None and any(
         cue in prompt_low
         for cue in ("bilateral symmetry", "mirrored", "mirror_x", "symmetric left/right", "paired wings", "paired limbs")
@@ -330,22 +442,47 @@ def verify_prompt_adherence(
         if len(compiled_scene.locators) == 0:
             violations.append("missing_requested_locators: 0 locators in compiled scene")
 
-    # 5. Domain, anatomical body-plan, and anti-memorization checks
+    # 5. Domain, anatomical body-plan, articulation, and anti-memorization checks
     id_blob = _collect_program_identifiers_lower(program, compiled_scene)
     combined_req = f"{domain_low} {family_low} {prompt_low}"
 
+    is_creature_req = (domain_low in _ENTITY_CREATURE_DOMAINS) or any(
+        re.search(rf"\b{re.escape(cue)}\b", combined_req) for cue in _CREATURE_PROMPT_CUES
+    )
+
+    if is_creature_req:
+        if not expected_archetype and program.meta.archetype != "entity":
+            violations.append(
+                f"domain_archetype_conflict: creature/entity request emitted {program.meta.archetype!r} instead of 'entity'"
+            )
+        if "min_bones" not in spec:
+            min_bones = max(min_bones, 3)
+        if (
+            req_sym is None
+            and spec.get("forbid_mirror") is not True
+            and "asymmetr" not in combined_req
+            and not ("serpent" in combined_req and "winged" not in combined_req and "legged" not in combined_req)
+        ):
+            checked["requires_symmetry"] = True
+            if not has_sym:
+                violations.append(
+                    "missing_requested_symmetry: creature/fauna prompt requires bilateral symmetry"
+                )
+        bad_hits = [w for w in _INDUSTRIAL_WEAPON_ARCHITECTURE_MARKERS if w in id_blob and w not in combined_req]
+        if bad_hits:
+            violations.append(
+                f"domain_semantics_mismatch: creature/biological prompt emitted non-biological parts {bad_hits[:3]}"
+            )
+
+    if min_bones > 0:
+        checked["min_bones"] = min_bones
+        if n_bones < min_bones:
+            violations.append(f"min_bones_not_met: observed {n_bones} < required {min_bones}")
+
     if domain_low:
         checked["domain"] = domain_low
-        if domain_low in ("biological", "fauna", "creature", "creatures"):
-            if program.meta.archetype in ("weapon_3d", "item_extruded"):
-                violations.append(
-                    f"domain_archetype_conflict: biological domain emitted {program.meta.archetype!r}"
-                )
-            bad_hits = [w for w in _INDUSTRIAL_WEAPON_ARCHITECTURE_MARKERS if w in id_blob and w not in combined_req]
-            if bad_hits:
-                violations.append(f"domain_semantics_mismatch: biological prompt emitted non-biological parts {bad_hits[:3]}")
-        elif domain_low in ("industrial", "architecture", "furniture", "flora", "vehicles", "weapons", "artificial"):
-            if domain_low in ("architecture", "furniture", "flora") and program.meta.archetype == "entity" and not expected_archetype:
+        if domain_low in _NON_ENTITY_DOMAINS:
+            if domain_low in _STATIC_NON_ENTITY_DOMAINS and program.meta.archetype == "entity" and not expected_archetype:
                 violations.append(
                     f"domain_archetype_conflict: {domain_low!r} domain emitted entity archetype without request"
                 )
@@ -355,11 +492,22 @@ def verify_prompt_adherence(
                     f"domain_semantics_mismatch: {domain_low!r} prompt emitted biological anatomy {bio_hits[:3]}"
                 )
 
+    # Requested wing / limb anatomical presence checks (rejects generic neutral p0..p15 stacks)
+    if any(re.search(rf"\b{re.escape(cue)}\b", combined_req) for cue in _WINGED_REQUEST_CUES) and not any(
+        w in combined_req for w in ("wingless", "serpentine_lung")
+    ):
+        if not any(w in id_blob for w in _WING_ANATOMY_MARKERS):
+            violations.append("missing_requested_anatomy: winged/dragon prompt lacks wing anatomy parts")
+
+    if any(re.search(rf"\b{re.escape(cue)}\b", combined_req) for cue in _LEGGED_REQUEST_CUES):
+        if not any(w in id_blob for w in _LIMB_ANATOMY_MARKERS):
+            violations.append("missing_requested_anatomy: legged creature prompt lacks limb anatomy parts")
+
     # Same-domain anatomical mismatch: wingless terrestrial creature vs winged wyvern/bird
     if any(cue in combined_req for cue in _WINGLESS_TERRESTRIAL_CUES) and not any(
         w in combined_req for w in ("wing", "winged", "griffin", "wyvern", "dragon", "flying")
     ):
-        wing_hits = [w for w in _WING_ANATOMY_MARKERS if w in id_blob]
+        wing_hits = [w for w in ("wing", "pinion", "patagium", "elytra", "feather") if w in id_blob]
         if wing_hits:
             violations.append(f"anatomical_mismatch: wingless creature prompt emitted wing anatomy {wing_hits[:3]}")
 
@@ -583,19 +731,24 @@ def derive_gate_g2_evidence(
     seen_hashes: set[str] = set()
     passed_count = 0
     for r in rows:
-        ast_hash = str(r.get("canonical_ast_sha256", ""))
+        raw_hash = r.get("canonical_ast_sha256")
+        ast_hash = str(raw_hash).strip() if isinstance(raw_hash, str) else ""
         is_dup = bool(ast_hash and ast_hash in seen_hashes)
         if ast_hash:
             seen_hashes.add(ast_hash)
         r["duplicate_memorized_output"] = is_dup
-        req_min_boxes = max(16, int(r.get("min_boxes", 16)))
+        ref_or_min = int(r.get("reference_boxes", r.get("min_boxes", 0)) or 0)
+        req_min_boxes = max(16, int(r.get("min_boxes", 16) or 16))
+        sat_ok = r.get("sat_collision_passed", r.get("audit_passed", False)) is True
+        adh_ok = r.get("prompt_adherence_passed") is True
         sample_ok = bool(
-            r.get("sat_collision_passed", r.get("audit_passed", False))
-            and r.get("prompt_adherence_passed", True)
+            sat_ok
+            and adh_ok
+            and bool(ast_hash)
             and not is_dup
-            and int(r.get("boxes", 0)) >= req_min_boxes
-            and int(r.get("reference_boxes", req_min_boxes)) >= 16
-            and 0 <= int(r.get("reaudits_used", 0)) <= 3
+            and ref_or_min >= 16
+            and int(r.get("boxes", 0) or 0) >= req_min_boxes
+            and 0 <= int(r.get("reaudits_used", 0) or 0) <= 3
         )
         if sample_ok:
             passed_count += 1
