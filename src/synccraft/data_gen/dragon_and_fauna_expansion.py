@@ -241,11 +241,8 @@ def _jpiv(
     base_xyz: tuple[float, float, float],
     span: float = 0.55,
 ) -> tuple[float, float, float]:
-    return (
-        round(base_xyz[0] + rng.uniform(-span, span), 3),
-        round(base_xyz[1] + rng.uniform(-0.25, 0.25), 3),
-        round(base_xyz[2] + rng.uniform(-span, span), 3),
-    )
+    _ = (rng, base_xyz, span)
+    return (0.0, 0.0, 0.0)
 
 
 def _hpick(h_u: float, choices: tuple[Any, ...]) -> Any:
@@ -424,7 +421,7 @@ def _gen_quadruped_armored_drake(rng: random.Random, v_idx: int) -> tuple[Progra
         "has_detached_bone": False,
         "inflate_detail": armor_inf,
         "material_theme": f"{p_carapace.name}+{p_horn.name}+{p_belly.name}",
-        "notes": f"wingless 4-legged terrestrial armored drake ({substyle}) with thoracic/pelvic osteoderm plates, horned snapping skull ({jaw_deg:g} deg jaw), 4 mirrored 2-joint clawed legs, and spiked tail mace",
+        "notes": f"wingless 4-legged terrestrial armored drake ({substyle.replace('_', ' ')}) with thoracic/pelvic osteoderm plates, horned snapping skull ({jaw_deg:g} deg jaw), 4 mirrored 2-joint clawed legs, and spiked tail mace",
         "extra": {"thorax_w": thorax_w, "thorax_l": thorax_l, "jaw_deg": jaw_deg},
     }
 
@@ -563,19 +560,29 @@ def _gen_eastern_lung_dragon(rng: random.Random, v_idx: int) -> tuple[Program, d
         ],
     )
 
+    has_celestial_pearl = (v_idx % 2 == 0)
     root_items: list[Box | Bone] = [
         Box("anterior_trunk_seg", (5, 4, seg_len), p_scale.name, inflate=scale_inf),
-        Box("anterior_belly_scutes", (3, 1, seg_len - 2), p_antler.name, Place("anterior_trunk_seg", (0.0, -1.0, -0.2), (0.0, 1.0, 0.0))),
-        Box("anterior_dorsal_mane", (1, 2, seg_len - 2), p_mane.name, Place("anterior_trunk_seg", (0.0, 1.0, -0.15), (0.0, -1.0, 0.0))),
+        Box("anterior_belly_scutes", (3, 1, seg_len - 2), p_antler.name, Place("anterior_trunk_seg", (0.0, -1.0, -0.2), (0.0, 1.0, 0.0), (0.0, 0.0, 0.25))),
+        Box("anterior_dorsal_mane", (1, 2, seg_len - 2), p_mane.name, Place("anterior_trunk_seg", (0.0, 1.0, -0.15), (0.0, -1.0, 0.0), (0.0, 0.0, -0.2))),
         head_bone,
         fore_claws,
         mid_somite,
     ]
+    if has_celestial_pearl:
+        root_items.append(
+            Bone(
+                "celestial_orbit_pearl",
+                rest_euler=(0.0, 14.6, 0.0),
+                attach=Attach("anterior_dorsal_mane", (0.0, 1.0, 0.0), (0.0, -1.0, 0.0), (0.0, 1.8, -1.5), detached=True),
+                items=[Box("luminous_sky_pearl", (2, 2, 2), p_pearl.name)],
+            )
+        )
 
     prog = Program(
         meta=Meta("entity", profile, density),
         palettes=[p_scale, p_mane, p_antler, p_pearl],
-        root=Bone("anterior_somite", pivot_local=_jpiv(rng, (8.0, 13.0, 5.0)), items=root_items),
+        root=Bone("anterior_somite", pivot_local=(0.0, 0.0, 0.0), items=root_items),
     )
     return prog, {
         "substyle": substyle,
@@ -583,10 +590,10 @@ def _gen_eastern_lung_dragon(rng: random.Random, v_idx: int) -> tuple[Program, d
         "secondary_span": 15,
         "joint_angle_deg": wave_yaw,
         "has_mirror_x": True,
-        "has_detached_bone": False,
+        "has_detached_bone": has_celestial_pearl,
         "inflate_detail": scale_inf,
         "material_theme": f"{p_scale.name}+{p_mane.name}+{p_antler.name}",
-        "notes": f"wingless 4-somite Imperial Eastern Lung dragon ({substyle}) with dorsal mane ridge, 4 short clawed limbs, branching stag antlers, flowing snout whiskers, bearded jaw, and tail tuft",
+        "notes": f"wingless 4-somite Imperial Eastern Lung dragon ({substyle.replace('_', ' ')}) with dorsal mane ridge, 4 short clawed limbs, branching stag antlers, flowing snout whiskers, bearded jaw, and tail tuft",
         "extra": {"seg_len": seg_len, "wave_yaw": wave_yaw},
     }
 
@@ -733,7 +740,7 @@ def _gen_bipedal_wyvern(rng: random.Random, v_idx: int) -> tuple[Program, dict[s
         "has_detached_bone": False,
         "inflate_detail": scale_inf,
         "material_theme": f"{p_hide.name}+{p_web.name}+{p_venom.name}",
-        "notes": f"bipedal wyvern ({substyle}) with keeled avian sternum, zero separate forelegs, 2 expansive bat-membrane forewings ({wing_dihedral:g} deg dihedral), raptorial hindlegs, crested skull, and venomous barbed tail stinger",
+        "notes": f"bipedal wyvern ({substyle.replace('_', ' ')}) with keeled avian sternum, zero separate forelegs, 2 expansive bat-membrane forewings ({wing_dihedral:g} deg dihedral), raptorial hindlegs, crested skull, and venomous barbed tail stinger",
         "extra": {"w_in": w_in, "w_out": w_out, "neck_h": neck_h},
     }
 
@@ -872,7 +879,7 @@ def _gen_forelimb_lindworm(rng: random.Random, v_idx: int) -> tuple[Program, dic
         "has_detached_bone": False,
         "inflate_detail": scale_inf,
         "material_theme": f"{p_scale.name}+{p_fin.name}+{p_horn.name}",
-        "notes": f"wingless hindlimbless lindworm ({substyle}) with 2 muscular clawed forelimbs on armored pectoral hull, horned viperine skull + jaw, and 4-segment undulating serpentine coil with dorsal finlets",
+        "notes": f"wingless hindlimbless lindworm ({substyle.replace('_', ' ')}) with 2 muscular clawed forelimbs on armored pectoral hull, horned viperine skull + jaw, and 4-segment undulating serpentine coil with dorsal finlets",
         "extra": {"seg_l": seg_l, "wave_deg": wave_deg},
     }
 
@@ -1006,7 +1013,7 @@ def _gen_feathered_raptor(rng: random.Random, v_idx: int) -> tuple[Program, dict
         "has_detached_bone": False,
         "inflate_detail": feather_inf,
         "material_theme": f"{p_body.name}+{p_plume.name}+{p_claw.name}",
-        "notes": f"dromaeosaurid feathered raptor ({substyle}) with S-curved neck, crested toothed snout, mirrored forelimb feather-fans, digitigrade hindlegs with raised inner sickle claws, and stiffened plumed tail fan",
+        "notes": f"dromaeosaurid feathered raptor ({substyle.replace('_', ' ')}) with S-curved neck, crested toothed snout, mirrored forelimb feather-fans, digitigrade hindlegs with raised inner sickle claws, and stiffened plumed tail fan",
         "extra": {"tail_len": tail_len, "jaw_deg": jaw_deg},
     }
 
@@ -1137,7 +1144,7 @@ def _gen_winged_amphithere(rng: random.Random, v_idx: int) -> tuple[Program, dic
         "has_detached_bone": False,
         "inflate_detail": plume_inf,
         "material_theme": f"{p_serpent.name}+{p_pinion.name}+{p_beak.name}",
-        "notes": f"legless feathered amphithere ({substyle}) with cobra-hooded anterior neck, crested fanged beak, 2 multi-tiered avian wings, and 3-segment undulating serpent tail with wide plumage fan",
+        "notes": f"legless feathered amphithere ({substyle.replace('_', ' ')}) with cobra-hooded anterior neck, crested fanged beak, 2 multi-tiered avian wings, and 3-segment undulating serpent tail with wide plumage fan",
         "extra": {"w_in": w_in, "w_out": w_out, "seg_l": seg_l},
     }
 
@@ -1296,7 +1303,7 @@ def _gen_multi_headed_hydra(rng: random.Random, v_idx: int) -> tuple[Program, di
         "has_detached_bone": False,
         "inflate_detail": hide_inf,
         "material_theme": f"{p_hide.name}+{p_spine.name}+{p_venom.name}",
-        "notes": f"polycephalic 3-headed hydra ({substyle}) on 4 pillar legs with twin-fluked tail, central upward neck, and mirrored lateral necks flared by ({flare_ry:g}, {flare_rz:g}) deg Ry/Rz with snapping jaws",
+        "notes": f"polycephalic 3-headed hydra ({substyle.replace('_', ' ')}) on 4 pillar legs with twin-fluked tail, central upward neck, and mirrored lateral necks flared by ({flare_ry:g}, {flare_rz:g}) deg Ry/Rz with snapping jaws",
         "extra": {"neck_h": neck_h, "flare_rz": flare_rz, "flare_ry": flare_ry},
     }
 
@@ -1453,7 +1460,7 @@ def _gen_crowned_zilant(rng: random.Random, v_idx: int) -> tuple[Program, dict[s
         "has_detached_bone": False,
         "inflate_detail": scale_inf,
         "material_theme": f"{p_scale.name}+{p_crown.name}+{p_wing.name}",
-        "notes": f"held-out mythic crowned zilant ({substyle}) with breastplate scales, 2 scaled avian legs, 2 feathered/leathery wings, horned dragon head topped by golden 3-prong crown, and 3-segment curved serpent tail",
+        "notes": f"mythic crowned winged serpent ({substyle.replace('_', ' ')}) with breastplate scales, 2 scaled avian legs, 2 feathered or leathery wings, horned dragon head topped by golden 3-prong crown, and 3-segment curved serpent tail",
         "extra": {"w_in": w_in, "w_out": w_out, "jaw_deg": jaw_deg},
     }
 
@@ -1587,7 +1594,7 @@ def _gen_articulated_manta_shark(rng: random.Random, v_idx: int) -> tuple[Progra
         "has_detached_bone": False,
         "inflate_detail": skin_inf,
         "material_theme": f"{p_dorsum.name}+{p_belly.name}+{p_fin.name}",
-        "notes": f"pelagic aquatic swimmer ({substyle}) with fusiform hydrofoil body, mirrored cephalic lobes, ventral jaw, tall dorsal fin, 2-stage pectoral wing-fins, and 2-segment yawing lunate caudal tail",
+        "notes": f"pelagic aquatic swimmer ({substyle.replace('_', ' ')}) with fusiform hydrofoil body, mirrored cephalic lobes, ventral jaw, tall dorsal fin, 2-stage pectoral wing-fins, and 2-segment yawing lunate caudal tail",
         "extra": {"body_w": body_w, "pec_in": pec_in, "pec_out": pec_out},
     }
 
@@ -1707,7 +1714,7 @@ def _gen_pine_conifer_evergreen(rng: random.Random, v_idx: int) -> tuple[Program
         "has_detached_bone": False,
         "inflate_detail": bark_inf,
         "material_theme": f"{p_bark.name}+{p_needle_low.name}+{p_mound.name}",
-        "notes": f"rooted alpine conifer ({substyle}) on stone/moss mound with 4 root buttresses, 3-stage tapered resinous trunk, 3 graduated drooping needle whorls ({droop_deg:g} deg droop), and apical spire",
+        "notes": f"rooted alpine conifer ({substyle.replace('_', ' ')}) on stone/moss mound with 4 root buttresses, 3-stage tapered resinous trunk, 3 graduated drooping needle whorls ({droop_deg:g} deg droop), and apical spire",
         "extra": {"mound_w": mound_w, "droop_deg": droop_deg, "low_h": low_h, "mid_h": mid_h},
     }
 
@@ -1814,7 +1821,7 @@ def _gen_waterwheel_millhouse(rng: random.Random, v_idx: int) -> tuple[Program, 
         "has_detached_bone": False,
         "inflate_detail": beam_inf,
         "material_theme": f"{p_stone.name}+{p_timber.name}+{p_wheel.name}",
-        "notes": f"half-timbered stone & oak watermill ({substyle}) with stone foundation, millrace sluice channel wall, pitched gable roof + chimney, and side-mounted 4-paddle rotary waterwheel ({wheel_roll_deg:g} deg roll on {'+X' if side_sign > 0 else '-X'} wall)",
+        "notes": f"half-timbered stone & oak watermill ({substyle.replace('_', ' ')}) with stone foundation, millrace sluice channel wall, pitched gable roof + chimney, and side-mounted 4-paddle rotary waterwheel ({wheel_roll_deg:g} deg roll on {'+X' if side_sign > 0 else '-X'} wall)",
         "extra": {"side_sign": side_sign, "wheel_roll_deg": wheel_roll_deg, "spoke_len": spoke_len},
     }
 

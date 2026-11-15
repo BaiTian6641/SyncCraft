@@ -652,6 +652,47 @@ class TestApexComplexEntityAndAssetPack(unittest.TestCase):
                 self.assertEqual(row["bone_count"], len(compiled_row.bones))
                 self.assertEqual(row["locator_count"], len(compiled_row.locators))
                 self.assertEqual(row["muscle_count"], len(parsed.muscles))
+                self.assertEqual(parsed.root.pivot_local, (0.0, 0.0, 0.0))
+                self.assertNotIn("apricorn", row["user_prompt"].lower())
+                self.assertNotIn("apricorn", row["assistant_dsl"].lower())
+                self.assertNotIn("//", row["assistant_dsl"])
+
+            self.assertIn("distinct_tree_shapes_by_family", manifest)
+            self.assertEqual(
+                set(manifest["holdout_splits"]),
+                {"test_unseen_params", "test_unseen", "test_compositional"},
+            )
+            for h_split in ("test_unseen_params", "test_unseen", "test_compositional"):
+                self.assertGreater(manifest["holdout_split_counts"][h_split], 0)
+                self.assertTrue((Path(tmp) / f"{h_split}.jsonl").is_file())
+
+    def test_clean_room_apex_renames_legacy_aliases_and_multi_seed_topological_breadth(self) -> None:
+        from synccraft.data_gen import compute_program_tree_shape
+
+        self.assertIn("elemental_companion_critter", APEX_SEEN_FAMILIES)
+        self.assertIn("modular_botanical_healing_station", APEX_SEEN_FAMILIES)
+        self.assertNotIn("elemental_pocket_companion", ALL_APEX_FAMILIES)
+        self.assertNotIn("modular_apricorn_healing_station", ALL_APEX_FAMILIES)
+
+        # Silent input alias lookup preserves compatibility for legacy callers while emitting clean-room ASTs
+        critter_alias = build_apex_complex_program("elemental_pocket_companion", seed=101)
+        critter_canon = build_apex_complex_program("elemental_companion_critter", seed=101)
+        self.assertEqual(format_program(critter_alias), format_program(critter_canon))
+
+        station_alias = build_apex_complex_program("modular_apricorn_healing_station", seed=101)
+        station_canon = build_apex_complex_program("modular_botanical_healing_station", seed=101)
+        station_dsl = format_program(station_canon)
+        self.assertEqual(format_program(station_alias), station_dsl)
+        self.assertNotIn("apricorn", station_dsl.lower())
+        self.assertIn("botanical_hopper_pod", station_dsl)
+
+        # Multi-seed generation produces rich distinct tree shapes across Apex families
+        for fam in ("apex_flying_wyvern", "elemental_companion_critter", "modular_botanical_healing_station"):
+            shapes = {
+                compute_program_tree_shape(build_apex_complex_program(fam, seed=1000 + k * 37))
+                for k in range(12)
+            }
+            self.assertGreaterEqual(len(shapes), 5, f"{fam} produced only {len(shapes)} distinct tree shapes across 12 seeds")
 
 
 class TestAdversarialRegressionGuardsV31(unittest.TestCase):

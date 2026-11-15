@@ -216,8 +216,11 @@ class TestP108ComplexStaticGenerators(unittest.TestCase):
                 else:
                     self.assertGreaterEqual(boxes, 6, f"{fam} tier_2_medium v{v_idx} had {boxes} < 6 boxes")
                     self.assertLessEqual(boxes, 16, f"{fam} tier_2_medium v{v_idx} had {boxes} > 16 boxes")
-                # Assistant completion (including trailing @animation_plan comment & repair header) must parse cleanly
-                parsed_assist = parse_program(row["prompt_and_provenance"]["assistant_completion"])
+                # Comment-free assistant completion (using typed @behavior AST) must parse cleanly
+                comp_text = row["prompt_and_provenance"]["assistant_completion"]
+                self.assertNotIn("//", comp_text)
+                self.assertNotIn("swept_sat_verified", comp_text)
+                parsed_assist = parse_program(comp_text)
                 self.assertEqual(len(compile_geometry(parsed_assist).boxes), boxes)
                 observed_domains.add(row["generator_parameters"]["domain"])
                 if row["generator_parameters"]["has_mirror_x"]:
@@ -337,6 +340,230 @@ class TestP108ComplexStaticGenerators(unittest.TestCase):
                 with Image.open(sheet_file) as im:
                     self.assertGreater(im.size[0], 600)
                     self.assertGreater(im.size[1], 300)
+            self.assertEqual(
+                set(summary["holdout_splits"]),
+                {"test_unseen_params", "test_unseen", "test_compositional"},
+            )
+            for h_split in ("test_unseen_params", "test_unseen", "test_compositional"):
+                self.assertGreater(summary["holdout_split_counts"][h_split], 0)
+                self.assertTrue((out_dir / f"{h_split}.jsonl").is_file())
+            self.assertIn("distinct_tree_shapes_by_family", summary)
+            self.assertGreaterEqual(len(summary["distinct_tree_shapes_by_family"]), 55)
+
+
+class TestCleanRoomZeroLeakageDiversityAndHoldouts(unittest.TestCase):
+    """Strict regression guards for H1, H11, M2, M3, M13, M14, Dataset #6, and 3-holdout splits."""
+
+    def test_zero_split_name_slug_or_borrowed_ip_leakage_across_all_65_families(self):
+        """Every generated prompt across all 55 core + 10 Apex families must have 0 split/slug/IP leaks."""
+        import re
+        from synccraft.data_gen import (
+            ALL_APEX_FAMILIES,
+            APEX_SEEN_FAMILIES,
+            APEX_UNSEEN_FAMILIES,
+            generate_apex_complex_dataset,
+        )
+        from synccraft.data_gen.static_families import verify_and_package_compositional_candidate
+
+        forbidden_pattern = re.compile(
+            r"\b(?:held[-\s]?out|holdout|unseen|test_unseen|test_unseen_params|test_compositional|"
+            r"seen_train|validation|apricorn|pok[eé]mon|cobblemon|monster\s+hunter)\b",
+            re.IGNORECASE,
+        )
+        all_family_slugs = set(SEEN_STATIC_FAMILIES) | set(UNSEEN_STATIC_FAMILIES) | set(ALL_APEX_FAMILIES) | {
+            "elemental_pocket_companion",
+            "modular_apricorn_healing_station",
+        }
+        self.assertIn("elemental_companion_critter", APEX_SEEN_FAMILIES)
+        self.assertIn("modular_botanical_healing_station", APEX_SEEN_FAMILIES)
+        self.assertNotIn("elemental_pocket_companion", ALL_APEX_FAMILIES)
+        self.assertNotIn("modular_apricorn_healing_station", ALL_APEX_FAMILIES)
+
+        snake_case_slugs = {s for s in all_family_slugs if "_" in s}
+
+        def _assert_clean_prompt(prompt_text: str, context: str) -> None:
+            m = forbidden_pattern.search(prompt_text)
+            if m is not None:
+                self.fail(f"Forbidden leak {m.group(0)!r} in {context}: {prompt_text!r}")
+            low = prompt_text.lower()
+            for slug in snake_case_slugs:
+                self.assertNotIn(slug.lower(), low, f"Raw family_id slug {slug!r} leaked in {context}: {prompt_text!r}")
+
+        # 1. All 40 Seen + 15 Unseen core families across train, val, test_unseen, and test_unseen_params
+        for fam in SEEN_STATIC_FAMILIES:
+            for sp, v_idx in (("train", 0), ("train", 1), ("val", 0), ("test_unseen_params", 0)):
+                row = verify_and_package_candidate(fam, split=sp, variant_index=v_idx)
+                prov = row["prompt_and_provenance"]
+                _assert_clean_prompt(prov["prompt"], f"{fam}/{sp}/v{v_idx}/prompt")
+                _assert_clean_prompt(prov["assistant_prompt"], f"{fam}/{sp}/v{v_idx}/assistant_prompt")
+                # Pinned specification check (Dataset #6): target box & bone counts pinned explicitly
+                self.assertIn("boxes across", prov["prompt"])
+
+        for fam in UNSEEN_STATIC_FAMILIES:
+            for v_idx in (0, 1):
+                row = verify_and_package_candidate(fam, split="test_unseen", variant_index=v_idx)
+                prov = row["prompt_and_provenance"]
+                _assert_clean_prompt(prov["prompt"], f"{fam}/test_unseen/v{v_idx}/prompt")
+                _assert_clean_prompt(prov["assistant_prompt"], f"{fam}/test_unseen/v{v_idx}/assistant_prompt")
+                self.assertIn("boxes across", prov["prompt"])
+
+        # 2. Compositional holdout rows
+        for p_idx in range(4):
+            crow = verify_and_package_compositional_candidate(pairing_index=p_idx, variant_index=0)
+            prov = crow["prompt_and_provenance"]
+            _assert_clean_prompt(prov["prompt"], f"compositional/{p_idx}/prompt")
+            _assert_clean_prompt(prov["assistant_prompt"], f"compositional/{p_idx}/assistant_prompt")
+
+        # 3. All 10 Apex families (including progressive & critique turns + all 3 Apex holdouts)
+        apex_bundle = generate_apex_complex_dataset(
+            None,
+            samples_per_seen_family=1,
+            samples_per_unseen_family=1,
+            seed=202699,
+        )
+        all_apex_rows = list(apex_bundle["rows"])
+        for h_rows in apex_bundle["holdout_rows"].values():
+            all_apex_rows.extend(h_rows)
+        self.assertGreaterEqual(len(all_apex_rows), 30 + 24 + 12)
+        for a_row in all_apex_rows:
+            _assert_clean_prompt(a_row["user_prompt"], f"apex/{a_row['family_id']}/{a_row['split']}/{a_row['task_mode']}")
+            self.assertNotIn("apricorn", a_row["assistant_dsl"].lower())
+            self.assertNotIn("//", a_row["assistant_dsl"])
+            self.assertIn("boxes across", a_row["user_prompt"])
+
+    def test_comment_free_targets_and_typed_behavior_ast_supervision(self):
+        """H11: Zero // @animation_plan or swept_sat_verified comments; articulated profiles carry @behavior AST."""
+        observed_behavior_ast = 0
+        for idx, fam in enumerate(SEEN_STATIC_FAMILIES[:16]):
+            for v_idx in range(4):
+                row = verify_and_package_candidate(fam, split="train", variant_index=idx * 4 + v_idx)
+                comp = row["prompt_and_provenance"]["assistant_completion"]
+                canon = row["canonical_dsl"]
+                self.assertNotIn("//", comp)
+                self.assertNotIn("//", canon)
+                self.assertNotIn("@animation_plan", comp)
+                self.assertNotIn("swept_sat_verified", comp)
+                prog_comp = parse_program(comp)
+                prog_canon = parse_program(canon)
+                if prog_canon.meta.target_profile in ("bbmodel_5", "bedrock_entity", "geckolib"):
+                    if prog_canon.behavior is not None and len(prog_canon.behavior.clips) > 0:
+                        observed_behavior_ast += 1
+                        self.assertIn("@behavior", comp)
+                        self.assertIn("@behavior", canon)
+                else:
+                    self.assertIsNone(prog_comp.behavior)
+                    self.assertIsNone(prog_canon.behavior)
+        self.assertGreaterEqual(observed_behavior_ast, 20)
+
+    def test_canonical_root_pivot_canonical_seeds_and_continuous_human_bridging(self):
+        """M2 & M3: Root pivot_local == (0,0,0), canonical material seeds <= 16, continuous rest angles, offsets & detached."""
+        from synccraft.data_gen import ALL_APEX_FAMILIES, build_apex_complex_program
+        from synccraft.dsl.ast_nodes import Bone, Box
+
+        discrete_24 = {round(k * 15.0, 4) for k in range(-24, 25)} | {22.5, -22.5, 67.5, -67.5}
+        continuous_angles_seen = 0
+        nonzero_offsets_seen = 0
+        detached_seen = 0
+
+        def _walk_bones(b: Bone, is_root: bool = False) -> None:
+            nonlocal continuous_angles_seen, nonzero_offsets_seen, detached_seen
+            if not is_root:
+                for ang in b.rest_euler:
+                    if abs(ang) > 1e-6 and round(ang, 4) not in discrete_24:
+                        continuous_angles_seen += 1
+                if b.attach is not None:
+                    if b.attach.detached:
+                        detached_seen += 1
+                    if any(abs(v) > 1e-6 for v in b.attach.offset):
+                        nonzero_offsets_seen += 1
+            for it in b.items:
+                if isinstance(it, Box) and it.place is not None:
+                    if any(abs(v) > 1e-6 for v in it.place.offset):
+                        nonzero_offsets_seen += 1
+                elif isinstance(it, Bone):
+                    _walk_bones(it, is_root=False)
+
+        for fam in (*SEEN_STATIC_FAMILIES[:20], *UNSEEN_STATIC_FAMILIES[:8]):
+            sp = "test_unseen" if fam in UNSEEN_STATIC_FAMILIES else "train"
+            row = verify_and_package_candidate(fam, split=sp, variant_index=1)
+            prog = parse_program(row["canonical_dsl"])
+            self.assertEqual(prog.root.pivot_local, (0.0, 0.0, 0.0), f"{fam} had non-zero root pivot {prog.root.pivot_local}")
+            if prog.materials:
+                self.assertEqual(
+                    {mat.seed for mat in prog.materials},
+                    set(range(1, len(prog.materials) + 1)),
+                )
+                for mat in prog.materials:
+                    self.assertLessEqual(mat.seed, 16)
+            _walk_bones(prog.root, is_root=True)
+
+        for fam in ALL_APEX_FAMILIES:
+            aprog = build_apex_complex_program(fam, seed=202)
+            self.assertEqual(aprog.root.pivot_local, (0.0, 0.0, 0.0), f"Apex {fam} had non-zero root pivot")
+            self.assertEqual(
+                {mat.seed for mat in aprog.materials},
+                set(range(1, len(aprog.materials) + 1)),
+            )
+            for mat in aprog.materials:
+                self.assertLessEqual(mat.seed, 16)
+            _walk_bones(aprog.root, is_root=True)
+
+        self.assertGreaterEqual(continuous_angles_seen, 25)
+        self.assertGreaterEqual(nonzero_offsets_seen, 15)
+        self.assertGreaterEqual(detached_seen, 3)
+
+    def test_mechanical_crossbow_150_rows_yields_at_least_35_distinct_tree_shapes(self):
+        """M14: 150 rows of `mechanical_crossbow` must produce >= 35 distinct bone-and-box tree shapes."""
+        from synccraft.data_gen import compute_program_tree_shape
+
+        distinct_shapes: set[str] = set()
+        for v_idx in range(150):
+            row = verify_and_package_candidate("mechanical_crossbow", split="train", variant_index=v_idx)
+            self.assertTrue(row["audit_version_and_results"]["passed"])
+            prog = parse_program(row["canonical_dsl"])
+            sig = compute_program_tree_shape(prog)
+            self.assertEqual(sig, row["generator_parameters"]["tree_shape_signature"])
+            distinct_shapes.add(sig)
+
+        self.assertGreaterEqual(
+            len(distinct_shapes),
+            35,
+            f"mechanical_crossbow collapsed to {len(distinct_shapes)} < 35 tree shapes across 150 rows",
+        )
+
+    def test_three_holdout_splits_and_distinct_tree_shapes_in_manifest(self):
+        """Verify `test_unseen_params`, `test_unseen`, `test_compositional` and `distinct_tree_shapes_by_family`."""
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp) / "holdout_ds"
+            manifest = build_verified_dataset(out_dir, preset_name="pilot_200", max_workers=2)
+            self.assertEqual(
+                set(manifest["holdout_splits"]),
+                {"test_unseen_params", "test_unseen", "test_compositional"},
+            )
+            self.assertIn("distinct_tree_shapes_by_family", manifest)
+            self.assertEqual(len(manifest["distinct_tree_shapes_by_family"]), 55)
+
+            seen_train_hashes = {
+                r["canonical_dsl_sha256"] for r in manifest["rows"] if r["split"] in ("train", "val")
+            }
+            for h_split in ("test_unseen_params", "test_unseen", "test_compositional"):
+                self.assertGreater(manifest["holdout_split_counts"][h_split], 0)
+                h_path = out_dir / f"{h_split}.jsonl"
+                self.assertTrue(h_path.is_file())
+                lines = [json.loads(line) for line in h_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+                self.assertEqual(len(lines), manifest["holdout_split_counts"][h_split])
+                for h_row in lines:
+                    self.assertEqual(h_row["split"], h_split)
+                    self.assertNotIn(h_row["canonical_dsl_sha256"], seen_train_hashes)
+                    self.assertTrue(h_row["audit_version_and_results"]["passed"])
+                    if h_split == "test_unseen_params":
+                        self.assertIn(h_row["family_id"], SEEN_STATIC_FAMILIES)
+                        self.assertEqual(h_row["generator_parameters"]["param_regime"], "heldout_extrapolation_v1")
+                    elif h_split == "test_unseen":
+                        self.assertIn(h_row["family_id"], UNSEEN_STATIC_FAMILIES)
+                    elif h_split == "test_compositional":
+                        self.assertIn(h_row["family_id"], SEEN_STATIC_FAMILIES)
+                        self.assertTrue(h_row["generator_parameters"]["param_regime"].startswith("compositional:"))
 
 
 if __name__ == "__main__":

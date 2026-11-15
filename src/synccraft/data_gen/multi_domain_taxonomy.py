@@ -169,11 +169,8 @@ def _pal(
 
 
 def _jpiv(rng: random.Random, base_xyz: tuple[float, float, float], span: float = 0.6) -> tuple[float, float, float]:
-    return (
-        round(base_xyz[0] + rng.uniform(-span, span), 3),
-        round(base_xyz[1] + rng.uniform(-0.25, 0.25), 3),
-        round(base_xyz[2] + rng.uniform(-span, span), 3),
-    )
+    _ = (rng, base_xyz, span)
+    return (0.0, 0.0, 0.0)
 
 
 def _static_profile_and_density(v_idx: int) -> tuple[str, int]:
@@ -324,10 +321,11 @@ def _gen_crystalline_geode_outcrop(rng: random.Random, v_idx: int) -> tuple[Prog
         ],
     )
 
+    has_floating_shard = (v_idx % 2 == 0)
     root_items: list[Box | Bone] = [
         Box("bedrock_plinth", (base_w, 2, base_w), p_rock.name),
-        Box("moss_skirt_e", (2, 1, 5), p_moss.name, Place("bedrock_plinth", (1.0, 0.5, 0.0), (-1.0, 0.0, 0.0))),
-        Box("moss_skirt_w", (2, 1, 5), p_moss.name, Place("bedrock_plinth", (-1.0, 0.5, 0.0), (1.0, 0.0, 0.0))),
+        Box("moss_skirt_e", (2, 1, 5), p_moss.name, Place("bedrock_plinth", (1.0, 0.5, 0.0), (-1.0, 0.0, 0.0), (0.0, 0.0, 0.3))),
+        Box("moss_skirt_w", (2, 1, 5), p_moss.name, Place("bedrock_plinth", (-1.0, 0.5, 0.0), (1.0, 0.0, 0.0), (0.0, 0.0, -0.3))),
         Box("strata_shelf", (base_w - 2, 2, base_w - 2), p_crust.name, Place("bedrock_plinth", (0.0, 1.0, 0.0), (0.0, -1.0, 0.0)), inflate=crust_inf),
         Box("geode_basin", (6, 2, 5), p_crust.name, Place("strata_shelf", (0.0, 1.0, -0.2), (0.0, -1.0, 0.0))),
         Box("rear_hood_wall", (6, 4, 1), p_rock.name, Place("geode_basin", (0.0, 1.0, -1.0), (0.0, -1.0, -1.0))),
@@ -336,11 +334,20 @@ def _gen_crystalline_geode_outcrop(rng: random.Random, v_idx: int) -> tuple[Prog
         lateral_cluster,
         fore_crystal,
     ]
+    if has_floating_shard:
+        root_items.append(
+            Bone(
+                "resonant_crystal_mote",
+                rest_euler=(0.0, 18.4, 0.0),
+                attach=Attach("hood_cap_stone", (0.0, 1.0, 0.0), (0.0, -1.0, 0.0), (0.0, 2.2, 0.0), detached=True),
+                items=[Box("levitating_shard", (1, 2, 1), p_cryst.name)],
+            )
+        )
 
     prog = Program(
         meta=Meta("block_multipart", profile, density),
         palettes=[p_rock, p_crust, p_cryst, p_moss],
-        root=Bone("outcrop_root", pivot_local=_jpiv(rng, (8.0, 2.0, 8.0)), items=root_items),
+        root=Bone("outcrop_root", pivot_local=(0.0, 0.0, 0.0), items=root_items),
     )
     return prog, {
         "substyle": substyle,
@@ -348,7 +355,7 @@ def _gen_crystalline_geode_outcrop(rng: random.Random, v_idx: int) -> tuple[Prog
         "secondary_span": base_w + 4,
         "joint_angle_deg": splay_deg,
         "has_mirror_x": True,
-        "has_detached_bone": False,
+        "has_detached_bone": has_floating_shard,
         "inflate_detail": crust_inf,
         "material_theme": f"{p_rock.name}+{p_cryst.name}+{p_moss.name}",
         "notes": f"stepped {base_w}-wide bedrock geode basin with rear hood wall, emissive {main_spire_h}-tall central prism, mirrored {splay_deg:g} deg splay crystals, and moss skirts",
@@ -760,7 +767,13 @@ def _gen_hydraulic_gantry_crane(rng: random.Random, v_idx: int) -> tuple[Program
     )
 
     root_items: list[Box | Bone] = [
-        Box("bridge_box_girder", (span_x, 3, 4), p_girder.name, inflate=beam_inf),
+        Box(
+            "bridge_box_girder",
+            (span_x, 3, 4),
+            p_girder.name,
+            Place(None, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0), (0.0, 14.0, 0.0)),
+            inflate=beam_inf,
+        ),
         Box("catwalk_deck_top", (span_x - 2, 1, 2), p_hoist.name, Place("bridge_box_girder", (0.0, 1.0, 0.0), (0.0, -1.0, 0.0))),
         Box("operator_cab_pod", (3, 2, 2), p_strut.name, Place("bridge_box_girder", (0.0, 0.0, 1.0), (0.0, 0.0, -1.0))),
         Box("warning_strobe_top", (2, 2, 2), p_beacon.name, Place("catwalk_deck_top", (0.0, 1.0, 0.0), (0.0, -1.0, 0.0))),
@@ -1211,7 +1224,7 @@ def _gen_humanoid_biped(rng: random.Random, v_idx: int) -> tuple[Program, dict[s
         "has_detached_bone": False,
         "inflate_detail": armor_inf,
         "material_theme": f"{p_primary.name}+{p_cloth.name}+{p_skin.name}",
-        "notes": f"articulated bipedal humanoid ({substyle}) with pelvis, {torso_h}-tall cuirass + dorsal pack, yawed visored head, mirrored 2-joint arms, and mirrored 2-joint striding legs",
+        "notes": f"articulated bipedal humanoid ({substyle.replace('_', ' ')}) with pelvis, {torso_h}-tall cuirass + dorsal pack, yawed visored head, mirrored 2-joint arms, and mirrored 2-joint striding legs",
         "extra": {"torso_h": torso_h, "leg_len": leg_len, "stride_deg": stride_deg},
     }
 
@@ -1325,7 +1338,7 @@ def _gen_dog_horse_quadruped(rng: random.Random, v_idx: int) -> tuple[Program, d
         "has_detached_bone": False,
         "inflate_detail": coat_inf,
         "material_theme": f"{p_coat.name}+{p_belly.name}+{p_hoof.name}",
-        "notes": f"quadrupedal mammal ({substyle}) with deep ribcage + croup, {neck_pitch:g} deg neck/skull/muzzle + mirrored ears/antlers, 2-joint fore & hind limbs, and plumed tail",
+        "notes": f"quadrupedal mammal ({substyle.replace('_', ' ')}) with deep ribcage + croup, {neck_pitch:g} deg neck/skull/muzzle + mirrored ears/antlers, 2-joint fore & hind limbs, and plumed tail",
         "extra": {"body_len": body_len, "leg_len": leg_len},
     }
 
@@ -1424,7 +1437,7 @@ def _gen_bird(rng: random.Random, v_idx: int) -> tuple[Program, dict[str, Any]]:
         "has_detached_bone": False,
         "inflate_detail": feather_inf,
         "material_theme": f"{p_plumage.name}+{p_breast.name}+{p_beak.name}",
-        "notes": f"articulated avian rig ({substyle}) with keeled sternum, hooked beak & occipital crest, 2-stage mirrored wings at {dihedral_deg:g} deg dihedral, taloned legs, and spread rectrices tail fan",
+        "notes": f"articulated avian rig ({substyle.replace('_', ' ')}) with keeled sternum, hooked beak & occipital crest, 2-stage mirrored wings at {dihedral_deg:g} deg dihedral, taloned legs, and spread rectrices tail fan",
         "extra": {"wing_in_w": wing_in_w, "wing_out_w": wing_out_w},
     }
 
@@ -1571,7 +1584,7 @@ def _gen_winged_western_dragon(rng: random.Random, v_idx: int) -> tuple[Program,
         "has_detached_bone": False,
         "inflate_detail": scale_inf,
         "material_theme": f"{p_scale.name}+{p_membrane.name}+{p_horn.name}",
-        "notes": f"4-legged winged western dragon ({substyle}) with dorsal osteoderms, S-curved neck, jawed skull ({jaw_open_deg:g} deg) + swept horns, 2-stage bat-membrane wings, clawed limbs, and spade-tipped tail",
+        "notes": f"4-legged winged western dragon ({substyle.replace('_', ' ')}) with dorsal osteoderms, S-curved neck, jawed skull ({jaw_open_deg:g} deg) + swept horns, 2-stage bat-membrane wings, clawed limbs, and spade-tipped tail",
         "extra": {"wing_span_in": wing_span_in, "jaw_open_deg": jaw_open_deg},
     }
 
@@ -1665,7 +1678,7 @@ def _gen_hexapod_beetle(rng: random.Random, v_idx: int) -> tuple[Program, dict[s
         "has_detached_bone": False,
         "inflate_detail": chitin_inf,
         "material_theme": f"{p_elytra.name}+{p_chitin.name}+{p_horn.name}",
-        "notes": f"6-legged armored beetle ({substyle}) with thoracic horn, clypeal horn + mirrored mandibles, flared iridescent elytra, and 3 distinct mirrored leg pairs",
+        "notes": f"6-legged armored beetle ({substyle.replace('_', ' ')}) with thoracic horn, clypeal horn + mirrored mandibles, flared iridescent elytra, and 3 distinct mirrored leg pairs",
         "extra": {"abdomen_len": abdomen_len, "elytra_flare": elytra_flare},
     }
 
@@ -1788,7 +1801,7 @@ def _gen_heavy_tail_tyrannosaur(rng: random.Random, v_idx: int) -> tuple[Program
         "has_detached_bone": False,
         "inflate_detail": scute_inf,
         "material_theme": f"{p_hide.name}+{p_under.name}+{p_claw.name}",
-        "notes": f"bipedal heavy-tailed theropod ({substyle}) with horizontal pelvis/ribcage, S-neck, deep toothy maxilla + {jaw_deg:g} deg mandible, compact didactyl arms, digitigrade hindlimbs, and 2-stage counterbalanced tail",
+        "notes": f"bipedal heavy-tailed theropod ({substyle.replace('_', ' ')}) with horizontal pelvis/ribcage, S-neck, deep toothy maxilla + {jaw_deg:g} deg mandible, compact didactyl arms, digitigrade hindlimbs, and 2-stage counterbalanced tail",
         "extra": {"tail_len": tail_len, "jaw_deg": jaw_deg},
     }
 
@@ -1909,7 +1922,7 @@ def _gen_segmented_sea_dragon(rng: random.Random, v_idx: int) -> tuple[Program, 
         "has_detached_bone": False,
         "inflate_detail": fin_inf,
         "material_theme": f"{p_scale.name}+{p_fin.name}+{p_belly.name}",
-        "notes": f"4-somite S-undulating sea dragon ({substyle}, +-{wave_deg:g} deg yaw wave) with bioluminescent angler lure, mirrored gill frills, hydrofoil pectoral paddles, pelvic fins, dorsal sails, and lunate caudal fluke",
+        "notes": f"4-somite S-undulating sea dragon ({substyle.replace('_', ' ')}, +-{wave_deg:g} deg yaw wave) with bioluminescent angler lure, mirrored gill frills, hydrofoil pectoral paddles, pelvic fins, dorsal sails, and lunate caudal fluke",
         "extra": {"seg_len": seg_len, "wave_deg": wave_deg, "flipper_span": flipper_span},
     }
 

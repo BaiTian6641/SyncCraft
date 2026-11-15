@@ -304,6 +304,92 @@ TAXONOMY_ENTRIES: tuple[TaxonomyEntry, ...] = (
 
 TAXONOMY_BY_FAMILY: dict[str, TaxonomyEntry] = {entry.family_id: entry for entry in TAXONOMY_ENTRIES}
 
+# Clean-room Apache-2.0 Apex musculoskeletal & interactive asset taxonomy (8 seen + 2 unseen)
+APEX_TAXONOMY_ENTRIES: tuple[TaxonomyEntry, ...] = (
+    TaxonomyEntry(
+        "apex_flying_wyvern", "seen", "dragon", "mythic_draconic", "biomechanical_flying_wyvern",
+        "wing_and_gait", ("keratin_scales", "patterned_skin", "thin_film_iridescence"),
+        entity_body_plan="apex_flying_wyvern",
+    ),
+    TaxonomyEntry(
+        "brute_theropod_wyvern", "seen", "dragon", "mythic_draconic", "heavy_theropod_wyvern",
+        "biped_stride", ("patterned_skin", "keratin_scales", "polymer_dielectric"),
+        entity_body_plan="brute_theropod_wyvern",
+    ),
+    TaxonomyEntry(
+        "pelagic_leviathan_wyvern", "seen", "dragon", "mythic_draconic", "pelagic_sea_leviathan",
+        "serpentine_wave", ("thin_film_iridescence", "keratin_scales", "patterned_skin"),
+        entity_body_plan="pelagic_leviathan_wyvern",
+    ),
+    TaxonomyEntry(
+        "fanged_thunder_wyvern", "seen", "dragon", "mythic_draconic", "quadruped_storm_wyvern",
+        "quadruped_stride", ("keratin_scales", "woven_cloth_fur", "thin_film_iridescence"),
+        entity_body_plan="fanged_thunder_wyvern",
+    ),
+    TaxonomyEntry(
+        "armored_arthropod_colossus", "seen", "animal", "aquatic_and_arthropod_fauna", "carapace_arthropod_colossus",
+        "quadruped_stride", ("thin_film_iridescence", "keratin_scales", "weathered_stone"),
+        entity_body_plan="armored_arthropod_colossus",
+    ),
+    TaxonomyEntry(
+        "morphing_switch_blade_axe", "seen", "artificial", "weaponry_and_props", "transforming_blade_axe",
+        "hinge_articulation", ("brushed_metal", "painted_metal", "polymer_dielectric"),
+    ),
+    TaxonomyEntry(
+        "elemental_companion_critter", "seen", "animal", "terrestrial_and_avian_fauna", "stylized_companion_creature",
+        "quadruped_stride", ("patterned_skin", "woven_cloth_fur", "polymer_dielectric"),
+        entity_body_plan="elemental_companion_critter",
+    ),
+    TaxonomyEntry(
+        "modular_botanical_healing_station", "seen", "industrial", "scientific_instrument", "botanical_rejuvenation_station",
+        "hinge_articulation", ("painted_metal", "brushed_metal", "polymer_dielectric"),
+    ),
+    TaxonomyEntry(
+        "elder_calamity_dragon", "unseen", "dragon", "mythic_draconic", "six_limbed_calamity_dragon",
+        "wing_and_gait", ("keratin_scales", "thin_film_iridescence", "brushed_metal"),
+        entity_body_plan="elder_calamity_dragon",
+    ),
+    TaxonomyEntry(
+        "relic_automaton_guardian", "unseen", "humanoid", "humanoid_character", "clockwork_monolith_guardian",
+        "biped_stride", ("weathered_stone", "brushed_metal", "foliage_cluster"),
+        entity_body_plan="relic_automaton_guardian",
+    ),
+)
+
+APEX_TAXONOMY_BY_FAMILY: dict[str, TaxonomyEntry] = {entry.family_id: entry for entry in APEX_TAXONOMY_ENTRIES}
+
+# Silent input lookup aliases ONLY (never emitted in clean-room manifests, IDs, or prompts)
+APEX_LEGACY_INPUT_ALIASES: dict[str, str] = {
+    "elemental_pocket_companion": "elemental_companion_critter",
+    "modular_apricorn_healing_station": "modular_botanical_healing_station",
+}
+
+HOLDOUT_EVALUATION_SPLITS: tuple[str, ...] = (
+    "test_unseen_params",
+    "test_unseen",
+    "test_compositional",
+)
+
+# Seen-family compositional sub-assembly pairings (disjoint from single-family train/val rows)
+COMPOSITIONAL_SEEN_PAIRINGS: tuple[tuple[str, str, str], ...] = (
+    ("wheeled_haul_truck", "articulated_robotic_arm", "mobile manipulator service truck with deck-mounted articulated arm"),
+    ("modular_timber_stone_building", "industrial_turbine_generator", "stone-and-timber workshop hall crowned with a rooftop wind-turbine pod"),
+    ("arched_stone_bridge_gate", "tiered_pagoda_watchtower", "masonry arch gatehouse topped with an upturned-eave watchtower pavilion"),
+    ("cargo_tugboat_vessel", "articulated_robotic_arm", "harbor salvage tugboat fitted with a topside articulated recovery crane"),
+    ("crystalline_geode_outcrop", "ancient_canopy_tree", "mineral geode basin supporting a buttress-rooted canopy tree"),
+    ("quadruped_armored_drake", "winged_amphithere", "armored terrestrial drake grafted with multi-tiered dorsal pinion crests"),
+    ("humanoid_biped", "twin_rotor_helicopter_drone", "articulated exo-suit biped equipped with an overhead rotary flight pack"),
+    ("alchemical_workbench_apparatus", "clockwork_pendulum_clock", "distillation assay workbench integrated with a precision regulator tower"),
+    ("furniture_table_chair_chest_cabinet", "coral_fungal_colony", "carved display pedestal supporting a bioluminescent reef colony"),
+    ("waterwheel_millhouse", "centrifugal_pump_valve_skid", "half-timbered watermill coupled with an auxiliary process pump manifold"),
+    ("straight_blade_sword", "war_hammer", "counterweighted greatsword assembly with an auxiliary flanged pommel head"),
+    ("spear", "battle_axe", "long-shafted polearm combining a thrusting spearhead with a crescent axe crest"),
+    ("steam_rail_locomotive", "piston_crank_engine", "heavy steam locomotive carrying an auxiliary deck-mounted reciprocating compressor"),
+    ("dog_horse_quadruped", "bird", "four-legged striding quadruped crowned with articulated avian plumage"),
+    ("cnc_milling_press", "gearbox", "vertical column milling machine topped with a multi-stage reduction gearbox"),
+    ("pine_conifer_evergreen", "crystalline_geode_outcrop", "boreal conifer spire anchored with luminous mineral crystal clusters"),
+)
+
 CATALOG_SEEN_FAMILIES: tuple[str, ...] = tuple(
     e.family_id for e in TAXONOMY_ENTRIES if e.split_group == "seen"
 )
@@ -319,6 +405,11 @@ CATALOG_ENTITY_BODY_PLANS: dict[str, str] = {
 ALL_CATEGORIES: tuple[str, ...] = tuple(sorted({e.category for e in TAXONOMY_ENTRIES}))
 
 
+def normalize_clean_room_family_id(family_id: str) -> str:
+    """Resolve any legacy input alias to its canonical clean-room neutral family ID."""
+    return APEX_LEGACY_INPUT_ALIASES.get(family_id, family_id)
+
+
 def classify_complexity_tier(box_count: int) -> str:
     """Map lowered box count to progressive simple-to-complex curriculum tier."""
     if box_count <= 8:
@@ -332,13 +423,14 @@ def classify_complexity_tier(box_count: int) -> str:
 
 def get_taxonomy_metadata(family_id: str, *, box_count: int) -> dict[str, Any]:
     """Return structured category + complexity tier metadata for a generated asset."""
-    entry = TAXONOMY_BY_FAMILY.get(family_id)
+    canonical_id = normalize_clean_room_family_id(family_id)
+    entry = TAXONOMY_BY_FAMILY.get(canonical_id) or APEX_TAXONOMY_BY_FAMILY.get(canonical_id)
     tier = classify_complexity_tier(box_count)
     if entry is None:
         return {
             "macro_domain": "artificial",
             "category": "general_prop",
-            "sub_category": family_id,
+            "sub_category": canonical_id,
             "motion_archetype": "hinge_articulation",
             "complexity_tier": tier,
         }

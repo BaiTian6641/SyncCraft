@@ -1,23 +1,23 @@
 """Apex Complex Entity & Game Asset Expansion Pack (ADR 0006).
 
 Clean-room procedural family builders and multi-turn dataset generator for large,
-structurally rich entities and interactive game assets (32-76+ boxes, 10-28+ bones,
+structurally rich entities and interactive game assets (32-84+ boxes, 10-32+ bones,
 nested `mirror_x` wing phalanges, Hill-type `@muscles` with biarticular tendon
 couplings & isochoric `belly_box` bulge, `@kinematics` closed-loop stance IK &
 multi-bone gaze chains, cross-box welded `@materials`, and swept-SAT `@behavior`):
 
-Seen Complex Families (`APEX_SEEN_FAMILIES`, 8):
-  1. `apex_flying_wyvern` (Monster Hunter-style flying wyvern with nested-mirror wings)
+Core Complex Families (`APEX_SEEN_FAMILIES`, 8):
+  1. `apex_flying_wyvern` (large biomechanical flying wyvern with nested-mirror wings)
   2. `brute_theropod_wyvern` (heavy bipedal brute wyvern with jaw masseter & dorsal sails)
   3. `pelagic_leviathan_wyvern` (undulating multi-spine sea/marsh leviathan)
   4. `fanged_thunder_wyvern` (agile quadrupedal fanged wyvern with capacitor plates)
   5. `armored_arthropod_colossus` (6-legged tripod-gait carapace colossus)
   6. `morphing_switch_blade_axe` (transforming phial mechanical weapon)
-  7. `elemental_pocket_companion` (Cobblemon-style expressive creature with game sockets)
-  8. `modular_apricorn_healing_station` (Cobblemon-style interactive mechanical block)
+  7. `elemental_companion_critter` (stylized expressive companion creature with game sockets)
+  8. `modular_botanical_healing_station` (interactive botanical restoration mechanical block)
 
-Held-Out Unseen Complex Families (`APEX_UNSEEN_FAMILIES`, 2, all >= 40 boxes):
-  9. `elder_calamity_dragon` (6-limbed Elder Dragon: 4 walking legs + 2 nested-mirror wings)
+Evaluation Complex Families (`APEX_UNSEEN_FAMILIES`, 2, all >= 40 boxes):
+  9. `elder_calamity_dragon` (6-limbed calamity dragon: 4 walking legs + 2 nested-mirror wings)
   10. `relic_automaton_guardian` (ancient stone-and-bronze piston guardian colossus)
 
 Note: Preserves `SEEN_STATIC_FAMILIES` (40) and `UNSEEN_STATIC_FAMILIES` (15) in
@@ -67,6 +67,16 @@ from synccraft.kinematics.musculoskeletal import (
     evaluate_muscles_at_activations,
 )
 from synccraft.kinematics.se3_chain import compile_geometry
+from .diversity_engine import (
+    HUMAN_FAMILY_NOUNS,
+    compute_program_tree_shape,
+    extract_pinned_spec_summary,
+    sanitize_prompt_no_leakage,
+)
+from .taxonomy_catalog import (
+    HOLDOUT_EVALUATION_SPLITS,
+    normalize_clean_room_family_id,
+)
 
 APEX_SEEN_FAMILIES: tuple[str, ...] = (
     "apex_flying_wyvern",
@@ -75,8 +85,8 @@ APEX_SEEN_FAMILIES: tuple[str, ...] = (
     "fanged_thunder_wyvern",
     "armored_arthropod_colossus",
     "morphing_switch_blade_axe",
-    "elemental_pocket_companion",
-    "modular_apricorn_healing_station",
+    "elemental_companion_critter",
+    "modular_botanical_healing_station",
 )
 
 APEX_UNSEEN_FAMILIES: tuple[str, ...] = (
@@ -182,11 +192,11 @@ def _build_nested_mirror_wyvern_wing(
     span_digit: int = 8,
     attach_offset: Vec3 = (0.0, 0.25, 0.0),
 ) -> Bone:
-    """Build a Monster Hunter-style wyvern wing with 2-level nested `mirror_x` wing digits!
+    """Build a biomechanical wyvern wing with 2-level nested `mirror_x` wing digits.
 
     Level 1 mirror_x: `wing_arm_l` -> `wing_arm_r` across the torso X-midplane.
     Level 2 nested mirror_x: `wing_digit_in` -> `wing_digit_out` across `wing_carpal_hub`'s
-    local X-axis on its trailing (-Z) face, toggling parity cleanly back to det(R)=+1!
+    local X-axis on its trailing (-Z) face, toggling parity cleanly back to det(R)=+1.
     """
     digit_bone = Bone(
         name="wing_digit_in",
@@ -326,9 +336,45 @@ def _build_two_bone_limb(
     )
 
 
+def _canonicalize_apex_root_datum(root: Bone) -> Bone:
+    """Canonicalize root `pivot_local` to `(0.0, 0.0, 0.0)` while preserving exact world SE(3) positions."""
+    px, py, pz = root.pivot_local
+    if abs(px) < 1e-9 and abs(py) < 1e-9 and abs(pz) < 1e-9:
+        return root
+    new_items: list[Box | Locator | Bone] = []
+    shifted_primary = False
+    for it in root.items:
+        if isinstance(it, Box) and not shifted_primary and it.place is None:
+            new_items.append(
+                replace(
+                    it,
+                    place=Place(
+                        base_box=None,
+                        anchor=(0.0, 0.0, 0.0),
+                        align=(0.0, 0.0, 0.0),
+                        offset=(round(px, 4), round(py, 4), round(pz, 4)),
+                    ),
+                )
+            )
+            shifted_primary = True
+        elif isinstance(it, Locator):
+            ox, oy, oz = it.offset
+            new_items.append(
+                replace(
+                    it,
+                    offset=(round(ox + px, 4), round(oy + py, 4), round(oz + pz, 4)),
+                )
+            )
+        else:
+            new_items.append(it)
+    return replace(root, pivot_local=(0.0, 0.0, 0.0), items=new_items)
+
+
 def _finalize_and_verify_apex(program: Program) -> Program:
-    """Validate AST, enforce 100% rest SAT + P1-02 contact pass, and verify all @muscles & @behavior clips."""
-    prog = validate_program(program)
+    """Validate AST, canonicalize root datum/seeds, enforce 100% rest SAT + P1-02 contact pass, and verify @muscles/@behavior."""
+    canon_root = _canonicalize_apex_root_datum(program.root)
+    canon_mats = tuple(replace(m, seed=int(idx + 1)) for idx, m in enumerate(program.materials))
+    prog = validate_program(replace(program, root=canon_root, materials=canon_mats))
     rest_sc = compile_geometry(prog)
     rest_aud = audit_scene(rest_sc, enforce_physical_contact=True)
     if not rest_aud["passed"]:
@@ -1407,8 +1453,8 @@ def _build_morphing_switch_blade_axe(rng: random.Random, seed: int) -> Program:
     )
 
 
-def _build_elemental_pocket_companion(rng: random.Random, seed: int) -> Program:
-    """Cobblemon-inspired clean-room expressive battle/companion creature with full socket contract."""
+def _build_elemental_companion_critter(rng: random.Random, seed: int) -> Program:
+    """Clean-room stylized expressive companion creature with full game-engine socket contract."""
     hue = round(rng.uniform(35.0, 145.0), 1)
     palettes = [
         Palette("companion_coat", (0.64, 0.16, hue), 6),
@@ -1555,8 +1601,8 @@ def _build_elemental_pocket_companion(rng: random.Random, seed: int) -> Program:
     )
 
 
-def _build_modular_apricorn_healing_station(rng: random.Random, seed: int) -> Program:
-    """Cobblemon-inspired clean-room interactive healing/crafting block assembly."""
+def _build_modular_botanical_healing_station(rng: random.Random, seed: int) -> Program:
+    """Clean-room interactive botanical restoration and diagnostics block assembly."""
     hue_trim = round(rng.uniform(5.0, 35.0), 1)
     palettes = [
         Palette("enamel_chassis", (0.84, 0.04, 230.0), 6),
@@ -1620,8 +1666,8 @@ def _build_modular_apricorn_healing_station(rng: random.Random, seed: int) -> Pr
         items=[
             Box("louver_panel", (1, 6, 8), "machined_alloy"),
             Box("louver_trim", (1, 2, 6), "crimson_trim", place=_flush_place("louver_panel", (1.0, 0.0, 0.0), offset=(0.0, -1.5, 0.0))),
-            Box("apricorn_hopper_pod", (2, 3, 3), "enamel_chassis", place=_flush_place("louver_panel", (1.0, 0.0, 0.0), offset=(0.0, 2.0, -1.5))),
-            Box("hopper_cap", (2, 1, 3), "crimson_trim", place=_flush_place("apricorn_hopper_pod", (0.0, 1.0, 0.0))),
+            Box("botanical_hopper_pod", (2, 3, 3), "enamel_chassis", place=_flush_place("louver_panel", (1.0, 0.0, 0.0), offset=(0.0, 2.0, -1.5))),
+            Box("hopper_cap", (2, 1, 3), "crimson_trim", place=_flush_place("botanical_hopper_pod", (0.0, 1.0, 0.0))),
         ],
     )
 
@@ -1689,7 +1735,7 @@ def _build_modular_apricorn_healing_station(rng: random.Random, seed: int) -> Pr
 
 
 def _build_elder_calamity_dragon(rng: random.Random, seed: int) -> Program:
-    """Held-Out Unseen Family (>= 56 boxes): 6-limbed Elder Dragon (4 stance legs + 2 nested-mirror wings)."""
+    """Six-limbed calamity dragon (>= 56 boxes: 4 stance legs + 2 nested-mirror wings)."""
     hue = round(rng.uniform(255.0, 315.0), 1)
     palettes = [
         Palette("obsidian_scale", (0.28, 0.09, hue), 6),
@@ -1860,7 +1906,7 @@ def _build_elder_calamity_dragon(rng: random.Random, seed: int) -> Program:
 
 
 def _build_relic_automaton_guardian(rng: random.Random, seed: int) -> Program:
-    """Held-Out Unseen Family (>= 44 boxes): Ancient Stone & Bronze Piston Guardian Colossus."""
+    """Ancient stone-and-bronze piston guardian colossus (>= 44 boxes)."""
     palettes = [
         Palette("ancient_basalt", (0.44, 0.03, 215.0), 6),
         Palette("patina_bronze", (0.56, 0.11, 72.0), 6),
@@ -2026,19 +2072,276 @@ _APEX_BUILDER_BY_FAMILY = {
     "fanged_thunder_wyvern": _build_fanged_thunder_wyvern,
     "armored_arthropod_colossus": _build_armored_arthropod_colossus,
     "morphing_switch_blade_axe": _build_morphing_switch_blade_axe,
-    "elemental_pocket_companion": _build_elemental_pocket_companion,
-    "modular_apricorn_healing_station": _build_modular_apricorn_healing_station,
+    "elemental_companion_critter": _build_elemental_companion_critter,
+    "modular_botanical_healing_station": _build_modular_botanical_healing_station,
     "elder_calamity_dragon": _build_elder_calamity_dragon,
     "relic_automaton_guardian": _build_relic_automaton_guardian,
 }
 
 
+def _perturb_apex_rest_angles(bone: Bone, rng: random.Random, *, is_root: bool = False) -> Bone:
+    """Apply subtle continuous 0.1-deg rest-Euler perturbations within joint limits."""
+    new_items = [
+        _perturb_apex_rest_angles(it, rng, is_root=False) if isinstance(it, Bone) else it
+        for it in bone.items
+    ]
+    if is_root:
+        return replace(bone, items=new_items)
+    rx, ry, rz = bone.rest_euler
+    dx = round(rng.uniform(-2.3, 2.3), 1)
+    dy = round(rng.uniform(-2.1, 2.1), 1)
+    dz = round(rng.uniform(-2.3, 2.3), 1)
+    nrx, nry, nrz = round(rx + dx, 1), round(ry + dy, 1), round(rz + dz, 1)
+    if bone.joint_limits is not None:
+        (lx0, lx1), (ly0, ly1), (lz0, lz1) = bone.joint_limits
+        nrx = max(round(lx0 + 0.5, 1), min(round(lx1 - 0.5, 1), nrx))
+        nry = max(round(ly0 + 0.5, 1), min(round(ly1 - 0.5, 1), nry))
+        nrz = max(round(lz0 + 0.5, 1), min(round(lz1 - 0.5, 1), nrz))
+    if abs(nrx * 2.0 - round(nrx * 2.0)) < 1e-6:
+        nrx = round(nrx + 0.3, 1)
+        if bone.joint_limits is not None:
+            nrx = max(round(bone.joint_limits[0][0] + 0.2, 1), min(round(bone.joint_limits[0][1] - 0.2, 1), nrx))
+    return replace(bone, rest_euler=(nrx, nry, nrz), items=new_items)
+
+
+def _try_accept_apex_mutation(current: Program, candidate_root: Bone) -> Program:
+    """Accept `candidate_root` only if full static + musculoskeletal + swept-SAT verification passes."""
+    try:
+        return _finalize_and_verify_apex(replace(current, root=candidate_root))
+    except Exception:
+        return current
+
+
+def _expand_apex_variant_topology(program: Program, family_id: str, seed: int) -> Program:
+    """Expand structural bone/box tree variety and continuous pose diversity for `seed != 101`."""
+    if seed == 101:
+        return program
+
+    v_rng = random.Random((seed * 1315423911 + sum(ord(c) for c in family_id) * 977) & 0xFFFFFFFF)
+    cur = program
+
+    # 1. Continuous 0.1-deg rest-Euler broadening
+    pert_root = _perturb_apex_rest_angles(cur.root, v_rng, is_root=True)
+    cur = _try_accept_apex_mutation(cur, pert_root)
+
+    primary_box = next((it for it in cur.root.items if isinstance(it, Box)), None)
+    if primary_box is None:
+        return cur
+
+    mat_primary = cur.palettes[0].name
+    mat_accent = cur.palettes[min(1, len(cur.palettes) - 1)].name
+    emissive_mats = [p.name for p in cur.palettes if p.emissive]
+    mat_glow = emissive_mats[0] if emissive_mats else cur.palettes[-1].name
+
+    combo = abs(seed * 2654435761 + sum((i + 1) * ord(ch) for i, ch in enumerate(family_id)))
+    flank_mode = combo % 3
+    orbital_mode = (combo // 3) % 5
+    aft_drone_mode = (combo // 15) % 3
+    distal_mode = (combo // 45) % 3
+
+    pw, ph, pd = primary_box.size
+
+    # Axis A: Lateral flank strake / sensor topology (3 modes)
+    if flank_mode == 1:
+        flank_l = Box(
+            "variant_flank_strake_l",
+            (1, 2, max(2, min(4, pd - 3))),
+            mat_accent,
+            place=_flush_place(primary_box.name, (1.0, 0.0, 0.0), offset=(0.0, float(max(1, ph // 2 - 1)), 0.0)),
+        )
+        flank_r = Box(
+            "variant_flank_strake_r",
+            (1, 2, max(2, min(4, pd - 3))),
+            mat_accent,
+            place=_flush_place(primary_box.name, (-1.0, 0.0, 0.0), offset=(0.0, float(max(1, ph // 2 - 1)), 0.0)),
+        )
+        cur = _try_accept_apex_mutation(cur, replace(cur.root, items=[*cur.root.items, flank_l, flank_r]))
+    elif flank_mode == 2:
+        finlet_l = Bone(
+            name="aux_flank_finlet_l",
+            rest_euler=(0.0, round(v_rng.uniform(-12.5, -4.5), 1), round(v_rng.uniform(-18.5, -8.5), 1)),
+            attach=Attach(
+                parent_box=primary_box.name,
+                anchor=(0.95, 1.0, -0.45),
+                align=(0.0, -1.0, 0.0),
+                offset=(3.5, 4.5, 0.0),
+                detached=True,
+            ),
+            mirror_name="aux_flank_finlet_r",
+            joint_limits=((-20.0, 20.0), (-25.0, 25.0), (-35.0, 35.0)),
+            items=[Box("aux_finlet_blade", (1, 3, 2), mat_accent)],
+        )
+        cur = _try_accept_apex_mutation(cur, replace(cur.root, items=[*cur.root.items, finlet_l]))
+
+    # Axis B: Authorized `detached=True` dorsal orbital elemental/telemetry rig (5 modes)
+    if orbital_mode == 1:
+        mote_bone = Bone(
+            name="floating_aether_mote",
+            rest_euler=(round(v_rng.uniform(5.5, 19.5), 1), round(v_rng.uniform(7.5, 26.5), 1), 0.0),
+            attach=Attach(
+                parent_box=primary_box.name,
+                anchor=(0.0, 1.0, 0.0),
+                align=(0.0, -1.0, 0.0),
+                offset=(0.0, round(v_rng.uniform(9.5, 12.5), 1), 0.0),
+                detached=True,
+            ),
+            joint_limits=((-30.0, 30.0), (-180.0, 180.0), (-30.0, 30.0)),
+            items=[Box("floating_mote_core", (2, 2, 2), mat_glow)],
+        )
+        cur = _try_accept_apex_mutation(cur, replace(cur.root, items=[*cur.root.items, mote_bone]))
+    elif orbital_mode == 2:
+        halo_bone = Bone(
+            name="floating_focus_beacon",
+            rest_euler=(round(v_rng.uniform(-14.5, 14.5), 1), round(v_rng.uniform(8.5, 28.5), 1), 0.0),
+            attach=Attach(
+                parent_box=primary_box.name,
+                anchor=(0.0, 1.0, 0.0),
+                align=(0.0, -1.0, 0.0),
+                offset=(0.0, round(v_rng.uniform(10.0, 13.0), 1), -1.5),
+                detached=True,
+            ),
+            joint_limits=((-30.0, 30.0), (-180.0, 180.0), (-30.0, 30.0)),
+            items=[
+                Box("beacon_prism", (2, 2, 2), mat_glow),
+                Box("beacon_spire_cap", (1, 2, 1), mat_accent, place=_flush_place("beacon_prism", (0.0, 1.0, 0.0))),
+            ],
+        )
+        cur = _try_accept_apex_mutation(cur, replace(cur.root, items=[*cur.root.items, halo_bone]))
+    elif orbital_mode == 3:
+        tri_bone = Bone(
+            name="floating_crown_triad",
+            rest_euler=(round(v_rng.uniform(-11.5, 11.5), 1), round(v_rng.uniform(9.5, 24.5), 1), 0.0),
+            attach=Attach(
+                parent_box=primary_box.name,
+                anchor=(0.0, 1.0, 0.0),
+                align=(0.0, -1.0, 0.0),
+                offset=(0.0, round(v_rng.uniform(10.5, 13.5), 1), 0.5),
+                detached=True,
+            ),
+            joint_limits=((-30.0, 30.0), (-180.0, 180.0), (-30.0, 30.0)),
+            items=[
+                Box("triad_hub", (3, 1, 3), mat_primary),
+                Box("triad_upper_gem", (1, 2, 1), mat_glow, place=_flush_place("triad_hub", (0.0, 1.0, 0.0))),
+                Box("triad_lower_keel", (1, 1, 1), mat_accent, place=_flush_place("triad_hub", (0.0, -1.0, 0.0))),
+            ],
+        )
+        cur = _try_accept_apex_mutation(cur, replace(cur.root, items=[*cur.root.items, tri_bone]))
+    elif orbital_mode == 4:
+        artic_orb_tip = Bone(
+            name="floating_pendulum_vane",
+            rest_euler=(round(v_rng.uniform(-16.5, -4.5), 1), 0.0, 0.0),
+            attach=_flush_attach("relay_orb_core", (0.0, 1.0, 0.0)),
+            joint_limits=((-25.0, 25.0), (-25.0, 25.0), (-25.0, 25.0)),
+            items=[Box("relay_vane_fin", (1, 3, 2), mat_accent)],
+        )
+        artic_orb = Bone(
+            name="floating_relay_orb",
+            rest_euler=(0.0, round(v_rng.uniform(6.5, 22.5), 1), 0.0),
+            attach=Attach(
+                parent_box=primary_box.name,
+                anchor=(0.0, 1.0, 0.0),
+                align=(0.0, -1.0, 0.0),
+                offset=(0.0, round(v_rng.uniform(10.5, 13.5), 1), -2.0),
+                detached=True,
+            ),
+            joint_limits=((-30.0, 30.0), (-180.0, 180.0), (-30.0, 30.0)),
+            items=[Box("relay_orb_core", (2, 2, 2), mat_glow), artic_orb_tip],
+        )
+        cur = _try_accept_apex_mutation(cur, replace(cur.root, items=[*cur.root.items, artic_orb]))
+
+    # Axis C: Aft/cranial detached escort node (3 modes)
+    if aft_drone_mode == 1:
+        aft_node = Bone(
+            name="aft_telemetry_wisp",
+            rest_euler=(round(v_rng.uniform(-12.5, 12.5), 1), round(v_rng.uniform(-22.5, 22.5), 1), 0.0),
+            attach=Attach(
+                parent_box=primary_box.name,
+                anchor=(0.0, 1.0, -1.0),
+                align=(0.0, -1.0, 0.0),
+                offset=(0.0, 9.0, -8.5),
+                detached=True,
+            ),
+            joint_limits=((-30.0, 30.0), (-180.0, 180.0), (-30.0, 30.0)),
+            items=[Box("wisp_crystal", (1, 2, 2), mat_glow)],
+        )
+        cur = _try_accept_apex_mutation(cur, replace(cur.root, items=[*cur.root.items, aft_node]))
+    elif aft_drone_mode == 2:
+        aft_fin_node = Bone(
+            name="aft_escort_prism",
+            rest_euler=(round(v_rng.uniform(-10.5, 10.5), 1), round(v_rng.uniform(-18.5, 18.5), 1), 0.0),
+            attach=Attach(
+                parent_box=primary_box.name,
+                anchor=(0.0, 1.0, -1.0),
+                align=(0.0, -1.0, 0.0),
+                offset=(0.0, 9.5, -9.0),
+                detached=True,
+            ),
+            joint_limits=((-30.0, 30.0), (-180.0, 180.0), (-30.0, 30.0)),
+            items=[
+                Box("escort_chassis", (2, 2, 2), mat_primary),
+                Box("escort_tail_vane", (1, 1, 2), mat_glow, place=_flush_place("escort_chassis", (0.0, 0.0, -1.0))),
+            ],
+        )
+        cur = _try_accept_apex_mutation(cur, replace(cur.root, items=[*cur.root.items, aft_fin_node]))
+
+    # Axis D: Distal leaf-bone spur / sensor stud (3 modes)
+    if distal_mode in (1, 2):
+        child_bones = [it for it in cur.root.items if isinstance(it, Bone) and it.mirror_name is None and not (it.attach and it.attach.detached)]
+        if child_bones:
+            target_b = child_bones[combo % len(child_bones)]
+            target_bx = next((it for it in target_b.items if isinstance(it, Box)), None)
+            if target_bx is not None:
+                stud_items: list[Box | Locator | Bone] = [
+                    *target_b.items,
+                    Box(
+                        "distal_accent_stud",
+                        (1, 1 if distal_mode == 1 else 2, 1),
+                        mat_glow,
+                        place=_flush_place(target_bx.name, (0.0, 1.0, 0.0)),
+                    ),
+                ]
+                updated_children = [
+                    replace(it, items=stud_items) if (isinstance(it, Bone) and it.name == target_b.name) else it
+                    for it in cur.root.items
+                ]
+                cur = _try_accept_apex_mutation(cur, replace(cur.root, items=updated_children))
+
+    return cur
+
+
 def build_apex_complex_program(family_id: str, *, seed: int = 101) -> Program:
-    """Build a deterministic, 100% static- and swept-SAT-audited Apex complex Program."""
-    if family_id not in _APEX_BUILDER_BY_FAMILY:
+    """Build a deterministic, 100% static- and swept-SAT-audited clean-room Apex complex Program."""
+    canon_family = normalize_clean_room_family_id(family_id)
+    if canon_family not in _APEX_BUILDER_BY_FAMILY:
         raise KeyError(f"Unknown Apex family {family_id!r}; expected one of {sorted(_APEX_BUILDER_BY_FAMILY)}")
     rng = random.Random(seed)
-    return _APEX_BUILDER_BY_FAMILY[family_id](rng, seed)
+    base_prog = _APEX_BUILDER_BY_FAMILY[canon_family](rng, seed)
+    return _expand_apex_variant_topology(base_prog, canon_family, seed)
+
+
+def _compose_clean_apex_prompt(
+    family_id: str,
+    header_instruction: str,
+    target_prog: Program,
+    *,
+    embedded_dsl: str | None = None,
+) -> str:
+    """Compose a zero-leakage, pinned-specification prompt for an Apex supervision turn."""
+    sc = compile_geometry(target_prog)
+    pinned = extract_pinned_spec_summary(
+        target_prog,
+        box_count=len(sc.boxes),
+        bone_count=len(sc.bones),
+        joint_angle_deg=0.0,
+    )
+    pinned_sentence = (
+        f"Pinned target specification: {len(sc.boxes)} boxes across {len(sc.bones)} bones, "
+        f"{pinned['primary_dims']}, key joint angles {pinned['key_angles']}{pinned['offset_clause']}."
+    )
+    clean_header = sanitize_prompt_no_leakage(f"{header_instruction} {pinned_sentence}", family_id=family_id)
+    if embedded_dsl is not None:
+        return f"{clean_header}\n\n```blockdsl\n{embedded_dsl}\n```"
+    return clean_header
 
 
 def generate_apex_complex_dataset(
@@ -2062,12 +2365,139 @@ def generate_apex_complex_dataset(
         run_looped_artist_enhancement,
     )
 
-    active_seen = tuple(seen_families) if seen_families is not None else APEX_SEEN_FAMILIES
+    if seen_families is not None:
+        active_seen = tuple(normalize_clean_room_family_id(f) for f in seen_families)
+    else:
+        active_seen = APEX_SEEN_FAMILIES
+
     rows: list[dict[str, Any]] = []
+    tree_shapes_by_family: dict[str, set[str]] = {}
+
     family_plan = [
-        *((fam, "seen_train", samples_per_seen_family) for fam in active_seen),
-        *((fam, "unseen_complex_holdout", samples_per_unseen_family) for fam in APEX_UNSEEN_FAMILIES),
+        *((fam, "train", samples_per_seen_family) for fam in active_seen),
+        *((fam, "test_unseen", samples_per_unseen_family) for fam in APEX_UNSEEN_FAMILIES),
     ]
+
+    def _build_three_turns_for_program(
+        fam: str,
+        split_tag: str,
+        sample_seed: int,
+        local_idx: int,
+        prog: Program,
+    ) -> list[dict[str, Any]]:
+        dsl_full = format_program(prog)
+        stages = build_progressive_from_scratch_trajectory(prog)
+        full_readiness_score = stages[-1].readiness_score
+        noun_choices = HUMAN_FAMILY_NOUNS.get(fam, ("articulated biomechanical assembly",))
+        human_noun = noun_choices[local_idx % len(noun_choices)] if isinstance(noun_choices, tuple) else str(noun_choices)
+
+        sc_master = compile_geometry(prog)
+        tree_shapes_by_family.setdefault(fam, set()).add(compute_program_tree_shape(prog, sc_master))
+
+        def _row_meta_for_program(target_prog: Program) -> dict[str, Any]:
+            t_sc = compile_geometry(target_prog)
+            t_static = audit_scene(t_sc, enforce_physical_contact=True)
+            t_clip = (
+                audit_behavior_clip(target_prog, target_prog.behavior.clips[0].name, num_frames=12)
+                if target_prog.behavior and target_prog.behavior.clips
+                else None
+            )
+            return {
+                "family_id": fam,
+                "split": split_tag,
+                "seed": sample_seed,
+                "license_spdx": "Apache-2.0",
+                "license_track": "clean_room_permissive",
+                "commercial_weights_eligible": True,
+                "default_target_llm": "LiquidAI/LFM3-VL-2B",
+                "box_count": len(t_sc.boxes),
+                "bone_count": len(t_sc.bones),
+                "locator_count": len(t_sc.locators),
+                "muscle_count": len(target_prog.muscles),
+                "static_audit_passed": bool(t_static["passed"]),
+                "dynamic_clip_passed": bool(t_clip["passed"]) if t_clip else True,
+                "max_stance_slip_units": t_clip["max_stance_slip_units"] if t_clip else 0.0,
+            }
+
+        out_turns: list[dict[str, Any]] = []
+        sid_full = hashlib.sha256(f"{fam}:{split_tag}:{sample_seed}:full".encode()).hexdigest()[:16]
+        out_turns.append(
+            {
+                "sample_id": f"apex_{sid_full}",
+                "task_mode": "apex_full_masterwork",
+                **_row_meta_for_program(prog),
+                "source_stage": None,
+                "target_stage": None,
+                "initial_readiness_score": None,
+                "readiness_score": round(full_readiness_score, 4),
+                "critique_json": None,
+                "user_prompt": _compose_clean_apex_prompt(
+                    fam,
+                    (
+                        f"Design a complete rule-grounded Block-DSL v3.1 {human_noun} "
+                        f"with articulated bone hierarchy, semantic locators, welded scientific @materials, "
+                        f"Hill-type @muscles tendon couplings, @kinematics IK, and swept-SAT @behavior."
+                    ),
+                    prog,
+                ),
+                "assistant_dsl": dsl_full,
+            }
+        )
+
+        st_idx = local_idx % 4
+        st_src = stages[st_idx]
+        st_dst = stages[st_idx + 1]
+        sid_prog = hashlib.sha256(f"{fam}:{split_tag}:{sample_seed}:prog:{st_idx}".encode()).hexdigest()[:16]
+        out_turns.append(
+            {
+                "sample_id": f"apex_{sid_prog}",
+                "task_mode": "apex_progressive_stage_upgrade",
+                **_row_meta_for_program(st_dst.program),
+                "source_stage": st_src.stage_name,
+                "target_stage": st_dst.stage_name,
+                "initial_readiness_score": None,
+                "readiness_score": round(st_dst.readiness_score, 4),
+                "critique_json": None,
+                "user_prompt": _compose_clean_apex_prompt(
+                    fam,
+                    (
+                        f"Advance this {human_noun} project from {st_src.stage_name.replace('_', ' ')} "
+                        f"({st_src.box_count} boxes) to {st_dst.stage_name.replace('_', ' ')}: {st_dst.description}"
+                    ),
+                    st_dst.program,
+                    embedded_dsl=st_src.program_dsl,
+                ),
+                "assistant_dsl": st_dst.program_dsl,
+            }
+        )
+
+        draft_prog = stages[2].program
+        loop_res = run_looped_artist_enhancement(draft_prog, max_iterations=4)
+        sid_loop = hashlib.sha256(f"{fam}:{split_tag}:{sample_seed}:critique".encode()).hexdigest()[:16]
+        out_turns.append(
+            {
+                "sample_id": f"apex_{sid_loop}",
+                "task_mode": "apex_artist_critique_and_enhance",
+                **_row_meta_for_program(loop_res["final_program"]),
+                "source_stage": None,
+                "target_stage": None,
+                "initial_readiness_score": loop_res["initial_readiness_score"],
+                "readiness_score": loop_res["final_readiness_score"],
+                "critique_json": json.dumps(loop_res["history"][0]["critique"], sort_keys=True),
+                "user_prompt": _compose_clean_apex_prompt(
+                    fam,
+                    (
+                        f"Audit this artist's {human_noun} rig across geometry, skeletal limits, "
+                        f"surface materials, musculoskeletal tendons, and stance-locked motion, then apply "
+                        f"rule-verified upgrades."
+                    ),
+                    loop_res["final_program"],
+                    embedded_dsl=stages[2].program_dsl,
+                ),
+                "assistant_dsl": loop_res["final_program_dsl"],
+            }
+        )
+        return out_turns
 
     sample_counter = 0
     for fam, split_tag, count in family_plan:
@@ -2075,104 +2505,72 @@ def generate_apex_complex_dataset(
             sample_seed = seed + sample_counter * 97 + local_idx * 13
             sample_counter += 1
             prog = build_apex_complex_program(fam, seed=sample_seed)
-            dsl_full = format_program(prog)
-            stages = build_progressive_from_scratch_trajectory(prog)
-            full_readiness_score = stages[-1].readiness_score
+            rows.extend(_build_three_turns_for_program(fam, split_tag, sample_seed, local_idx, prog))
 
-            def _row_meta_for_program(target_prog: Program) -> dict[str, Any]:
-                t_sc = compile_geometry(target_prog)
-                t_static = audit_scene(t_sc, enforce_physical_contact=True)
-                t_clip = (
-                    audit_behavior_clip(target_prog, target_prog.behavior.clips[0].name, num_frames=12)
-                    if target_prog.behavior and target_prog.behavior.clips
-                    else None
+    unseen_params_rows: list[dict[str, Any]] = []
+    compositional_rows: list[dict[str, Any]] = []
+    if samples_per_unseen_family > 0 and active_seen:
+        for idx_p, fam in enumerate(active_seen):
+            p_seed = seed + 500_009 + idx_p * 313
+            p_prog = build_apex_complex_program(fam, seed=p_seed)
+            p_primary = next((it for it in p_prog.root.items if isinstance(it, Box)), None)
+            if p_primary is not None:
+                pw, ph, pd = p_primary.size
+                ext_items = [
+                    replace(it, size=(pw + 2, ph, pd + 2)) if (isinstance(it, Box) and it.name == p_primary.name) else it
+                    for it in p_prog.root.items
+                ]
+                p_prog = _try_accept_apex_mutation(p_prog, replace(p_prog.root, items=ext_items))
+            unseen_params_rows.extend(_build_three_turns_for_program(fam, "test_unseen_params", p_seed, idx_p, p_prog))
+
+        for idx_c in range(min(4, len(active_seen))):
+            host_fam = active_seen[idx_c]
+            guest_fam = active_seen[(idx_c + 3) % len(active_seen)]
+            c_seed = seed + 900_011 + idx_c * 419
+            host_prog = build_apex_complex_program(host_fam, seed=c_seed)
+            host_primary = next((it for it in host_prog.root.items if isinstance(it, Box)), None)
+            if host_primary is not None:
+                glow_mat = host_prog.palettes[-1].name
+                trim_mat = host_prog.palettes[0].name
+                comp_turret = Bone(
+                    name="compositional_dorsal_module",
+                    rest_euler=(-9.5, round(4.5 + idx_c * 3.2, 1), 0.0),
+                    attach=Attach(
+                        parent_box=host_primary.name,
+                        anchor=(0.0, 1.0, 0.0),
+                        align=(0.0, -1.0, 0.0),
+                        offset=(0.0, 9.5, 1.5),
+                        detached=True,
+                    ),
+                    joint_limits=((-30.0, 30.0), (-180.0, 180.0), (-30.0, 30.0)),
+                    items=[
+                        Box("comp_module_chassis", (3, 2, 3), trim_mat),
+                        Box("comp_module_emitter", (2, 2, 1), glow_mat, place=_flush_place("comp_module_chassis", (0.0, 0.0, 1.0))),
+                        Box("comp_module_fin", (1, 3, 2), glow_mat, place=_flush_place("comp_module_chassis", (0.0, 1.0, 0.0))),
+                    ],
                 )
-                return {
-                    "family_id": fam,
-                    "split": split_tag,
-                    "seed": sample_seed,
-                    "license_spdx": "Apache-2.0",
-                    "license_track": "clean_room_permissive",
-                    "commercial_weights_eligible": True,
-                    "default_target_llm": "LiquidAI/LFM3-VL-2B",
-                    "box_count": len(t_sc.boxes),
-                    "bone_count": len(t_sc.bones),
-                    "locator_count": len(t_sc.locators),
-                    "muscle_count": len(target_prog.muscles),
-                    "static_audit_passed": bool(t_static["passed"]),
-                    "dynamic_clip_passed": bool(t_clip["passed"]) if t_clip else True,
-                    "max_stance_slip_units": t_clip["max_stance_slip_units"] if t_clip else 0.0,
-                }
-
-            # 1. Full Masterwork Creation Turn
-            sid_full = hashlib.sha256(f"{fam}:{sample_seed}:full".encode()).hexdigest()[:16]
-            rows.append(
-                {
-                    "sample_id": f"apex_{sid_full}",
-                    "task_mode": "apex_full_masterwork",
-                    **_row_meta_for_program(prog),
-                    "source_stage": None,
-                    "target_stage": None,
-                    "initial_readiness_score": None,
-                    "readiness_score": round(full_readiness_score, 4),
-                    "critique_json": None,
-                    "user_prompt": (
-                        f"Design a complete rule-grounded Block-DSL v3.1 {fam.replace('_', ' ')} "
-                        f"with articulated bone hierarchy, semantic locators, welded scientific @materials, "
-                        f"Hill-type @muscles tendon couplings, @kinematics IK, and swept-SAT @behavior."
-                    ),
-                    "assistant_dsl": dsl_full,
-                }
-            )
-
-            # 2. Progressive From-Scratch Stage Transition Turn (cycle across Stage 0->1, 1->2, 2->3, 3->4)
-            st_idx = local_idx % 4
-            st_src = stages[st_idx]
-            st_dst = stages[st_idx + 1]
-            sid_prog = hashlib.sha256(f"{fam}:{sample_seed}:prog:{st_idx}".encode()).hexdigest()[:16]
-            rows.append(
-                {
-                    "sample_id": f"apex_{sid_prog}",
-                    "task_mode": "apex_progressive_stage_upgrade",
-                    **_row_meta_for_program(st_dst.program),
-                    "source_stage": st_src.stage_name,
-                    "target_stage": st_dst.stage_name,
-                    "initial_readiness_score": None,
-                    "readiness_score": round(st_dst.readiness_score, 4),
-                    "critique_json": None,
-                    "user_prompt": (
-                        f"Advance this {fam.replace('_', ' ')} project from {st_src.stage_name} "
-                        f"({st_src.box_count} boxes) to {st_dst.stage_name}: {st_dst.description}\n\n"
-                        f"```blockdsl\n{st_src.program_dsl}\n```"
-                    ),
-                    "assistant_dsl": st_dst.program_dsl,
-                }
-            )
-
-            # 3. Closed-Loop Artist Critique & Enhancement Turn (from Stage 2 clay/untextured/unanimated draft)
-            draft_prog = stages[2].program
-            loop_res = run_looped_artist_enhancement(draft_prog, max_iterations=4)
-            sid_loop = hashlib.sha256(f"{fam}:{sample_seed}:critique".encode()).hexdigest()[:16]
-            rows.append(
-                {
-                    "sample_id": f"apex_{sid_loop}",
-                    "task_mode": "apex_artist_critique_and_enhance",
-                    **_row_meta_for_program(loop_res["final_program"]),
-                    "source_stage": None,
-                    "target_stage": None,
-                    "initial_readiness_score": loop_res["initial_readiness_score"],
-                    "readiness_score": loop_res["final_readiness_score"],
-                    "critique_json": json.dumps(loop_res["history"][0]["critique"], sort_keys=True),
-                    "user_prompt": (
-                        f"Audit this artist's {fam.replace('_', ' ')} rig across geometry, skeletal limits, "
-                        f"surface materials, musculoskeletal tendons, and stance-locked motion, then apply "
-                        f"rule-verified upgrades:\n\n```blockdsl\n{stages[2].program_dsl}\n```"
-                    ),
-                    "assistant_dsl": loop_res["final_program_dsl"],
-                }
-            )
+                host_prog = _try_accept_apex_mutation(
+                    host_prog,
+                    replace(host_prog.root, items=[*host_prog.root.items, comp_turret]),
+                )
+            guest_choices = HUMAN_FAMILY_NOUNS.get(guest_fam, ("auxiliary module",))
+            guest_noun = guest_choices[0] if isinstance(guest_choices, tuple) else str(guest_choices)
+            c_turns = _build_three_turns_for_program(host_fam, "test_compositional", c_seed, idx_c, host_prog)
+            for ct in c_turns:
+                if ct["task_mode"] == "apex_full_masterwork":
+                    ct["user_prompt"] = sanitize_prompt_no_leakage(
+                        f"{ct['user_prompt']} Include a detached orbital telemetry turret inspired by a {guest_noun}.",
+                        family_id=host_fam,
+                    )
+            compositional_rows.extend(c_turns)
 
     masterwork_rows = [r for r in rows if r["task_mode"] == "apex_full_masterwork"]
+    unseen_rows = [r for r in rows if r["split"] == "test_unseen"]
+    distinct_shapes_report = {
+        fam: len(sigs) for fam, sigs in sorted(tree_shapes_by_family.items())
+    }
+    all_distinct_shapes = set().union(*tree_shapes_by_family.values()) if tree_shapes_by_family else set()
+
     summary = {
         "schema": "synccraft.apex_complex_dataset/1.0",
         "adr": "ADR-0006",
@@ -2180,6 +2578,14 @@ def generate_apex_complex_dataset(
         "total_rows": len(rows),
         "seen_families": list(active_seen),
         "unseen_families": list(APEX_UNSEEN_FAMILIES),
+        "holdout_splits": list(HOLDOUT_EVALUATION_SPLITS),
+        "holdout_split_counts": {
+            "test_unseen_params": len(unseen_params_rows),
+            "test_unseen": len(unseen_rows),
+            "test_compositional": len(compositional_rows),
+        },
+        "distinct_tree_shapes_by_family": distinct_shapes_report,
+        "distinct_tree_shapes_total": len(all_distinct_shapes),
         "static_sat_pass_rate": sum(1 for r in rows if r["static_audit_passed"]) / max(1, len(rows)),
         "dynamic_clip_pass_rate": sum(1 for r in rows if r["dynamic_clip_passed"]) / max(1, len(rows)),
         "mean_box_count": round(sum(r["box_count"] for r in rows) / max(1, len(rows)), 2),
@@ -2194,8 +2600,7 @@ def generate_apex_complex_dataset(
     if output_dir is not None:
         out_p = Path(output_dir)
         out_p.mkdir(parents=True, exist_ok=True)
-        train_rows = [r for r in rows if r["split"] == "seen_train"]
-        unseen_rows = [r for r in rows if r["split"] == "unseen_complex_holdout"]
+        train_rows = [r for r in rows if r["split"] == "train"]
         jsonl_path = out_p / "apex_complex_entities_v3_1.jsonl"
         with jsonl_path.open("w", encoding="utf-8") as fh:
             for r in rows:
@@ -2206,11 +2611,16 @@ def generate_apex_complex_dataset(
         with (out_p / "test_unseen.jsonl").open("w", encoding="utf-8") as fh:
             for r in unseen_rows:
                 fh.write(json.dumps(r, sort_keys=True) + "\n")
+        with (out_p / "test_unseen_params.jsonl").open("w", encoding="utf-8") as fh:
+            for r in unseen_params_rows:
+                fh.write(json.dumps(r, sort_keys=True) + "\n")
+        with (out_p / "test_compositional.jsonl").open("w", encoding="utf-8") as fh:
+            for r in compositional_rows:
+                fh.write(json.dumps(r, sort_keys=True) + "\n")
         (out_p / "apex_complex_manifest.json").write_text(
             json.dumps(summary, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
-        # Write unified + train/test_unseen Parquet splits with explicit 23-column schema if pyarrow is available
         try:
             import pyarrow as pa
             import pyarrow.parquet as pq
@@ -2249,5 +2659,15 @@ def generate_apex_complex_dataset(
             pq.write_table(pa.Table.from_pylist(rows, schema=apex_schema), out_p / "apex_complex_entities_v3_1.parquet")
             pq.write_table(pa.Table.from_pylist(train_rows, schema=apex_schema), out_p / "train.parquet")
             pq.write_table(pa.Table.from_pylist(unseen_rows, schema=apex_schema), out_p / "test_unseen.parquet")
+            pq.write_table(pa.Table.from_pylist(unseen_params_rows, schema=apex_schema), out_p / "test_unseen_params.parquet")
+            pq.write_table(pa.Table.from_pylist(compositional_rows, schema=apex_schema), out_p / "test_compositional.parquet")
 
-    return {"summary": summary, "rows": rows}
+    return {
+        "summary": summary,
+        "rows": rows,
+        "holdout_rows": {
+            "test_unseen_params": unseen_params_rows,
+            "test_unseen": unseen_rows,
+            "test_compositional": compositional_rows,
+        },
+    }

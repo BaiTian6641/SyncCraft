@@ -4,10 +4,11 @@ Builds 100% original, typed-AST, SE(3)-compiled, 15-axis SAT + P1-02 physical-co
 verified 3D articulated block models across 7 macro-domains, 21 categories, and 55 disjoint families:
 - 40 Seen families (Artificial, Natural, Industrial & Vehicles, Building, Humanoid, Animal,
   and Fancy Mythic/Prehistoric Dragon Pantheon; 4-tier simple-to-complex curriculum 4-35 boxes)
-- 15 Unseen held-out families (strictly >= 16 lowered boxes per asset for Gate G2)
+- 15 Evaluation-only families (strictly >= 16 lowered boxes per asset for Gate G2), plus
+  parameter-extrapolation and compositional cross-assembly evaluation splits
 
 Couples typed Block-DSL geometry with concise stateful @materials/@style PBR/Gray-Scott Turing
-programs, swept-SAT verified @animation_plan bone channels, 4 assistant task modes, and a ~5%
+programs, swept-SAT verified @behavior clip tracks, 4 assistant task modes, and a ~5%
 controlled defect-diagnosis-and-repair supervision mix.
 """
 
@@ -15,7 +16,7 @@ from __future__ import annotations
 
 from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import importlib.util
 import json
@@ -35,15 +36,18 @@ from synccraft.dsl.ast_nodes import (
     Bone,
     Box,
     DSLValidationError,
+    Locator,
     Meta,
     Palette,
     Place,
     Program,
+    StyleDecl,
     validate_program,
 )
 from synccraft.dsl.parser import DSLParseError, format_program, parse_program
 from synccraft.kinematics.se3_chain import Scene, compile_geometry
 from .curriculum_and_assistant import (
+    attach_verified_behavior_decl,
     build_assistant_supervision_turn,
     build_controlled_defect_repair_pair,
     coarsen_program_to_tier,
@@ -51,11 +55,14 @@ from .curriculum_and_assistant import (
     synthesize_verified_animation_spec,
 )
 from .diversity_engine import (
+    HUMAN_FAMILY_NOUNS,
     MACRO_DOMAINS,
     NAMING_REGISTERS,
     compose_multilevel_prompt,
+    compute_program_tree_shape,
     compute_qd_signature,
     diversify_program_ast,
+    sanitize_prompt_no_leakage,
     summarize_corpus_diversity,
 )
 from .dragon_and_fauna_expansion import DRAGON_AND_FAUNA_DISPATCH
@@ -67,6 +74,8 @@ from .taxonomy_catalog import (
     CATALOG_FAMILY_DOMAINS,
     CATALOG_SEEN_FAMILIES,
     CATALOG_UNSEEN_FAMILIES,
+    COMPOSITIONAL_SEEN_PAIRINGS,
+    HOLDOUT_EVALUATION_SPLITS,
     RESERVED_EXTENSION_TRACKS,
     get_taxonomy_metadata,
 )
@@ -116,6 +125,8 @@ class DatasetPreset:
     val_per_seen_family: int
     test_per_unseen_family: int
     hf_size_category: str
+    test_unseen_params_per_seen_family: int = 1
+    test_compositional_per_pairing: int = 1
 
     @property
     def seen_per_family(self) -> int:
@@ -133,6 +144,14 @@ class DatasetPreset:
     def total_rows(self) -> int:
         return self.total_seen + self.total_unseen
 
+    @property
+    def total_unseen_params(self) -> int:
+        return self.test_unseen_params_per_seen_family * len(SEEN_STATIC_FAMILIES)
+
+    @property
+    def total_compositional(self) -> int:
+        return self.test_compositional_per_pairing * len(COMPOSITIONAL_SEEN_PAIRINGS)
+
 
 DATASET_PRESETS: dict[str, DatasetPreset] = {
     "smoke": DatasetPreset(
@@ -141,6 +160,8 @@ DATASET_PRESETS: dict[str, DatasetPreset] = {
         val_per_seen_family=1,
         test_per_unseen_family=1,
         hf_size_category="n<1K",
+        test_unseen_params_per_seen_family=1,
+        test_compositional_per_pairing=1,
     ),
     "pilot_200": DatasetPreset(
         name="pilot_200",
@@ -148,6 +169,8 @@ DATASET_PRESETS: dict[str, DatasetPreset] = {
         val_per_seen_family=1,
         test_per_unseen_family=4,
         hf_size_category="n<1K",
+        test_unseen_params_per_seen_family=1,
+        test_compositional_per_pairing=2,
     ),
     "bakeoff_8k": DatasetPreset(
         name="bakeoff_8k",
@@ -155,6 +178,8 @@ DATASET_PRESETS: dict[str, DatasetPreset] = {
         val_per_seen_family=20,
         test_per_unseen_family=40,
         hf_size_category="1K<n<10K",
+        test_unseen_params_per_seen_family=10,
+        test_compositional_per_pairing=25,
     ),
     "full_60k": DatasetPreset(
         name="full_60k",
@@ -162,6 +187,8 @@ DATASET_PRESETS: dict[str, DatasetPreset] = {
         val_per_seen_family=150,
         test_per_unseen_family=80,
         hf_size_category="10K<n<100K",
+        test_unseen_params_per_seen_family=20,
+        test_compositional_per_pairing=50,
     ),
     "full_75k": DatasetPreset(
         name="full_75k",
@@ -169,6 +196,8 @@ DATASET_PRESETS: dict[str, DatasetPreset] = {
         val_per_seen_family=190,
         test_per_unseen_family=160,
         hf_size_category="10K<n<100K",
+        test_unseen_params_per_seen_family=40,
+        test_compositional_per_pairing=100,
     ),
 }
 
@@ -243,11 +272,8 @@ def _make_palette(
 
 
 def _jitter_pivot(rng: random.Random, base_xyz: tuple[float, float, float], span: float = 0.75) -> tuple[float, float, float]:
-    return (
-        round(base_xyz[0] + rng.uniform(-span, span), 3),
-        round(base_xyz[1] + rng.uniform(-0.35, 0.35), 3),
-        round(base_xyz[2] + rng.uniform(-span, span), 3),
-    )
+    del rng, base_xyz, span
+    return (0.0, 0.0, 0.0)
 
 
 def _check_java_envelope(scene: Scene) -> bool:
@@ -286,56 +312,61 @@ def _compose_prompt(
     material_names: list[str],
     structural_notes: str,
 ) -> tuple[str, str]:
-    sym_clause = "with mirror_x bilateral symmetry" if has_mirror_x else "with explicit asymmetric/cardinal sub-assemblies"
+    noun_choices = HUMAN_FAMILY_NOUNS.get(family_id, (family_id.replace("_", " "),))
+    family_phrase = noun_choices[rng.randrange(len(noun_choices))]
+    sub_phrase = substyle.replace("_", " ")
+    arch_phrase = archetype.replace("_", " ")
+    prof_phrase = target_profile.replace("_", " ")
+    sym_clause = "with bilateral mirror symmetry" if has_mirror_x else "with explicit asymmetric sub-assemblies"
     det_clause = ", including an authorized detached floating sub-rig" if has_detached else ""
     angle_clause = (
-        f"articulated at {joint_angle_deg:g} deg rest_euler joints"
+        f"articulated at {joint_angle_deg:g} deg joint rotations"
         if abs(joint_angle_deg) > 1e-6
         else "with orthogonal axis-aligned joint frames"
     )
-    mats = ", ".join(material_names)
+    mats = ", ".join(m.replace("_", " ") for m in material_names)
     style_idx = rng.randrange(5)
     if style_idx == 0:
         prompt = (
-            f"Generate a SyncCraft v3.0 Block-DSL {archetype} model for family '{family_id}' "
-            f"(sub-style: {substyle}, target_profile: {target_profile}, texel_density: {texel_density}). "
+            f"Generate a SyncCraft v3.0 Block-DSL {arch_phrase} model of a {family_phrase} "
+            f"(variant: {sub_phrase}, target: {prof_phrase}, density: {texel_density}px). "
             f"Construct {box_count} lowered boxes across {bone_count} bones {sym_clause}{det_clause}, "
             f"{angle_clause}. Materials: {mats}. Structure: {structural_notes}."
         )
         style_name = "technical_specification"
     elif style_idx == 1:
         prompt = (
-            f"Create a collision-free multi-part {substyle.replace('_', ' ')} ({family_id}) in Block-DSL "
-            f"targeting {target_profile} ({texel_density}px density). Use {bone_count} rigged bones and "
+            f"Create a collision-free multi-part {sub_phrase} ({family_phrase}) in Block-DSL "
+            f"targeting {prof_phrase} ({texel_density}px density). Use {bone_count} rigged bones and "
             f"{box_count} boxes {sym_clause}{det_clause}, {angle_clause}, using OKLCH palettes [{mats}]. "
             f"Key geometry: {structural_notes}."
         )
         style_name = "modeler_brief"
     elif style_idx == 2:
         prompt = (
-            f"// Family: {family_id} | Variant: {substyle} | Profile: {target_profile}@{texel_density}\n"
-            f"// Rig target: {bone_count} bones, {box_count} boxes, {angle_clause}, {sym_clause}{det_clause}\n"
-            f"// Palettes: {mats} | Notes: {structural_notes}\n"
+            f"Asset: {family_phrase} | Variant: {sub_phrase} | Target: {prof_phrase}@{texel_density}px\n"
+            f"Rig target: {bone_count} bones, {box_count} boxes, {angle_clause}, {sym_clause}{det_clause}\n"
+            f"Palettes: {mats} | Notes: {structural_notes}\n"
             f"Write the complete SAT-verified Block-DSL program."
         )
         style_name = "structured_header_spec"
     elif style_idx == 3:
         prompt = (
-            f"Design an articulated 3D block {substyle.replace('_', ' ')} belonging to the '{family_id}' family "
-            f"for {target_profile} ({archetype}, {texel_density} texel density). Include {structural_notes}, "
+            f"Design an articulated 3D block {sub_phrase} ({family_phrase}) "
+            f"for {prof_phrase} ({arch_phrase}, {texel_density} texel density). Include {structural_notes}, "
             f"totaling {box_count} primitives in {bone_count} bones {sym_clause}{det_clause} ({angle_clause}), "
             f"shaded with {mats}."
         )
         style_name = "art_direction"
     else:
         prompt = (
-            f"Synthesize typed Block-DSL geometry for '{family_id}' ({substyle}): "
-            f"archetype={archetype}, profile={target_profile}, density={texel_density}, "
+            f"Synthesize typed Block-DSL geometry for a {family_phrase} ({sub_phrase}): "
+            f"archetype={arch_phrase}, target={prof_phrase}, density={texel_density}, "
             f"parts={box_count} boxes / {bone_count} bones, {sym_clause}{det_clause}, {angle_clause}, "
             f"materials=[{mats}], assembly={structural_notes}."
         )
         style_name = "compact_parametric"
-    return prompt, style_name
+    return sanitize_prompt_no_leakage(prompt, family_id=family_id), style_name
 
 
 # ==============================================================================
@@ -873,7 +904,7 @@ def _gen_simple_wood_bow(rng: random.Random, v_idx: int) -> tuple[Program, dict[
     )
 
     root_items: list[Box | Bone] = [
-        Box("riser_grip", (2, riser_h, 3), p_cord.name, inflate=grip_inf),
+        Box("riser_grip", (2, riser_h, 3), p_cord.name, Place(None, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0), (0.0, 4.0, 0.0)), inflate=grip_inf),
         Box("arrow_rest_shelf", (1, 1, 2), p_trim.name, Place("riser_grip", (1.0, 1.0, 0.0), (-1.0, 1.0, 0.0))),
         Box("sight_bracket", (1, 2, 1), p_trim.name, Place("riser_grip", (-1.0, 1.0, 1.0), (1.0, 1.0, -1.0))),
         Box("upper_fade", (2, 2, 2), p_stave.name, Place("riser_grip", (0.0, 1.0, 0.0), (0.0, -1.0, 0.0))),
@@ -1272,12 +1303,27 @@ def _gen_gearbox(rng: random.Random, v_idx: int) -> tuple[Program, dict[str, Any
 
 
 # ==============================================================================
-# 6 Held-Out Unseen Static Family Generators (Strictly >= 16 lowered boxes!)
+# 6 Complex Evaluation Static Family Generators (Strictly >= 16 lowered boxes!)
 # ==============================================================================
 
 
 def _gen_mechanical_crossbow(rng: random.Random, v_idx: int) -> tuple[Program, dict[str, Any]]:
-    substyle = ("arbalest_windlass_crossbow", "compound_cam_crossbow", "siege_latch_crossbow")[v_idx % 3]
+    substyles = (
+        "arbalest_windlass_crossbow",
+        "compound_cam_crossbow",
+        "quad_limb_siege_crossbow",
+        "reverse_draw_tactical_crossbow",
+    )
+    # 4 * 4 * 3 * 4 * 3 * 2 = 1,152 orthogonal topological configurations; stride 7 is coprime to 1152
+    combo = (int(v_idx) * 7 + (int(v_idx) // 150)) % 1152
+    root_detail_mode = combo % 4
+    prod_mode = (combo // 4) % 4
+    nose_mode = (combo // 16) % 3
+    sight_mode = (combo // 48) % 4
+    cocking_mode = (combo // 192) % 3
+    side_mode = (combo // 576) % 2
+
+    substyle = substyles[prod_mode]
     profile = "java_modern" if (v_idx % 4 == 0) else "bbmodel_5"
     density = 32 if (v_idx % 5 == 1) else 16
 
@@ -1285,60 +1331,333 @@ def _gen_mechanical_crossbow(rng: random.Random, v_idx: int) -> tuple[Program, d
     p_prod = _make_palette(rng, rng.choice(_METALS))
     p_brass = _make_palette(rng, rng.choice(_ACCENT_METALS))
     p_cord = _make_palette(rng, rng.choice(_STONES_AND_FABRICS))
+    p_optic = _make_palette(rng, rng.choice(_GLOW_MATERIALS), emissive=(sight_mode in (1, 3)))
 
-    tiller_fore = rng.choice((5, 6, 7))
+    tiller_fore = rng.choice((5, 6))
     tiller_mid = rng.choice((5, 6))
-    prod_sweep = rng.choice((0.0, -11.25, -15.0, -22.5))
     limb_seg = rng.choice((3, 4))
-
-    prod_l = Bone(
-        "prod_limb_l",
-        rest_euler=(0.0, 0.0, prod_sweep),
-        attach=Attach("prod_socket", (1.0, 0.0, 0.0), (-1.0, 0.0, 0.0)),
-        mirror_name="prod_limb_r",
-        items=[
-            Box("limb_inner", (limb_seg, 1, 2), p_prod.name),
-            Box("limb_outer", (limb_seg, 1, 2), p_prod.name, Place("limb_inner", (1.0, 0.0, 0.0), (-1.0, 0.0, 0.0))),
-            Box("pulley_bracket", (2, 1, 2), p_brass.name, Place("limb_outer", (1.0, 0.0, 0.0), (-1.0, 0.0, 0.0))),
-            Box("eccentric_cam", (2, 1, 3), p_prod.name, Place("pulley_bracket", (0.0, 1.0, 0.0), (0.0, -1.0, 0.0))),
-            Box("cable_guide", (1, 2, 1), p_cord.name, Place("limb_inner", (0.0, -1.0, 0.0), (0.0, 1.0, 0.0))),
-        ],
-    )
+    prod_sweep = round(rng.uniform(-18.5, -4.5), 1)
+    socket_z = 3 if prod_mode == 2 else 2
 
     root_items: list[Box | Bone] = [
         Box("butt_stock", (2, 4, 3), p_stock.name),
-        Box("cheek_piece", (2, 3, 1), p_brass.name, Place("butt_stock", (0.0, 0.0, 1.0), (0.0, 0.0, -1.0))),
         Box("pistol_grip", (2, 2, 4), p_stock.name, Place("butt_stock", (0.0, 1.0, -1.0), (0.0, -1.0, 1.0))),
         Box("trigger_guard", (1, 3, 1), p_brass.name, Place("pistol_grip", (0.0, 1.0, 1.0), (0.0, -1.0, 1.0))),
         Box("tiller_mid", (2, tiller_mid, 2), p_stock.name, Place("butt_stock", (0.0, 1.0, 0.0), (0.0, -1.0, 0.0))),
-        Box("nut_housing", (3, 2, 2), p_brass.name, Place("tiller_mid", (0.0, 1.0, 0.0), (0.0, -1.0, 0.0))),
+        Box("nut_housing", (4, 2, 2), p_brass.name, Place("tiller_mid", (0.0, 1.0, 0.0), (0.0, -1.0, 0.0))),
         Box("tiller_fore", (2, tiller_fore, 2), p_stock.name, Place("nut_housing", (0.0, 1.0, 0.0), (0.0, -1.0, 0.0))),
-        Box("flight_rail", (2, tiller_fore, 1), p_prod.name, Place("tiller_fore", (0.0, 0.0, 1.0), (0.0, 0.0, -1.0))),
-        Box("prod_socket", (4, 2, 2), p_brass.name, Place("tiller_fore", (0.0, 1.0, 0.0), (0.0, -1.0, 0.0))),
-        Box("stirrup_yoke", (4, 1, 2), p_prod.name, Place("prod_socket", (0.0, 1.0, 0.0), (0.0, -1.0, 0.0))),
-        Box("stirrup_arm_l", (1, 3, 1), p_prod.name, Place("stirrup_yoke", (-1.0, 1.0, 0.0), (-1.0, -1.0, 0.0))),
-        Box("stirrup_arm_r", (1, 3, 1), p_prod.name, Place("stirrup_yoke", (1.0, 1.0, 0.0), (1.0, -1.0, 0.0))),
-        Box("stirrup_toe_bar", (4, 1, 1), p_prod.name, Place("stirrup_arm_l", (-1.0, 1.0, 0.0), (-1.0, -1.0, 0.0))),
-        prod_l,
+        Box(
+            "flight_rail",
+            (2, tiller_fore - 1, 1),
+            p_prod.name,
+            Place("tiller_fore", (0.0, 1.0, 1.0), (0.0, 1.0, -1.0)),
+        ),
+        Box("prod_socket", (4, 2, socket_z), p_brass.name, Place("tiller_fore", (0.0, 1.0, 0.0), (0.0, -1.0, 0.0))),
     ]
-    # 13 root boxes + 2 * 5 mirrored prod boxes = 23 boxes (>= 16!), 3 bones!
+    if root_detail_mode >= 1:
+        root_items.append(
+            Box("cheek_piece", (2, 3, 1), p_brass.name, Place("butt_stock", (0.0, -1.0, 1.0), (0.0, -1.0, -1.0)))
+        )
+    if root_detail_mode >= 2:
+        root_items.append(
+            Box("recoil_buttplate", (2, 1, 3), p_brass.name, Place("butt_stock", (0.0, -1.0, 0.0), (0.0, 1.0, 0.0)))
+        )
+    if root_detail_mode >= 3:
+        root_items.append(
+            Box(
+                "quarrel_bolt_shaft",
+                (1, max(2, tiller_fore - 2), 1),
+                p_cord.name,
+                Place("flight_rail", (0.0, 1.0, 1.0), (0.0, 1.0, -1.0)),
+            )
+        )
+
+    # Axis A: Prod limb topology (4 distinct structural architectures)
+    if prod_mode == 0:
+        root_items.append(
+            Bone(
+                "prod_limb_l",
+                rest_euler=(0.0, 0.0, prod_sweep),
+                attach=Attach("prod_socket", (1.0, 0.0, 0.0), (-1.0, 0.0, 0.0)),
+                mirror_name="prod_limb_r",
+                items=[
+                    Box("limb_inner", (limb_seg, 1, 2), p_prod.name),
+                    Box("limb_outer", (3, 1, 2), p_prod.name, Place("limb_inner", (1.0, 0.0, 0.0), (-1.0, 0.0, 0.0))),
+                    Box("limb_tip_nock", (2, 1, 1), p_brass.name, Place("limb_outer", (1.0, 0.0, 0.0), (-1.0, 0.0, 0.0))),
+                    Box("string_whip_lug", (1, 2, 1), p_cord.name, Place("limb_tip_nock", (1.0, -1.0, 0.0), (1.0, 1.0, 0.0))),
+                ],
+            )
+        )
+        prod_desc = f"mirrored tapered steel prods ({prod_sweep:g} deg)"
+    elif prod_mode == 1:
+        cam_yaw = round(rng.uniform(-14.0, 12.0), 1)
+        cam_sheave = Bone(
+            "cam_sheave_l",
+            rest_euler=(0.0, 0.0, cam_yaw),
+            attach=Attach("axle_fork", (1.0, 0.0, 0.0), (-1.0, 0.0, 0.0)),
+            items=[
+                Box("eccentric_wheel", (2, 2, 1), p_prod.name),
+                Box("power_cable_post", (1, 1, 2), p_cord.name, Place("eccentric_wheel", (0.0, -1.0, 0.0), (0.0, 1.0, 0.0))),
+            ],
+        )
+        root_items.append(
+            Bone(
+                "prod_limb_l",
+                rest_euler=(0.0, 0.0, prod_sweep),
+                attach=Attach("prod_socket", (1.0, 0.0, 0.0), (-1.0, 0.0, 0.0)),
+                mirror_name="prod_limb_r",
+                items=[
+                    Box("limb_inner", (3, 1, 2), p_prod.name),
+                    Box("limb_outer", (3, 1, 2), p_prod.name, Place("limb_inner", (1.0, 0.0, 0.0), (-1.0, 0.0, 0.0))),
+                    Box("axle_fork", (2, 1, 2), p_brass.name, Place("limb_outer", (1.0, 0.0, 0.0), (-1.0, 0.0, 0.0))),
+                    cam_sheave,
+                ],
+            )
+        )
+        prod_desc = f"mirrored compound prods ({prod_sweep:g} deg) with articulated cam sheaves ({cam_yaw:g} deg)"
+    elif prod_mode == 2:
+        low_sweep = round(prod_sweep - 2.4, 1)
+        root_items.append(
+            Bone(
+                "quad_limb_upper_l",
+                rest_euler=(0.0, 0.0, prod_sweep),
+                attach=Attach("prod_socket", (1.0, 0.0, 1.0), (-1.0, 0.0, 1.0)),
+                mirror_name="quad_limb_upper_r",
+                items=[
+                    Box("u_lamina_in", (3, 1, 1), p_prod.name),
+                    Box("u_lamina_out", (3, 1, 1), p_prod.name, Place("u_lamina_in", (1.0, 0.0, 0.0), (-1.0, 0.0, 0.0))),
+                    Box("u_tip_block", (2, 1, 1), p_brass.name, Place("u_lamina_out", (1.0, 0.0, 0.0), (-1.0, 0.0, 0.0))),
+                ],
+            )
+        )
+        root_items.append(
+            Bone(
+                "quad_limb_lower_l",
+                rest_euler=(0.0, 0.0, low_sweep),
+                attach=Attach("prod_socket", (1.0, 0.0, -1.0), (-1.0, 0.0, -1.0)),
+                mirror_name="quad_limb_lower_r",
+                items=[
+                    Box("l_lamina_in", (3, 1, 1), p_prod.name),
+                    Box("l_lamina_out", (4, 1, 1), p_prod.name, Place("l_lamina_in", (1.0, 0.0, 0.0), (-1.0, 0.0, 0.0))),
+                ],
+            )
+        )
+        prod_desc = f"split upper and lower quad-limb prods ({prod_sweep:g}/{low_sweep:g} deg)"
+    else:
+        rev_sweep = round(rng.uniform(-26.0, -16.0), 1)
+        rev_limb_l = Bone(
+            "rev_limb_l",
+            rest_euler=(0.0, 0.0, rev_sweep),
+            attach=Attach("riser_bridge", (1.0, 0.0, 0.0), (-1.0, 0.0, 0.0)),
+            mirror_name="rev_limb_r",
+            items=[
+                Box("rev_blade_a", (3, 1, 2), p_prod.name),
+                Box("rev_blade_b", (3, 1, 2), p_prod.name, Place("rev_blade_a", (1.0, 0.0, 0.0), (-1.0, 0.0, 0.0))),
+                Box("rev_cam_lobe", (2, 2, 1), p_brass.name, Place("rev_blade_b", (1.0, 0.0, 0.0), (-1.0, 0.0, 0.0))),
+            ],
+        )
+        root_items.append(
+            Bone(
+                "forward_riser_head",
+                attach=Attach("prod_socket", (0.0, 1.0, 0.0), (0.0, -1.0, 0.0)),
+                items=[
+                    Box("riser_bridge", (6, 2, 2), p_brass.name),
+                    Box("broadhead_hood", (2, 2, 2), p_prod.name, Place("riser_bridge", (0.0, 1.0, 0.0), (0.0, -1.0, 0.0))),
+                    Box("under_snubber", (2, 2, 1), p_cord.name, Place("riser_bridge", (0.0, 0.0, -1.0), (0.0, 0.0, 1.0))),
+                    rev_limb_l,
+                ],
+            )
+        )
+        prod_desc = f"reverse-draw forward riser head with swept limbs ({rev_sweep:g} deg)"
+
+    # Axis B: Nose / under-forend assembly (3 modes)
+    extra_notes: list[str] = [prod_desc]
+    if nose_mode == 0:
+        if prod_mode != 3:
+            stirrup_pitch = round(rng.uniform(-11.5, 7.5), 1)
+            root_items.append(
+                Bone(
+                    "foot_stirrup",
+                    rest_euler=(stirrup_pitch, 0.0, 0.0),
+                    attach=Attach("prod_socket", (0.0, 1.0, 0.0), (0.0, -1.0, 0.0)),
+                    items=[
+                        Box("stirrup_yoke", (4, 1, 1), p_prod.name),
+                        Box("stirrup_arm_l", (1, 3, 1), p_prod.name, Place("stirrup_yoke", (-1.0, 1.0, 0.0), (-1.0, -1.0, 0.0))),
+                        Box("stirrup_arm_r", (1, 3, 1), p_prod.name, Place("stirrup_yoke", (1.0, 1.0, 0.0), (1.0, -1.0, 0.0))),
+                        Box("stirrup_toe_bar", (4, 1, 1), p_prod.name, Place("stirrup_arm_l", (-1.0, 1.0, 0.0), (-1.0, -1.0, 0.0))),
+                    ],
+                )
+            )
+            extra_notes.append("hinged front foot stirrup")
+        else:
+            root_items.append(
+                Bone(
+                    "forend_handstop",
+                    attach=Attach("tiller_fore", (0.0, 0.0, -1.0), (0.0, 0.0, 1.0)),
+                    items=[Box("handstop_lug", (2, 2, 2), p_stock.name)],
+                )
+            )
+            extra_notes.append("under-rail handstop")
+    elif nose_mode == 1:
+        splay_y = round(rng.uniform(-16.0, -6.5), 1)
+        root_items.append(
+            Bone(
+                "folding_bipod_l",
+                rest_euler=(0.0, splay_y, 0.0),
+                attach=Attach("tiller_fore", (1.0, 0.0, -1.0), (-1.0, 0.0, 1.0)),
+                mirror_name="folding_bipod_r",
+                items=[
+                    Box("bipod_strut", (1, 2, 4), p_prod.name),
+                    Box("bipod_skid_foot", (2, 2, 1), p_brass.name, Place("bipod_strut", (0.0, 0.0, -1.0), (0.0, 0.0, 1.0))),
+                ],
+            )
+        )
+        extra_notes.append("mirrored under-forend bipod")
+    else:
+        grip_cant = round(rng.uniform(-13.5, 8.5), 1)
+        root_items.append(
+            Bone(
+                "angled_foregrip_pod",
+                rest_euler=(grip_cant, 0.0, 0.0),
+                attach=Attach("tiller_fore", (0.0, 0.0, -1.0), (0.0, 0.0, 1.0)),
+                items=[
+                    Box("foregrip_collar", (2, 2, 1), p_brass.name),
+                    Box("foregrip_stalk", (2, 2, 3), p_stock.name, Place("foregrip_collar", (0.0, 0.0, -1.0), (0.0, 0.0, 1.0))),
+                ],
+            )
+        )
+        extra_notes.append("angled vertical foregrip")
+
+    # Axis C: Top sight / optic assembly above nut_housing (4 modes, including detached reticle)
+    has_detached = False
+    if sight_mode == 1:
+        root_items.append(
+            Bone(
+                "optic_scope_mount",
+                attach=Attach("nut_housing", (0.0, 0.0, 1.0), (0.0, 0.0, -1.0)),
+                items=[
+                    Box("riser_stanchion", (2, 2, 3), p_brass.name),
+                    Box("scope_barrel", (2, 6, 2), p_prod.name, Place("riser_stanchion", (0.0, 0.0, 1.0), (0.0, 0.0, -1.0))),
+                    Box("objective_bell", (3, 2, 2), p_optic.name, Place("scope_barrel", (0.0, 1.0, 0.0), (0.0, -1.0, 0.0))),
+                ],
+            )
+        )
+        extra_notes.append("elevated telescopic sight")
+    elif sight_mode == 2:
+        leaf_deg = round(rng.uniform(6.5, 19.5), 1)
+        ladder_leaf = Bone(
+            "elevation_ladder_leaf",
+            rest_euler=(leaf_deg, 0.0, 0.0),
+            attach=Attach("riser_stanchion", (0.0, -1.0, 1.0), (0.0, -1.0, -1.0)),
+            items=[
+                Box("ladder_frame", (2, 1, 4), p_brass.name),
+                Box("aperture_slider", (3, 1, 1), p_prod.name, Place("ladder_frame", (0.0, 0.0, 1.0), (0.0, 0.0, -1.0))),
+            ],
+        )
+        root_items.append(
+            Bone(
+                "tangent_sight_base",
+                attach=Attach("nut_housing", (0.0, 0.0, 1.0), (0.0, 0.0, -1.0)),
+                items=[
+                    Box("riser_stanchion", (2, 2, 3), p_brass.name),
+                    ladder_leaf,
+                ],
+            )
+        )
+        extra_notes.append(f"hinged tangent ladder sight ({leaf_deg:g} deg)")
+    elif sight_mode == 3:
+        has_detached = True
+        reticle_yaw = round(rng.uniform(-18.0, 18.0), 1)
+        root_items.append(
+            Bone(
+                "arcane_reticle_halo",
+                rest_euler=(0.0, 0.0, reticle_yaw),
+                attach=Attach("nut_housing", (0.0, 0.0, 1.0), (0.0, 0.0, -1.0), (0.0, 0.0, 2.8), detached=True),
+                items=[
+                    Box("reticle_prism", (2, 2, 2), p_optic.name),
+                    Box("reticle_fin", (4, 1, 1), p_brass.name, Place("reticle_prism", (0.0, 0.0, 1.0), (0.0, 0.0, -1.0))),
+                ],
+            )
+        )
+        extra_notes.append("detached floating sight reticle")
+
+    # Axis D: Rear cocking mechanism on butt_stock (3 modes)
+    if cocking_mode == 1:
+        crank_deg = round(rng.uniform(-28.0, 28.0), 1)
+        crank_arm = Bone(
+            "crank_handle_arm",
+            rest_euler=(crank_deg, 0.0, 0.0),
+            attach=Attach("gear_drum", (1.0, 0.0, 0.0), (-1.0, 0.0, 0.0)),
+            items=[
+                Box("crank_lever", (1, 4, 1), p_prod.name),
+                Box("wooden_knob", (2, 1, 1), p_stock.name, Place("crank_lever", (1.0, 1.0, 0.0), (-1.0, 1.0, 0.0))),
+            ],
+        )
+        root_items.append(
+            Bone(
+                "cranequin_gearbox",
+                attach=Attach("butt_stock", (1.0, 0.0, 0.0), (-1.0, 0.0, 0.0)),
+                items=[
+                    Box("gear_drum", (2, 3, 3), p_brass.name),
+                    Box("ratchet_pawl", (1, 2, 1), p_prod.name, Place("gear_drum", (0.0, 1.0, 1.0), (0.0, 1.0, -1.0))),
+                    crank_arm,
+                ],
+            )
+        )
+        extra_notes.append("side cranequin rack-and-crank")
+    elif cocking_mode == 2:
+        root_items.append(
+            Bone(
+                "windlass_pulley_l",
+                attach=Attach("butt_stock", (1.0, -1.0, 0.0), (-1.0, -1.0, 0.0)),
+                mirror_name="windlass_pulley_r",
+                items=[
+                    Box("windlass_arm", (3, 1, 2), p_brass.name),
+                    Box("windlass_grip_peg", (2, 1, 1), p_stock.name, Place("windlass_arm", (1.0, 0.0, 0.0), (-1.0, 0.0, 0.0))),
+                ],
+            )
+        )
+        extra_notes.append("bilateral buttstock windlass arms")
+
+    # Axis E: Side quiver pod on tiller_mid (-X side, 2 modes)
+    if side_mode == 1:
+        root_items.append(
+            Bone(
+                "bolt_quiver_bracket",
+                attach=Attach("tiller_mid", (-1.0, 0.0, 0.0), (1.0, 0.0, 0.0)),
+                items=[
+                    Box("quiver_strap_lug", (2, 2, 2), p_brass.name),
+                    Box("quiver_pod_tube", (2, 3, 2), p_stock.name, Place("quiver_strap_lug", (-1.0, 0.0, 0.0), (1.0, 0.0, 0.0))),
+                    Box("quiver_fletch_cap", (2, 1, 2), p_cord.name, Place("quiver_pod_tube", (0.0, 1.0, 0.0), (0.0, -1.0, 0.0))),
+                ],
+            )
+        )
+        extra_notes.append("side-mounted bolt quiver pod")
 
     prog = Program(
         meta=Meta("weapon_3d", profile, density),
-        palettes=[p_stock, p_prod, p_brass, p_cord],
-        root=Bone("crossbow_tiller_root", pivot_local=_jitter_pivot(rng, (8.0, 3.5, 8.0)), items=root_items),
+        palettes=[p_stock, p_prod, p_brass, p_cord, p_optic],
+        root=Bone("crossbow_tiller_root", pivot_local=(0.0, 0.0, 0.0), items=root_items),
     )
     return prog, {
         "substyle": substyle,
-        "primary_span": tiller_mid + tiller_fore + 13,
-        "secondary_span": 4 + 2 * (2 * limb_seg + 2),
+        "primary_span": tiller_mid + tiller_fore + 12,
+        "secondary_span": 4 + 2 * (limb_seg + 5),
         "joint_angle_deg": prod_sweep,
         "has_mirror_x": True,
-        "has_detached_bone": False,
+        "has_detached_bone": has_detached,
         "inflate_detail": 0.0,
         "material_theme": f"{p_stock.name}+{p_prod.name}+{p_brass.name}",
-        "notes": f"held-out {substyle.replace('_', ' ')} with cheek piece, trigger guard, bolt flight rail, foot stirrup, and mirrored cam-equipped steel prods ({prod_sweep:g} deg)",
-        "extra": {"limb_seg": limb_seg},
+        "notes": f"{substyle.replace('_', ' ')} with pistol grip, trigger guard, flight rail, and {', '.join(extra_notes)}",
+        "extra": {
+            "limb_seg": limb_seg,
+            "prod_mode": prod_mode,
+            "nose_mode": nose_mode,
+            "sight_mode": sight_mode,
+            "cocking_mode": cocking_mode,
+            "side_mode": side_mode,
+            "root_detail_mode": root_detail_mode,
+        },
     }
 
 
@@ -1409,7 +1728,7 @@ def _gen_hand_lantern(rng: random.Random, v_idx: int) -> tuple[Program, dict[str
         "has_detached_bone": False,
         "inflate_detail": 0.0,
         "material_theme": f"{p_frame.name}+{p_brass.name}+{p_flame.name}",
-        "notes": f"held-out {substyle.replace('_', ' ')} with 4 feet, oil pot, emissive mantle, 4 corner cage mullions, vented chimney hood, and {bail_tilt:g} deg swinging bail handle",
+        "notes": f"{substyle.replace('_', ' ')} with 4 feet, oil pot, emissive mantle, 4 corner cage mullions, vented chimney hood, and {bail_tilt:g} deg swinging bail handle",
         "extra": {"cage_h": cage_h},
     }
 
@@ -1490,7 +1809,7 @@ def _gen_tripod_telescope(rng: random.Random, v_idx: int) -> tuple[Program, dict
         "has_detached_bone": False,
         "inflate_detail": 0.0,
         "material_theme": f"{p_brass.name}+{p_wood.name}+{p_lens.name}",
-        "notes": f"held-out {substyle.replace('_', ' ')} with 3 splayed wooden legs ({splay_deg:g} deg), azimuth/altitude mount, dew hood, emissive objective lens, star diagonal eyepiece, and finderscope ({elev_deg:g} deg elevation)",
+        "notes": f"{substyle.replace('_', ' ')} with 3 splayed wooden legs ({splay_deg:g} deg), azimuth/altitude mount, dew hood, emissive objective lens, star diagonal eyepiece, and finderscope ({elev_deg:g} deg elevation)",
         "extra": {"ota_len": ota_len, "splay_deg": splay_deg},
     }
 
@@ -1567,7 +1886,7 @@ def _gen_folding_windmill(rng: random.Random, v_idx: int) -> tuple[Program, dict
         "has_detached_bone": False,
         "inflate_detail": 0.0,
         "material_theme": f"{p_tower.name}+{p_timber.name}+{p_sail.name}",
-        "notes": f"held-out {substyle.replace('_', ' ')} with stepped masonry tower, reefing stage, {cap_yaw:g} deg revolving cap with rear fantail, and 4-sail rotor at {roll_deg:g} deg",
+        "notes": f"{substyle.replace('_', ' ')} with stepped masonry tower, reefing stage, {cap_yaw:g} deg revolving cap with rear fantail, and 4-sail rotor at {roll_deg:g} deg",
         "extra": {"spar_len": spar_len, "cap_yaw": cap_yaw},
     }
 
@@ -1639,7 +1958,7 @@ def _gen_anvil_forge(rng: random.Random, v_idx: int) -> tuple[Program, dict[str,
         "has_detached_bone": False,
         "inflate_detail": 0.0,
         "material_theme": f"{p_stone.name}+{p_iron.name}+{p_ember.name}",
-        "notes": f"held-out {substyle.replace('_', ' ')} with masonry hearth, tuyere pipe, emissive coal bed, smoke hood & chimney flue, plus oak-stump London anvil ({anvil_yaw:g} deg yaw) and slack tub",
+        "notes": f"{substyle.replace('_', ' ')} with masonry hearth, tuyere pipe, emissive coal bed, smoke hood & chimney flue, plus oak-stump London anvil ({anvil_yaw:g} deg yaw) and slack tub",
         "extra": {"hearth_w": hearth_w, "flue_h": flue_h},
     }
 
@@ -1716,7 +2035,7 @@ def _gen_floating_ring_staff(rng: random.Random, v_idx: int) -> tuple[Program, d
         "has_detached_bone": use_detached,
         "inflate_detail": wrap_inf,
         "material_theme": f"{p_shaft.name}+{p_metal.name}+{p_glow.name}",
-        "notes": f"held-out {substyle.replace('_', ' ')} with butt crystal, astragal disc, mirrored calyx prongs, focus prism, and {'detached hovering' if use_detached else 'mounted'} 8-segment halo ring ({halo_yaw:g} deg yaw)",
+        "notes": f"{substyle.replace('_', ' ')} with butt crystal, astragal disc, mirrored calyx prongs, focus prism, and {'detached hovering' if use_detached else 'mounted'} 8-segment halo ring ({halo_yaw:g} deg yaw)",
         "extra": {"float_gap": float_gap, "halo_tilt": halo_tilt},
     }
 
@@ -1759,6 +2078,172 @@ def generate_candidate_for_family(
     return program, meta_info, numeric_seed
 
 
+def _envelope_and_audit_ok(program: Program) -> bool:
+    try:
+        validate_program(program)
+        sc = compile_geometry(program)
+        if program.meta.archetype == "entity":
+            if not _check_entity_envelope(sc):
+                return False
+        else:
+            if not _check_java_envelope(sc):
+                return False
+        aud = audit_scene(
+            sc,
+            collision_tolerance=1e-7,
+            enforce_physical_contact=True,
+            max_contact_gap=1e-4,
+            max_inset_depth=0.5,
+        )
+        return bool(aud["passed"])
+    except Exception:
+        return False
+
+
+def _apply_heldout_param_extrapolation(program: Program, *, rng: random.Random) -> Program:
+    """Extrapolate leaf box spans, continuous joint angles, and view parameters into a disjoint regime."""
+    max_dim_cap = 24 if program.meta.archetype == "entity" else 16
+
+    def _stretch_leaf_boxes(b: Bone, depth: int) -> Bone:
+        has_child_bone = any(isinstance(it, Bone) for it in b.items)
+        new_items: list[Box | Bone | Locator] = []
+        stretched_first = False
+        for it in b.items:
+            if isinstance(it, Box) and depth >= 1 and not has_child_bone and not stretched_first:
+                stretched_first = True
+                sx, sy, sz = it.size
+                if sx >= sy and sx >= sz and sx + 2 <= max_dim_cap:
+                    it = replace(it, size=(sx + 2, sy, sz))
+                elif sy >= sx and sy >= sz and sy + 2 <= max_dim_cap:
+                    it = replace(it, size=(sx, sy + 2, sz))
+                elif sz + 2 <= max_dim_cap:
+                    it = replace(it, size=(sx, sy, sz + 2))
+                new_items.append(it)
+            elif isinstance(it, Bone):
+                new_items.append(_stretch_leaf_boxes(it, depth + 1))
+            else:
+                new_items.append(it)
+        return replace(b, items=new_items)
+
+    cur = program
+    cand_stretch = replace(cur, root=_stretch_leaf_boxes(cur.root, 0))
+    if _envelope_and_audit_ok(cand_stretch):
+        cur = cand_stretch
+
+    scale_factor = rng.uniform(1.14, 1.28)
+
+    def _extrapolate_angles(b: Bone, depth: int) -> Bone:
+        rx, ry, rz = b.rest_euler
+        if depth >= 1 and (abs(rx) > 1e-4 or abs(ry) > 1e-4 or abs(rz) > 1e-4):
+            def _shift(v: float) -> float:
+                if abs(v) <= 1e-4:
+                    return 0.0
+                nv = round(max(-75.0, min(75.0, v * scale_factor + (0.3 if v > 0 else -0.3))), 1)
+                if b.joint_limits is not None:
+                    nv = max(b.joint_limits[0][0], min(b.joint_limits[0][1], nv))
+                return nv
+
+            nrx = round(max(-75.0, min(75.0, rx * scale_factor + (0.3 if rx > 0 else (-0.3 if rx < 0 else 0.0)))), 1)
+            nry = round(max(-75.0, min(75.0, ry * scale_factor + (0.3 if ry > 0 else (-0.3 if ry < 0 else 0.0)))), 1)
+            nrz = round(max(-75.0, min(75.0, rz * scale_factor + (0.3 if rz > 0 else (-0.3 if rz < 0 else 0.0)))), 1)
+            if b.joint_limits is not None:
+                nrx = max(b.joint_limits[0][0], min(b.joint_limits[0][1], nrx))
+                nry = max(b.joint_limits[1][0], min(b.joint_limits[1][1], nry))
+                nrz = max(b.joint_limits[2][0], min(b.joint_limits[2][1], nrz))
+            new_euler = (nrx, nry, nrz)
+        else:
+            new_euler = b.rest_euler
+        new_items = [_extrapolate_angles(it, depth + 1) if isinstance(it, Bone) else it for it in b.items]
+        return replace(b, rest_euler=new_euler, items=new_items)
+
+    cand_ang = replace(cur, root=_extrapolate_angles(cur.root, 0))
+    if _envelope_and_audit_ok(cand_ang):
+        cur = cand_ang
+
+    if cur.style is not None:
+        extrap_style = replace(
+            cur.style,
+            view_deg=round(rng.uniform(46.0, 57.5), 1),
+            bevel_highlight=round(rng.uniform(0.24, 0.31), 3),
+        )
+        cur = replace(cur, style=extrap_style)
+    else:
+        cur = replace(
+            cur,
+            style=StyleDecl(
+                target_encoding="vanilla",
+                quantize_ramp=True,
+                bevel_highlight=round(rng.uniform(0.24, 0.31), 3),
+                view_deg=round(rng.uniform(46.0, 57.5), 1),
+            ),
+        )
+    return cur
+
+
+def _prefix_guest_subtree(guest_prog: Program, prefix: str) -> tuple[list[Palette], Bone]:
+    pal_map = {p.name: f"{prefix}{p.name}" for p in guest_prog.palettes}
+    prefixed_palettes = [replace(p, name=pal_map[p.name]) for p in guest_prog.palettes]
+
+    def _remap_bone(b: Bone, is_guest_root: bool = False) -> Bone:
+        new_items: list[Box | Bone | Locator] = []
+        first_box_seen = False
+        for it in b.items:
+            if isinstance(it, Box):
+                new_place: Place | None
+                if is_guest_root and not first_box_seen:
+                    first_box_seen = True
+                    new_place = None
+                elif it.place is None:
+                    new_place = None
+                else:
+                    bb = f"{prefix}{it.place.base_box}" if it.place.base_box is not None else None
+                    new_place = Place(bb, it.place.anchor, it.place.align, it.place.offset)
+                new_items.append(
+                    replace(
+                        it,
+                        name=f"{prefix}{it.name}",
+                        material=pal_map.get(it.material, it.material),
+                        place=new_place,
+                    )
+                )
+            elif isinstance(it, Locator):
+                new_items.append(replace(it, name=f"{prefix}{it.name}"))
+            elif isinstance(it, Bone):
+                new_items.append(_remap_bone(it, False))
+        new_attach = None
+        if not is_guest_root and b.attach is not None:
+            new_attach = Attach(
+                parent_box=f"{prefix}{b.attach.parent_box}",
+                anchor=b.attach.anchor,
+                align=b.attach.align,
+                offset=b.attach.offset,
+                detached=b.attach.detached,
+            )
+        new_mirror = f"{prefix}{b.mirror_name}" if b.mirror_name is not None else None
+        return Bone(
+            name=f"{prefix}{b.name}",
+            pivot_local=(0.0, 0.0, 0.0),
+            rest_euler=b.rest_euler,
+            attach=new_attach,
+            mirror_name=new_mirror,
+            items=new_items,
+            joint_limits=b.joint_limits,
+        )
+
+    return prefixed_palettes, _remap_bone(guest_prog.root, True)
+
+
+def _insert_child_on_box(root: Bone, target_box_name: str, child_bone: Bone) -> Bone:
+    def _walk(b: Bone) -> Bone:
+        has_target = any(isinstance(it, Box) and it.name == target_box_name for it in b.items)
+        new_items = [_walk(it) if isinstance(it, Bone) else it for it in b.items]
+        if has_target:
+            new_items.append(child_bone)
+        return replace(b, items=new_items)
+
+    return _walk(root)
+
+
 def verify_and_package_candidate(
     family_id: str,
     *,
@@ -1770,12 +2255,15 @@ def verify_and_package_candidate(
     run_exporter_check: bool = False,
 ) -> dict[str, Any]:
     """Generate, diversify, compile, 15-axis SAT + P1-02 contact-audit, and package a verified row."""
+    is_param_holdout = split == "test_unseen_params"
     tier_slot = int(variant_index) % 5
     curriculum_tier_request: str | None = None
     if require_min_boxes is not None:
         min_boxes = require_min_boxes
     elif split == "test_unseen":
         min_boxes = 16
+    elif is_param_holdout:
+        min_boxes = 12
     elif tier_slot == 3:
         curriculum_tier_request = "tier_1_simple"
         min_boxes = 4
@@ -1788,33 +2276,34 @@ def verify_and_package_candidate(
     domain = CATALOG_FAMILY_DOMAINS.get(family_id, "artificial")
     body_plan_id = CATALOG_ENTITY_BODY_PLANS.get(family_id)
     last_error = "uninitialized"
+    gen_variant_idx = int(variant_index) + 50_000 if is_param_holdout else int(variant_index)
 
     for attempt in range(max_attempts):
         effective_seed = base_seed + attempt * 104_729
         try:
             raw_program, meta_info, numeric_seed = generate_candidate_for_family(
-                family_id, split=split, variant_index=variant_index, base_seed=effective_seed
+                family_id, split=split, variant_index=gen_variant_idx, base_seed=effective_seed
             )
             div_rng = random.Random(numeric_seed ^ 0x3C3C_7171)
             program, div_info = diversify_program_ast(
                 raw_program,
                 rng=div_rng,
                 domain=domain,
-                variant_index=variant_index,
+                variant_index=gen_variant_idx,
             )
             if curriculum_tier_request is not None:
                 program = coarsen_program_to_tier(program, curriculum_tier_request)
+            if is_param_holdout:
+                program = _apply_heldout_param_extrapolation(program, rng=div_rng)
 
             validate_program(program)
-            canonical_dsl = format_program(program)
-            # Round-trip parse guarantee on the canonical serialized program
-            reparsed = parse_program(canonical_dsl)
-            scene = compile_geometry(reparsed)
+            reparsed_geo = parse_program(format_program(program))
+            scene = compile_geometry(reparsed_geo)
             if len(scene.boxes) < min_boxes:
                 last_error = f"box_count {len(scene.boxes)} < {min_boxes}"
                 continue
 
-            is_entity = reparsed.meta.archetype == "entity"
+            is_entity = reparsed_geo.meta.archetype == "entity"
             if is_entity:
                 if not _check_entity_envelope(scene):
                     last_error = "exceeded_entity_[-48,64]_envelope"
@@ -1837,6 +2326,16 @@ def verify_and_package_candidate(
                     f"contact_violations={len(audit_res['contact_violations'])})"
                 )
                 continue
+
+            assist_rng = random.Random(numeric_seed ^ 0x2B4D_8899)
+            anim_spec = synthesize_verified_animation_spec(
+                reparsed_geo, scene, family_id=family_id, rng=assist_rng
+            )
+            with_behavior = attach_verified_behavior_decl(reparsed_geo, anim_spec)
+            canonical_dsl = format_program(with_behavior)
+            reparsed = parse_program(canonical_dsl)
+            scene = compile_geometry(reparsed)
+            tree_sig = compute_program_tree_shape(reparsed, scene)
 
             if run_exporter_check:
                 from synccraft.backends.bbmodel5_exporter import export_bbmodel
@@ -1867,6 +2366,7 @@ def verify_and_package_candidate(
                 material_families=div_info["material_families"],
                 style_encoding=div_info["style_encoding"],
                 structural_notes=meta_info["notes"],
+                program=reparsed,
             )
             qd_sig = compute_qd_signature(
                 reparsed,
@@ -1876,12 +2376,8 @@ def verify_and_package_candidate(
             )
 
             tax_meta = get_taxonomy_metadata(family_id, box_count=len(scene.boxes))
-            assist_rng = random.Random(numeric_seed ^ 0x2B4D_8899)
             textured_prog, tex_recipe = ensure_concise_texture_program(
                 reparsed, family_id=family_id, rng=assist_rng
-            )
-            anim_spec = synthesize_verified_animation_spec(
-                reparsed, scene, family_id=family_id, rng=assist_rng
             )
 
             fam_salt = SEEN_STATIC_FAMILIES.index(family_id) if family_id in SEEN_STATIC_FAMILIES else 0
@@ -1917,6 +2413,7 @@ def verify_and_package_candidate(
                 if is_entity
                 else f"{reparsed.meta.target_profile}:java_modern_1.21.11+"
             )
+            param_regime = "heldout_extrapolation_v1" if is_param_holdout else "in_distribution_v1"
 
             return {
                 "asset_id": asset_id,
@@ -1931,6 +2428,8 @@ def verify_and_package_candidate(
                     "motion_archetype": str(tax_meta["motion_archetype"]),
                     "assistant_task_mode": task_mode,
                     "quality_label": quality_label,
+                    "param_regime": param_regime,
+                    "tree_shape_signature": tree_sig,
                     "preset_substyle": str(meta_info["substyle"]),
                     "archetype": str(reparsed.meta.archetype),
                     "target_profile": str(reparsed.meta.target_profile),
@@ -2002,9 +2501,265 @@ def verify_and_package_candidate(
     )
 
 
+def verify_and_package_compositional_candidate(
+    pairing_index: int,
+    *,
+    variant_index: int,
+    base_seed: int = 2026,
+    max_attempts: int = 16,
+) -> dict[str, Any]:
+    """Compose two seen sub-assemblies in an unseen cross-family pairing (test_compositional)."""
+    host_family, guest_family, fusion_role = COMPOSITIONAL_SEEN_PAIRINGS[
+        int(pairing_index) % len(COMPOSITIONAL_SEEN_PAIRINGS)
+    ]
+    split = "test_compositional"
+    domain = CATALOG_FAMILY_DOMAINS.get(host_family, "artificial")
+    body_plan_id = CATALOG_ENTITY_BODY_PLANS.get(host_family)
+    last_error = "uninitialized"
+
+    for attempt in range(max_attempts):
+        eff_seed = base_seed + attempt * 97_531
+        try:
+            host_raw, host_meta, numeric_seed = generate_candidate_for_family(
+                host_family, split=split, variant_index=variant_index + 80_000, base_seed=eff_seed
+            )
+            guest_raw, guest_meta, _ = generate_candidate_for_family(
+                guest_family, split=split, variant_index=variant_index + 90_000, base_seed=eff_seed + 4099
+            )
+            div_rng = random.Random(numeric_seed ^ 0x6D2B_79F5)
+            host_div, div_info = diversify_program_ast(
+                host_raw, rng=div_rng, domain=domain, variant_index=variant_index
+            )
+            host_compact = coarsen_program_to_tier(host_div, "tier_2_medium")
+            guest_compact = coarsen_program_to_tier(guest_raw, "tier_1_simple")
+            guest_palettes, guest_bone_base = _prefix_guest_subtree(guest_compact, "mod_")
+
+            host_sc = compile_geometry(host_compact)
+            # Rank non-mirrored AST boxes by world top-Y descending so dorsal/apex mounts clear existing geometry
+            ast_box_names: set[str] = set()
+
+            def _collect_ast_boxes(b: Bone) -> None:
+                for it in b.items:
+                    if isinstance(it, Box):
+                        ast_box_names.add(it.name)
+                    elif isinstance(it, Bone) and it.mirror_name is None:
+                        _collect_ast_boxes(it)
+
+            _collect_ast_boxes(host_compact.root)
+            ranked_anchors = sorted(
+                [bx for bx in host_sc.boxes if bx.name in ast_box_names],
+                key=lambda bx: float(np.max(bx.corners()[:, 1])),
+                reverse=True,
+            )
+
+            merged_prog: Program | None = None
+            has_detached_comp = bool(host_meta["has_detached_bone"])
+            mount_specs = (
+                ((0.0, 1.0, 0.0), (0.0, -1.0, 0.0), (0.0, 0.0, 0.0), False),
+                ((0.0, 0.0, -1.0), (0.0, 0.0, 1.0), (0.0, 0.0, 0.0), False),
+                ((0.0, 0.0, 1.0), (0.0, 0.0, -1.0), (0.0, 0.0, 0.0), False),
+                ((0.0, 1.0, 0.0), (0.0, -1.0, 0.0), (0.0, 1.8, 0.0), True),
+            )
+            comp_meta = Meta("entity", "bbmodel_5", host_compact.meta.texel_density)
+            for anchor_bx in ranked_anchors[:4]:
+                for anch, algn, offs, det in mount_specs:
+                    grafted_child = replace(
+                        guest_bone_base,
+                        attach=Attach(anchor_bx.name, anch, algn, offs, detached=det),
+                    )
+                    cand_root = _insert_child_on_box(host_compact.root, anchor_bx.name, grafted_child)
+                    cand_prog = Program(
+                        meta=comp_meta,
+                        palettes=[*host_compact.palettes, *guest_palettes],
+                        root=replace(cand_root, pivot_local=(0.0, 0.0, 0.0)),
+                        materials=host_compact.materials,
+                        style=host_compact.style,
+                    )
+                    if _envelope_and_audit_ok(cand_prog):
+                        merged_prog = cand_prog
+                        has_detached_comp = has_detached_comp or det
+                        break
+                if merged_prog is not None:
+                    break
+
+            if merged_prog is None:
+                last_error = "no_collision_free_compositional_mount"
+                continue
+
+            reparsed_geo = parse_program(format_program(merged_prog))
+            scene = compile_geometry(reparsed_geo)
+            audit_res = audit_scene(
+                scene,
+                collision_tolerance=1e-7,
+                enforce_physical_contact=True,
+                max_contact_gap=1e-4,
+                max_inset_depth=0.5,
+            )
+            if not audit_res["passed"] or len(scene.boxes) < 10:
+                last_error = "compositional_post_roundtrip_audit_failed"
+                continue
+
+            assist_rng = random.Random(numeric_seed ^ 0x41C2_9E37)
+            anim_spec = synthesize_verified_animation_spec(
+                reparsed_geo, scene, family_id=host_family, rng=assist_rng
+            )
+            with_behavior = attach_verified_behavior_decl(reparsed_geo, anim_spec)
+            canonical_dsl = format_program(with_behavior)
+            reparsed = parse_program(canonical_dsl)
+            scene = compile_geometry(reparsed)
+            tree_sig = compute_program_tree_shape(reparsed, scene)
+
+            guest_noun = HUMAN_FAMILY_NOUNS.get(guest_family, (guest_family.replace("_", " "),))[0]
+            comp_notes = (
+                f"{host_meta['notes']}, integrated with a {fusion_role.replace('_', ' ')} "
+                f"sub-assembly ({guest_noun}: {guest_meta['notes']})"
+            )
+            prompt_rng = random.Random(numeric_seed ^ 0x7711_2233)
+            prompt_text, prompt_style = compose_multilevel_prompt(
+                prompt_rng,
+                variant_index=variant_index,
+                domain=domain,
+                family_id=host_family,
+                substyle=fusion_role,
+                archetype=reparsed.meta.archetype,
+                target_profile=reparsed.meta.target_profile,
+                texel_density=reparsed.meta.texel_density,
+                box_count=len(scene.boxes),
+                bone_count=len(scene.bones),
+                has_mirror_x=bool(host_meta["has_mirror_x"]),
+                has_detached=has_detached_comp,
+                joint_angle_deg=float(host_meta["joint_angle_deg"]),
+                palettes=reparsed.palettes,
+                material_families=div_info["material_families"],
+                style_encoding=div_info["style_encoding"],
+                structural_notes=comp_notes,
+                program=reparsed,
+            )
+            prompt_text = sanitize_prompt_no_leakage(prompt_text, family_id=guest_family)
+
+            qd_sig = compute_qd_signature(reparsed, scene, domain=domain, prompt_style=prompt_style)
+            tax_meta = get_taxonomy_metadata(host_family, box_count=len(scene.boxes))
+            textured_prog, tex_recipe = ensure_concise_texture_program(
+                reparsed, family_id=host_family, rng=assist_rng
+            )
+            sup_turn = build_assistant_supervision_turn(
+                task_mode="create_full_asset",
+                base_prompt=prompt_text,
+                clean_program=textured_prog,
+                coarse_program=None,
+                animation_spec=anim_spec,
+                texture_recipe=tex_recipe,
+                defect_bundle=None,
+            )
+
+            dsl_sha256 = hashlib.sha256(canonical_dsl.encode("utf-8")).hexdigest()
+            asset_id = f"comp_{pairing_index:02d}_{variant_index:05d}_s{numeric_seed % 100000:05d}"
+            spec_extra = {
+                **host_meta["extra"],
+                "compositional_host": host_family,
+                "compositional_guest": guest_family,
+                "fusion_role": fusion_role,
+            }
+            return {
+                "asset_id": asset_id,
+                "family_id": host_family,
+                "body_plan_id_if_dynamic": body_plan_id,
+                "generator_revision": GENERATOR_REVISION,
+                "generator_parameters": {
+                    "domain": domain,
+                    "category": str(tax_meta["category"]),
+                    "sub_category": str(tax_meta["sub_category"]),
+                    "complexity_tier": str(tax_meta["complexity_tier"]),
+                    "motion_archetype": str(tax_meta["motion_archetype"]),
+                    "assistant_task_mode": "create_full_asset",
+                    "quality_label": "verified_clean",
+                    "param_regime": f"compositional:{fusion_role}",
+                    "tree_shape_signature": tree_sig,
+                    "preset_substyle": fusion_role,
+                    "archetype": str(reparsed.meta.archetype),
+                    "target_profile": str(reparsed.meta.target_profile),
+                    "texel_density": int(reparsed.meta.texel_density),
+                    "variant_index": int(variant_index),
+                    "primary_span": int(host_meta["primary_span"]),
+                    "secondary_span": int(host_meta["secondary_span"]),
+                    "joint_angle_deg": float(host_meta["joint_angle_deg"]),
+                    "has_mirror_x": bool(host_meta["has_mirror_x"]),
+                    "has_detached_bone": bool(has_detached_comp),
+                    "material_theme": "+".join(p.name for p in reparsed.palettes[:3]),
+                    "naming_register": str(div_info["naming_register"]),
+                    "declarations_permuted": bool(div_info["declarations_permuted"]),
+                    "has_materials_block": bool(div_info["has_materials_block"]),
+                    "style_encoding": str(div_info["style_encoding"]),
+                    "qd_cell": str(qd_sig["qd_cell"]),
+                    "inflate_detail": float(host_meta["inflate_detail"]),
+                    "structural_spec_json": json.dumps(spec_extra, sort_keys=True),
+                },
+                "canonical_dsl": canonical_dsl,
+                "canonical_dsl_sha256": dsl_sha256,
+                "prompt_and_provenance": {
+                    "prompt": prompt_text,
+                    "prompt_style": prompt_style,
+                    "assistant_prompt": sup_turn["assistant_prompt"],
+                    "assistant_completion": sup_turn["assistant_completion"],
+                    "animation_plan_json": json.dumps(anim_spec, sort_keys=True),
+                    "texture_recipe_json": json.dumps(tex_recipe, sort_keys=True),
+                    "defect_type": "none",
+                    "domain": domain,
+                    "category": str(tax_meta["category"]),
+                    "sub_category": str(tax_meta["sub_category"]),
+                    "complexity_tier": str(tax_meta["complexity_tier"]),
+                    "origin": "synccraft_procedural_ast_grammar_generator",
+                    "repository": "https://github.com/BaiTian6641/SyncCraft",
+                    "authors": "SyncCraft Contributors (BaiTian6641)",
+                },
+                "source_license_and_review_record": {
+                    "license": "Apache-2.0",
+                    "copyright": "Copyright 2026 SyncCraft Contributors",
+                    "status": "reviewed_genuine_original",
+                    "ip_derivative_risk": "none",
+                    "color_space_attribution": "Oklab/OKLCH by Bjorn Ottosson (https://bottosson.github.io/posts/oklab/)",
+                },
+                "split": split,
+                "audit_version_and_results": {
+                    "sat_audit_version": "1.1",
+                    "contact_policy_version": "p1-02/1.0",
+                    "passed": True,
+                    "declared_contacts": int(len(audit_res["declared_contact_pairs"])),
+                    "contact_violations": int(len(audit_res["contact_violations"])),
+                    "collision_pairs": int(len(audit_res["collision_pairs"])),
+                    "physical_components": int(len(audit_res["physical_connected_components"])),
+                    "boxes": int(len(scene.boxes)),
+                    "bones": int(len(scene.bones)),
+                    "animation_swept_sat_passed": True,
+                    "animation_channels": int(len(anim_spec["channels"])),
+                    "java_bounds_verified": False,
+                },
+                "target_profile_and_version": f"{reparsed.meta.target_profile}:entity_rig_v3.0",
+                "seed": int(numeric_seed),
+            }
+        except (DSLParseError, DSLValidationError, ValueError) as exc:
+            last_error = f"{type(exc).__name__}: {exc}"
+
+    raise RuntimeError(
+        f"Failed to synthesize compositional candidate for pairing #{pairing_index} "
+        f"(v={variant_index}) after {max_attempts} attempts; last_error={last_error}"
+    )
+
+
 def _worker_generate_chunk(task: tuple[str, str, int, int, int, bool]) -> list[dict[str, Any]]:
     family_id, split, start_idx, count, base_seed, exporter_on_first = task
     rows: list[dict[str, Any]] = []
+    if split == "test_compositional":
+        pairing_idx = int(family_id)
+        for offset in range(count):
+            rows.append(
+                verify_and_package_compositional_candidate(
+                    pairing_idx,
+                    variant_index=start_idx + offset,
+                    base_seed=base_seed,
+                )
+            )
+        return rows
     for offset in range(count):
         v_idx = start_idx + offset
         row = verify_and_package_candidate(
@@ -2089,6 +2844,7 @@ def build_verified_dataset(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     tasks: list[tuple[str, str, int, int, int, bool]] = []
+    extra_holdout_tasks: list[tuple[str, str, int, int, int, bool]] = []
     chunk_limit = 500
 
     for fam in SEEN_STATIC_FAMILIES:
@@ -2103,12 +2859,23 @@ def build_verified_dataset(
         for start in range(0, v_total, chunk_limit):
             cnt = min(chunk_limit, v_total - start)
             tasks.append((fam, "val", v_base + start, cnt, base_seed + 17, False))
+        # Parameter-extrapolation holdout on seen families
+        p_total = preset.test_unseen_params_per_seen_family
+        for start in range(0, p_total, chunk_limit):
+            cnt = min(chunk_limit, p_total - start)
+            extra_holdout_tasks.append((fam, "test_unseen_params", start, cnt, base_seed + 53, False))
 
     for fam in UNSEEN_STATIC_FAMILIES:
         u_total = preset.test_per_unseen_family
         for start in range(0, u_total, chunk_limit):
             cnt = min(chunk_limit, u_total - start)
             tasks.append((fam, "test_unseen", start, cnt, base_seed + 31, start == 0))
+
+    for pair_idx in range(len(COMPOSITIONAL_SEEN_PAIRINGS)):
+        c_total = preset.test_compositional_per_pairing
+        for start in range(0, c_total, chunk_limit):
+            cnt = min(chunk_limit, c_total - start)
+            extra_holdout_tasks.append((str(pair_idx), "test_compositional", start, cnt, base_seed + 79, False))
 
     cpu_workers = max_workers if max_workers is not None else min(os.cpu_count() or 1, 12)
     main_file = getattr(sys.modules.get("__main__"), "__file__", None)
@@ -2120,8 +2887,13 @@ def build_verified_dataset(
         "val": out_dir / "val.jsonl",
         "test_unseen": out_dir / "test_unseen.jsonl",
     }
-    split_handles = {sp: open(path, "w", encoding="utf-8") for sp, path in split_paths.items()}
-    split_hashers = {sp: hashlib.sha256() for sp in split_paths}
+    extra_holdout_paths = {
+        "test_unseen_params": out_dir / "test_unseen_params.jsonl",
+        "test_compositional": out_dir / "test_compositional.jsonl",
+    }
+    all_output_paths = {**split_paths, **extra_holdout_paths}
+    split_handles = {sp: open(path, "w", encoding="utf-8") for sp, path in all_output_paths.items()}
+    split_hashers = {sp: hashlib.sha256() for sp in all_output_paths}
     seen_dsl_hashes: set[str] = set()
 
     embed_full_rows = preset.total_rows <= include_full_rows_threshold
@@ -2130,11 +2902,14 @@ def build_verified_dataset(
     sampled_per_family: dict[str, int] = {}
 
     split_counts = {"train": 0, "val": 0, "test_unseen": 0}
+    extra_holdout_counts = {"test_unseen_params": 0, "test_compositional": 0}
     family_counts: dict[str, int] = {}
     category_counts: dict[str, int] = {}
     tier_counts: dict[str, int] = {}
     task_mode_counts: dict[str, int] = {}
     quality_label_counts: dict[str, int] = {}
+    tree_shapes_by_family: dict[str, set[str]] = {}
+    all_tree_shapes: set[str] = set()
     box_counts: list[int] = []
     bone_counts: list[int] = []
     domains_seen: list[str] = []
@@ -2174,6 +2949,9 @@ def build_verified_dataset(
             bone_counts.append(row["audit_version_and_results"]["bones"])
 
             gp = row["generator_parameters"]
+            t_sig = gp["tree_shape_signature"]
+            tree_shapes_by_family.setdefault(fam, set()).add(t_sig)
+            all_tree_shapes.add(t_sig)
             domains_seen.append(gp["domain"])
             cat = gp["category"]
             tier = gp["complexity_tier"]
@@ -2196,7 +2974,41 @@ def build_verified_dataset(
                 sample_rows.append(row)
                 sampled_per_family[fam] = sampled_per_family.get(fam, 0) + 1
 
+    all_hashes_with_holdouts: set[str] = set()
+
+    def _consume_extra_holdout_chunk(chunk_rows: list[dict[str, Any]], task_key: str) -> None:
+        for row in chunk_rows:
+            fam = row["family_id"]
+            sp = row["split"]
+            v_idx = row["generator_parameters"]["variant_index"]
+            salt = 1
+            while row["canonical_dsl_sha256"] in all_hashes_with_holdouts:
+                if sp == "test_compositional":
+                    row = verify_and_package_compositional_candidate(
+                        int(task_key),
+                        variant_index=v_idx + 1_000_000 * salt,
+                        base_seed=base_seed + 8191 * salt,
+                    )
+                else:
+                    row = verify_and_package_candidate(
+                        fam,
+                        split=sp,
+                        variant_index=v_idx + 1_000_000 * salt,
+                        base_seed=base_seed + 8191 * salt,
+                        run_exporter_check=False,
+                    )
+                salt += 1
+            all_hashes_with_holdouts.add(row["canonical_dsl_sha256"])
+            canonical_line = json.dumps(row, sort_keys=True, ensure_ascii=False)
+            split_handles[sp].write(canonical_line + "\n")
+            split_hashers[sp].update((canonical_line + "\n").encode("utf-8"))
+            extra_holdout_counts[sp] += 1
+            t_sig = row["generator_parameters"]["tree_shape_signature"]
+            tree_shapes_by_family.setdefault(fam, set()).add(t_sig)
+            all_tree_shapes.add(t_sig)
+
     consumed_tasks = 0
+    consumed_extra = 0
     try:
         if use_multiprocess:
             src_root = str(Path(__file__).resolve().parents[2])
@@ -2209,21 +3021,49 @@ def build_verified_dataset(
                     for chunk_result in pool.map(_worker_generate_chunk, tasks):
                         _consume_chunk(chunk_result)
                         consumed_tasks += 1
+                    all_hashes_with_holdouts = set(seen_dsl_hashes)
+                    for extra_task, chunk_result in zip(
+                        extra_holdout_tasks, pool.map(_worker_generate_chunk, extra_holdout_tasks)
+                    ):
+                        _consume_extra_holdout_chunk(chunk_result, extra_task[0])
+                        consumed_extra += 1
             except (BrokenProcessPool, PermissionError, OSError, RuntimeError):
                 for task in tasks[consumed_tasks:]:
                     _consume_chunk(_worker_generate_chunk(task))
                     consumed_tasks += 1
+                if not all_hashes_with_holdouts:
+                    all_hashes_with_holdouts = set(seen_dsl_hashes)
+                for extra_task in extra_holdout_tasks[consumed_extra:]:
+                    _consume_extra_holdout_chunk(_worker_generate_chunk(extra_task), extra_task[0])
+                    consumed_extra += 1
         else:
             for task in tasks:
                 _consume_chunk(_worker_generate_chunk(task))
                 consumed_tasks += 1
+            all_hashes_with_holdouts = set(seen_dsl_hashes)
+            for extra_task in extra_holdout_tasks:
+                _consume_extra_holdout_chunk(_worker_generate_chunk(extra_task), extra_task[0])
+                consumed_extra += 1
     finally:
         for handle in split_handles.values():
             handle.close()
 
-    parquet_files = _write_parquet_splits_if_available(out_dir, split_paths) if write_parquet else {}
+    parquet_files = _write_parquet_splits_if_available(out_dir, all_output_paths) if write_parquet else {}
 
-    split_sha256 = {sp: hasher.hexdigest() for sp, hasher in split_hashers.items()}
+    split_sha256 = {sp: split_hashers[sp].hexdigest() for sp in split_paths}
+    holdout_split_counts = {
+        "test_unseen_params": extra_holdout_counts["test_unseen_params"],
+        "test_unseen": split_counts["test_unseen"],
+        "test_compositional": extra_holdout_counts["test_compositional"],
+    }
+    holdout_split_sha256 = {
+        sp: split_hashers[sp].hexdigest() for sp in HOLDOUT_EVALUATION_SPLITS
+    }
+    holdout_files = {sp: f"{sp}.jsonl" for sp in HOLDOUT_EVALUATION_SPLITS}
+    distinct_tree_shapes_by_family = {
+        fam: len(shapes) for fam, shapes in sorted(tree_shapes_by_family.items())
+    }
+
     if embed_full_rows:
         manifest_sha256 = hashlib.sha256(
             json.dumps(manifest_rows, sort_keys=True, ensure_ascii=False).encode("utf-8")
@@ -2242,6 +3082,8 @@ def build_verified_dataset(
         "mean_bones": round(float(sum(bone_counts)) / max(1, len(bone_counts)), 2),
         "max_bones": int(max(bone_counts)) if bone_counts else 0,
         "unique_canonical_dsl_hashes": len(seen_dsl_hashes),
+        "unique_canonical_dsl_hashes_with_holdouts": len(all_hashes_with_holdouts),
+        "distinct_tree_shapes_total": len(all_tree_shapes),
         "hash_collision_resamples": collision_resamples,
     }
     diversity_stats = summarize_corpus_diversity(
@@ -2254,7 +3096,7 @@ def build_verified_dataset(
     )
 
     manifest_payload: dict[str, Any] = {
-        "schema": "synccraft.dataset-manifest/1.3",
+        "schema": "synccraft.dataset-manifest/1.4",
         "preset": preset.name,
         "hf_size_category": preset.hf_size_category,
         "generator_revision": GENERATOR_REVISION,
@@ -2262,6 +3104,12 @@ def build_verified_dataset(
         "split_sha256": split_sha256,
         "total_records": total_records,
         "split_counts": split_counts,
+        "holdout_splits": list(HOLDOUT_EVALUATION_SPLITS),
+        "holdout_split_counts": holdout_split_counts,
+        "holdout_split_sha256": holdout_split_sha256,
+        "holdout_files": holdout_files,
+        "distinct_tree_shapes_by_family": distinct_tree_shapes_by_family,
+        "distinct_tree_shapes_total": len(all_tree_shapes),
         "family_counts": family_counts,
         "category_counts": dict(sorted(category_counts.items())),
         "complexity_tier_counts": dict(sorted(tier_counts.items())),
