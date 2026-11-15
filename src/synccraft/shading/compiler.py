@@ -81,9 +81,13 @@ def downsample_optical_fields(
 
     for fk, patch in optical_fields.patches.items():
         grid = domain.faces[fk]
-        fw = grid.width_units * density
-        fh = grid.height_units * density
-        if not math.isclose(fw, round(fw)) or not math.isclose(fh, round(fh)):
+        w_is_int = math.isclose(float(grid.width_units), round(float(grid.width_units)), abs_tol=1e-9) and float(grid.width_units) > 0.0
+        h_is_int = math.isclose(float(grid.height_units), round(float(grid.height_units)), abs_tol=1e-9) and float(grid.height_units) > 0.0
+        fw = float(grid.width_units) * density
+        fh = float(grid.height_units) * density
+        if (w_is_int and not math.isclose(fw, round(fw), abs_tol=1e-7)) or (
+            h_is_int and not math.isclose(fh, round(fh), abs_tol=1e-7)
+        ):
             raise ValueError(
                 f"texel_density={texel_density} produces fractional texels ({fw}x{fh}) on {fk}; integer atlas required"
             )
@@ -95,8 +99,10 @@ def downsample_optical_fields(
             out_patches[fk] = patch
             continue
 
-        w_row = _interval_overlap_matrix(h_px, in_h, float(grid.height_units))
-        w_col = _interval_overlap_matrix(w_px, in_w, float(grid.width_units))
+        eff_h_u = max(1e-6, float(grid.height_units))
+        eff_w_u = max(1e-6, float(grid.width_units))
+        w_row = _interval_overlap_matrix(h_px, in_h, eff_h_u)
+        w_col = _interval_overlap_matrix(w_px, in_w, eff_w_u)
 
         nrm = _box_downsample_2d(patch.tangent_normal, w_row, w_col)
         nrm_len = np.maximum(1e-12, np.linalg.norm(nrm, axis=-1, keepdims=True))
@@ -148,6 +154,208 @@ def quantize_linear_rgb_to_swatches(rgb_linear: np.ndarray, swatches_linear: np.
     return swatches_linear[best]
 
 
+def evaluate_cook_torrance_ggx_brdf(
+    wi: np.ndarray,
+    wo: np.ndarray,
+    normal: np.ndarray,
+    *,
+    perceptual_roughness: np.ndarray | float,
+    base_color_linear: np.ndarray | tuple[float, float, float] = (1.0, 1.0, 1.0),
+    metalness: np.ndarray | float = 0.0,
+    dielectric_f0: np.ndarray | float = 0.04,
+    iridescence_thickness_nm: np.ndarray | float = 0.0,
+    iridescence_ior: np.ndarray | float = 1.45,
+) -> np.ndarray:
+    """Evaluate reciprocal, white-furnace energy-conserving Cook-Torrance GGX BRDF in sr^-1.
+
+    Formulation (Walter et al., EGSR 2007; Heitz, JCGT 3(2):32-91, 2014;
+    Ashikhmin & Shirley, J. Graph. Tools 5(2):25-32, 2000; Kelemen & Szirmay-Kalos 2001):
+    - Specular microfacet lobe: f_s(ω_i, ω_o) = F(ω_o · h) D_GGX(h) V_Smith(ω_i, ω_o)
+      with α = α_p^2, D_GGX(h) = α^2 / (π ((n·h)^2 (α^2 - 1) + 1)^2), and exact
+      Height-Correlated Smith visibility V = G_2 / (4 (n·ω_i)(n·ω_o)).
+    - Reciprocal Fresnel-coupled diffuse lobe:
+      f_d(ω_i, ω_o) = (28 / (23π)) (1 - m)(1 - F_0) (1 - (1 - 0.5(n·ω_i))^5)
+                      (1 - (1 - 0.5(n·ω_o))^5) ρ_base.
+
+    Guarantees:
+    1. Exact Helmholtz reciprocity: f_r(ω_i, ω_o) == f_r(ω_o, ω_i) to machine precision.
+    2. White-furnace passivity: ∫_{Ω+} f_r(ω_i, ω_o) (n·ω_i) dω_i <= 1.0 for all α_p in [0.02, 1]
+       and all view cosines μ_o in (0, 1].
+    """
+    wi_a = np.asarray(wi, dtype=np.float64)
+    wo_a = np.asarray(wo, dtype=np.float64)
+    n_a = np.asarray(normal, dtype=np.float64)
+
+    wi_u = wi_a / np.maximum(1e-12, np.linalg.norm(wi_a, axis=-1, keepdims=True))
+    wo_u = wo_a / np.maximum(1e-12, np.linalg.norm(wo_a, axis=-1, keepdims=True))
+    n_u = n_a / np.maximum(1e-12, np.linalg.norm(n_a, axis=-1, keepdims=True))
+
+    ndoti_raw = np.sum(n_u * wi_u, axis=-1)
+    ndoto_raw = np.sum(n_u * wo_u, axis=-1)
+    active = (ndoti_raw > 0.0) & (ndoto_raw > 0.0)
+
+    ndoti = np.clip(ndoti_raw, 1e-8, 1.0)
+    ndoto = np.clip(ndoto_raw, 1e-8, 1.0)
+
+    h_raw = wi_u + wo_u
+    h_norm = np.linalg.norm(h_raw, axis=-1, keepdims=True)
+    h_u = np.where(h_norm > 1e-12, h_raw / np.maximum(1e-12, h_norm), n_u)
+
+    ndoth = np.clip(np.sum(n_u * h_u, axis=-1), 0.0, 1.0)
+    # Symmetric half-angle cosine: for unit vectors wi_u and wo_u, wi_u·h_u == wo_u·h_u identically.
+    hdoto = np.clip(0.5 * (np.sum(wo_u * h_u, axis=-1) + np.sum(wi_u * h_u, axis=-1)), 0.0, 1.0)
+
+    rp = np.asarray(perceptual_roughness, dtype=np.float64)
+    alpha = np.maximum(0.0004, rp * rp)
+    alpha2 = alpha * alpha
+
+    denom_d = ndoth * ndoth * (alpha2 - 1.0) + 1.0
+    d_ggx = alpha2 / np.maximum(1e-24, math.pi * denom_d * denom_d)
+
+    ggx_o = ndoti * np.sqrt(ndoto * ndoto * (1.0 - alpha2) + alpha2)
+    ggx_i = ndoto * np.sqrt(ndoti * ndoti * (1.0 - alpha2) + alpha2)
+    vis_smith = 0.5 / np.maximum(1e-15, ggx_o + ggx_i)
+
+    base_rgb = np.clip(np.asarray(base_color_linear, dtype=np.float64), 0.0, 1.0)
+    m = np.clip(np.asarray(metalness, dtype=np.float64), 0.0, 1.0)[..., None]
+    f0_d = np.clip(np.asarray(dielectric_f0, dtype=np.float64), 0.0, 1.0)[..., None]
+    f0 = (1.0 - m) * f0_d + m * base_rgb
+    f_schlick = f0 + (1.0 - f0) * np.power(1.0 - hdoto[..., None], 5.0)
+
+    irid_d = np.asarray(iridescence_thickness_nm, dtype=np.float64)
+    if np.any(irid_d > 1.0):
+        # Symmetric half-angle incidence cos(θ_d) = ω_o · h == ω_i · h preserves exact reciprocity
+        irid_rgb = evaluate_airy_thin_film_linear_rgb(
+            irid_d,
+            iridescence_ior,
+            hdoto,
+            substrate_rgb_lin=f0,
+        )
+        irid_mask = np.clip(irid_d / 80.0, 0.0, 1.0)[..., None]
+        f_schlick = f_schlick * (1.0 - irid_mask) + irid_rgb * irid_mask
+
+    f_spec = (d_ggx * vis_smith)[..., None] * f_schlick
+    trans_i = 1.0 - np.power(1.0 - 0.5 * ndoti, 5.0)
+    trans_o = 1.0 - np.power(1.0 - 0.5 * ndoto, 5.0)
+    f_diff = (
+        (28.0 / (23.0 * math.pi))
+        * (1.0 - m)
+        * (1.0 - f0)
+        * (trans_i * trans_o)[..., None]
+        * base_rgb
+    )
+    total = f_diff + f_spec
+    return np.where(active[..., None], total, 0.0)
+
+
+def compute_ggx_hemispherical_reflectance(
+    mu_o: float,
+    perceptual_roughness: float,
+    *,
+    metalness: float = 1.0,
+    base_color_linear: tuple[float, float, float] = (1.0, 1.0, 1.0),
+    dielectric_f0: float = 0.04,
+    n_quad: int = 64,
+) -> np.ndarray:
+    """Integrate directional-hemispherical reflectance ρ_hd(μ_o) = ∫_{Ω+} f_r(ω_i, ω_o) (n·ω_i) dω_i.
+
+    Uses exact GGX half-vector Gauss-Legendre importance quadrature on u in [0, 1)
+    (where D_GGX(h) cos(θ_h) dω_h = du dφ_h / (2π), eliminating delta-peak aliasing at
+    low roughnesses α_p >= 0.02) for the specular lobe, and Gauss-Legendre hemisphere
+    quadrature for the smooth Ashikhmin-Shirley diffuse lobe.
+    """
+    mu_o_c = float(np.clip(mu_o, 1e-4, 1.0))
+    sin_o = math.sqrt(max(0.0, 1.0 - mu_o_c * mu_o_c))
+    wo = np.array((sin_o, 0.0, mu_o_c), dtype=np.float64)
+    normal = np.array((0.0, 0.0, 1.0), dtype=np.float64)
+
+    alpha = max(0.02, float(perceptual_roughness)) ** 2
+    alpha2 = alpha * alpha
+
+    u_nodes, u_weights = np.polynomial.legendre.leggauss(int(n_quad))
+    u = 0.5 * (u_nodes + 1.0)
+    wu = 0.5 * u_weights
+    n_phi = max(64, 2 * int(n_quad))
+    phi = np.linspace(0.0, 2.0 * math.pi, n_phi, endpoint=False, dtype=np.float64)
+    w_phi_norm = 1.0 / float(n_phi)  # dφ / (2π)
+
+    cos2_th = (1.0 - u) / (1.0 + (alpha2 - 1.0) * u)
+    cos_th = np.sqrt(np.clip(cos2_th, 1e-15, 1.0))
+    sin_th = np.sqrt(np.maximum(0.0, 1.0 - cos2_th))
+
+    hx = sin_th[:, None] * np.cos(phi[None, :])
+    hy = sin_th[:, None] * np.sin(phi[None, :])
+    hz = np.broadcast_to(cos_th[:, None], hx.shape)
+
+    vdoth = wo[0] * hx + wo[1] * hy + wo[2] * hz
+    wix = 2.0 * vdoth * hx - wo[0]
+    wiy = 2.0 * vdoth * hy - wo[1]
+    wiz = 2.0 * vdoth * hz - wo[2]
+    wi_spec = np.stack((wix, wiy, wiz), axis=-1)
+
+    valid = (vdoth > 0.0) & (wiz > 0.0)
+    # Isolate pure specular vs pure diffuse cleanly:
+    denom_d = cos2_th * (alpha2 - 1.0) + 1.0
+    d_ggx = (alpha2 / np.maximum(1e-24, math.pi * denom_d * denom_d))[:, None]
+    # Pure diffuse BRDF at wi_spec has dielectric_f0=f0, metalness=m, minus specular:
+    m_clamped = float(np.clip(metalness, 0.0, 1.0))
+    base_arr = np.clip(np.asarray(base_color_linear, dtype=np.float64), 0.0, 1.0)
+    f0_rgb = (1.0 - m_clamped) * float(np.clip(dielectric_f0, 0.0, 1.0)) + m_clamped * base_arr
+    # Evaluate specular BRDF via evaluate_cook_torrance_ggx_brdf with metalness=1.0 and base_color=f0_rgb!
+    f_spec_vals = evaluate_cook_torrance_ggx_brdf(
+        wi_spec,
+        np.broadcast_to(wo, wi_spec.shape),
+        np.broadcast_to(normal, wi_spec.shape),
+        perceptual_roughness=float(perceptual_roughness),
+        base_color_linear=tuple(float(c) for c in f0_rgb),
+        metalness=1.0,
+    )
+    # Since du * (dφ / 2π) = D_GGX(h) cos(θ_h) dω_h and dω_i = 4 (ω_o·h) dω_h,
+    # f_spec * (n·ω_i) dω_i = (f_spec / D_GGX(h)) * (n·ω_i) * (4 (ω_o·h) / cos(θ_h)) * du * (dφ / 2π)
+    jacobian_weight = np.where(
+        valid,
+        (wiz * 4.0 * vdoth) / np.maximum(1e-24, d_ggx * cos_th[:, None]),
+        0.0,
+    )
+    rho_spec = np.sum(f_spec_vals * jacobian_weight[..., None] * wu[:, None, None], axis=(0, 1)) * w_phi_norm
+
+    if m_clamped >= 1.0 - 1e-12:
+        return rho_spec
+
+    # Smooth diffuse lobe hemispherical integral via Gauss-Legendre on μ_i in [0, 1]
+    mu_i = 0.5 * (u_nodes + 1.0)
+    w_mui = 0.5 * u_weights
+    sin_i = np.sqrt(np.maximum(0.0, 1.0 - mu_i * mu_i))
+    wi_d = np.stack(
+        (
+            sin_i[:, None] * np.cos(phi[None, :]),
+            sin_i[:, None] * np.sin(phi[None, :]),
+            np.broadcast_to(mu_i[:, None], (len(mu_i), n_phi)),
+        ),
+        axis=-1,
+    )
+    f_tot_d = evaluate_cook_torrance_ggx_brdf(
+        wi_d,
+        np.broadcast_to(wo, wi_d.shape),
+        np.broadcast_to(normal, wi_d.shape),
+        perceptual_roughness=float(perceptual_roughness),
+        base_color_linear=base_color_linear,
+        metalness=m_clamped,
+        dielectric_f0=float(dielectric_f0),
+    )
+    f_spec_d = evaluate_cook_torrance_ggx_brdf(
+        wi_d,
+        np.broadcast_to(wo, wi_d.shape),
+        np.broadcast_to(normal, wi_d.shape),
+        perceptual_roughness=float(perceptual_roughness),
+        base_color_linear=tuple(float(c) for c in f0_rgb),
+        metalness=1.0,
+    )
+    f_diff_vals = np.maximum(0.0, f_tot_d - f_spec_d)
+    rho_diff = np.sum(f_diff_vals * mu_i[:, None, None] * w_mui[:, None, None], axis=(0, 1)) * (2.0 * math.pi * w_phi_norm)
+    return rho_spec + rho_diff
+
+
 def shade_patch_ggx_linear(
     patch: FaceOpticalPatch,
     grid_t_right_box: np.ndarray,
@@ -189,51 +397,44 @@ def shade_patch_ggx_linear(
         v_grid = math.cos(ref_rad) * n_world + math.sin(ref_rad) * unit_tangent
         v_grid = v_grid / np.maximum(1e-12, np.linalg.norm(v_grid, axis=-1, keepdims=True))
 
-    h_vec = v_grid + l_dir
-    h_vec = h_vec / np.maximum(1e-12, np.linalg.norm(h_vec, axis=-1, keepdims=True))
-
+    l_grid = np.broadcast_to(l_dir, n_world.shape)
     ndotl = np.clip(np.einsum("ijk,k->ij", n_world, l_dir), 0.0, 1.0)
     ndotv = np.clip(np.sum(n_world * v_grid, axis=-1), 1e-4, 1.0)
-    ndoth = np.clip(np.sum(n_world * h_vec, axis=-1), 0.0, 1.0)
-    vdoth = np.clip(np.sum(v_grid * h_vec, axis=-1), 0.0, 1.0)
 
-    # GGX microfacet roughness convention: alpha = perceptual_roughness^2
-    alpha = np.maximum(0.0016, patch.perceptual_roughness * patch.perceptual_roughness)
-    alpha2 = alpha * alpha
+    brdf_rgb = evaluate_cook_torrance_ggx_brdf(
+        l_grid,
+        v_grid,
+        n_world,
+        perceptual_roughness=patch.perceptual_roughness,
+        base_color_linear=patch.base_color_linear,
+        metalness=patch.metalness,
+        dielectric_f0=patch.dielectric_f0,
+        iridescence_thickness_nm=patch.iridescence_thickness_nm,
+        iridescence_ior=patch.iridescence_ior,
+    )
+    # Direct exitant radiance with white-Lambertian-normalized sun irradiance E_sun = π * sun_intensity
+    direct_lobe = (math.pi * environment.sun_intensity) * brdf_rgb * ndotl[..., None]
 
-    denom_d = ndoth * ndoth * (alpha2 - 1.0) + 1.0
-    d_ggx = alpha2 / np.maximum(1e-8, math.pi * denom_d * denom_d)
-
-    # Height-Correlated Smith G2
-    ggx_v = ndotl * np.sqrt(ndotv * ndotv * (1.0 - alpha2) + alpha2)
-    ggx_l = ndotv * np.sqrt(ndotl * ndotl * (1.0 - alpha2) + alpha2)
-    vis_smith = 0.5 / np.maximum(1e-6, ggx_v + ggx_l)
-
-    # Distinct dielectric F0 vs conductor albedo reflectance
+    # Distinct dielectric F0 vs conductor albedo reflectance for ambient specular tint
     m = patch.metalness[..., None]
     f0_diel = np.repeat(patch.dielectric_f0[..., None], 3, axis=-1)
     f0 = (1.0 - m) * f0_diel + m * patch.base_color_linear
-    f_schlick = f0 + (1.0 - f0) * np.power(1.0 - vdoth[..., None], 5.0)
-
+    f_ambient = f0 + (1.0 - f0) * np.power(1.0 - ndotv[..., None], 5.0)
     if np.any(patch.iridescence_thickness_nm > 1.0):
         cos_theta = ndotv if view_dir_world is not None else np.full_like(ndotv, math.cos(math.radians(style.vanilla_reference_view_deg)))
-        irid_rgb = evaluate_airy_thin_film_linear_rgb(
+        irid_amb = evaluate_airy_thin_film_linear_rgb(
             patch.iridescence_thickness_nm,
             patch.iridescence_ior,
             cos_theta,
             substrate_rgb_lin=f0,
         )
         irid_mask = np.clip(patch.iridescence_thickness_nm / 80.0, 0.0, 1.0)[..., None]
-        f_schlick = f_schlick * (1.0 - irid_mask) + irid_rgb * irid_mask
-
-    spec_lobe = (d_ggx * vis_smith)[..., None] * f_schlick * ndotl[..., None] * environment.sun_intensity
-    kd = (1.0 - m) * (1.0 - f_schlick)
-    diffuse_lobe = kd * patch.base_color_linear * (ndotl[..., None] * environment.sun_intensity)
+        f_ambient = f_ambient * (1.0 - irid_mask) + irid_amb * irid_mask
 
     # Hemisphere ambient weighted by posed cavity AO + subtle environment reflection for conductors
     hemi_up = 0.5 + 0.5 * n_world[..., 1:2]
     ambient_diff = (1.0 - 0.65 * m) * patch.base_color_linear
-    ambient_spec = 0.65 * m * f_schlick * (1.0 - 0.45 * patch.perceptual_roughness[..., None])
+    ambient_spec = 0.65 * m * f_ambient * (1.0 - 0.45 * patch.perceptual_roughness[..., None])
     ambient_lobe = (ambient_diff + ambient_spec) * patch.cavity_ao[..., None] * environment.ambient_intensity * (0.75 + 0.35 * hemi_up)
 
     # Controlled Minecraft bevel highlight near exposed outward edges
@@ -241,7 +442,7 @@ def shade_patch_ggx_linear(
     bevel_lobe = style.bevel_highlight_strength * bevel_mask[..., None] * (0.5 * patch.base_color_linear + 0.5)
 
     emissive_lobe = patch.emissive[..., None] * np.maximum(patch.base_color_linear, 0.08) * 1.15
-    radiance = ambient_lobe + diffuse_lobe + spec_lobe + bevel_lobe + emissive_lobe
+    radiance = ambient_lobe + direct_lobe + bevel_lobe + emissive_lobe
     # Soft shoulder tone compression above 1.0 to preserve highlight hue in linear space
     compressed = radiance / (1.0 + 0.25 * np.maximum(0.0, radiance - 0.85))
     return np.clip(compressed, 0.0, 1.0)
@@ -353,7 +554,12 @@ def compile_vanilla_atlas(
         u_px = (np.arange(w_px, dtype=np.float64) + 0.5) * dx_px
         v_px = (np.arange(h_px, dtype=np.float64) + 0.5) * dx_px
         ug, vg = np.meshgrid(u_px, v_px)
-        edge_d = np.minimum(np.minimum(ug, grid.width_units - ug), np.minimum(vg, grid.height_units - vg))
+        eff_w_u = max(dx_px, float(grid.width_units))
+        eff_h_u = max(dx_px, float(grid.height_units))
+        edge_d = np.maximum(
+            0.0,
+            np.minimum(np.minimum(ug, eff_w_u - ug), np.minimum(vg, eff_h_u - vg)),
+        )
 
         shaded_lin = shade_patch_ggx_linear(
             patch,

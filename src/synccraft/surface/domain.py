@@ -34,9 +34,18 @@ FACE_AXES_BOX: dict[str, tuple[tuple[float, float, float], tuple[float, float, f
 }
 
 
-def face_uv_extents_units(size_xyz: np.ndarray | tuple[int, int, int], face: str) -> tuple[int, int]:
-    """Return integer (width_u, height_v) in model units for ``face``."""
-    sx, sy, sz = int(size_xyz[0]), int(size_xyz[1]), int(size_xyz[2])
+def _as_unit_extent(val: float) -> int | float:
+    f = float(val)
+    r = round(f)
+    return int(r) if abs(f - r) <= 1e-9 else f
+
+
+def face_uv_extents_units(
+    size_xyz: np.ndarray | tuple[int | float, int | float, int | float],
+    face: str,
+) -> tuple[int | float, int | float]:
+    """Return (width_u, height_v) in model units for ``face`` (preserving fractional v3.2 steps)."""
+    sx, sy, sz = _as_unit_extent(size_xyz[0]), _as_unit_extent(size_xyz[1]), _as_unit_extent(size_xyz[2])
     if face in ("north", "south"):
         return sx, sy
     if face in ("east", "west"):
@@ -55,8 +64,8 @@ class FaceSampleGrid:
     material_name: str
     face: str
     mirrored: bool
-    width_units: int
-    height_units: int
+    width_units: int | float
+    height_units: int | float
     subdivisions_per_unit: int
     dx: float
     # Sample coordinates in [0, width_units] x [0, height_units], shape (H, W)
@@ -174,20 +183,24 @@ def build_surface_domain(
         if material_program is not None and box.material in material_program.materials:
             weld_group = material_program.materials[box.material].weld_group
 
+        r_box_in_bone = np.asarray(bone.rotation, dtype=np.float64).T @ np.asarray(box.rotation, dtype=np.float64)
+
         for face in FACES:
             wu, hv = face_uv_extents_units(box.size, face)
-            cols = wu * subdivisions_per_unit
-            rows = hv * subdivisions_per_unit
+            cols = max(1, int(round(float(wu) * subdivisions_per_unit)))
+            rows = max(1, int(round(float(hv) * subdivisions_per_unit)))
+            eff_wu = float(wu) if float(wu) > 1e-9 else dx
+            eff_hv = float(hv) if float(hv) > 1e-9 else dx
 
-            u_1d = (np.arange(cols, dtype=np.float64) + 0.5) * dx
-            v_1d = (np.arange(rows, dtype=np.float64) + 0.5) * dx
+            u_1d = (np.arange(cols, dtype=np.float64) + 0.5) * (eff_wu / float(cols))
+            v_1d = (np.arange(rows, dtype=np.float64) + 0.5) * (eff_hv / float(rows))
             u_grid, v_grid = np.meshgrid(u_1d, v_1d)
 
             t_r, t_d, n_out = (np.asarray(vec, dtype=np.float64) for vec in FACE_AXES_BOX[face])
             b_up = -t_d
 
-            u_centered = u_grid - 0.5 * wu
-            v_centered = v_grid - 0.5 * hv
+            u_centered = u_grid - 0.5 * eff_wu
+            v_centered = v_grid - 0.5 * eff_hv
             normal_offset = float(np.abs(n_out) @ half_size)
 
             pos_box = (
@@ -195,12 +208,12 @@ def build_surface_domain(
                 + v_centered[..., None] * t_d
                 + normal_offset * n_out
             )
-            pos_bone = pos_box + np.asarray(box.local_center, dtype=np.float64)
+            pos_bone = pos_box @ r_box_in_bone.T + np.asarray(box.local_center, dtype=np.float64)
             pos_rest_world = pos_box @ np.asarray(box.rotation, dtype=np.float64).T + np.asarray(box.center, dtype=np.float64)
 
             d_edge = np.minimum(
-                np.minimum(u_grid, wu - u_grid),
-                np.minimum(v_grid, hv - v_grid),
+                np.minimum(u_grid, eff_wu - u_grid),
+                np.minimum(v_grid, eff_hv - v_grid),
             )
             dorsal = np.clip((pos_rest_world[..., 1] - y_min) / y_span, 0.0, 1.0)
             axial = np.clip((pos_bone[..., major_axis] - ax_min) / ax_span, 0.0, 1.0)

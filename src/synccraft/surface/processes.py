@@ -24,6 +24,10 @@ import numpy as np
 
 from synccraft.dsl.ast_nodes import Palette, Program
 from .contracts import (
+    ARCHARD_DIRECT_RUBBING_COUPLING,
+    ARCHARD_SWEPT_CONTACT_COUPLING,
+    ARCHARD_WEAR_NORMALIZATION,
+    DIELECTRIC_IOR_REFERENCE_TABLE,
     FaceKey,
     FaceOpticalPatch,
     MaterialProgram,
@@ -276,17 +280,22 @@ def _seed_gray_scott_component(
     lo = all_pts.min(axis=0)
     hi = all_pts.max(axis=0)
     span = np.maximum(0.5, hi - lo)
-    approx_area = sum(domain.faces[fk].width_units * domain.faces[fk].height_units for fk in comp_list)
+    approx_area = sum(max(0.0, float(domain.faces[fk].width_units) * float(domain.faces[fk].height_units)) for fk in comp_list)
     n_spots = max(3, min(36, int(round(approx_area / max(4.0, 9.0 / spec.feature_scale)))))
     spot_radius = 0.75 / max(0.35, spec.feature_scale)
 
     # Pick deterministic 3D surface-proximate centers by sampling points on the analytical surface
     # parameterized in continuous normalized (face_idx, u_frac, v_frac) — independent of dx!
     face_areas = np.array(
-        [float(domain.faces[fk].width_units * domain.faces[fk].height_units) for fk in comp_list],
+        [max(0.0, float(domain.faces[fk].width_units) * float(domain.faces[fk].height_units)) for fk in comp_list],
         dtype=np.float64,
     )
-    probs = face_areas / face_areas.sum()
+    area_sum = float(face_areas.sum())
+    if area_sum <= 1e-12:
+        # Degenerate 0-area plane edge faces form isolated 1-face components on v3.2 planes
+        probs = np.full(len(comp_list), 1.0 / float(max(1, len(comp_list))), dtype=np.float64)
+    else:
+        probs = face_areas / area_sum
     # Stratified face assignment so every major face receives deterministic nucleation centers
     base_faces = [idx for idx, area in enumerate(face_areas) if area >= 12.0]
     if base_faces and len(base_faces) <= n_spots:
@@ -303,8 +312,10 @@ def _seed_gray_scott_component(
         fk = comp_list[int(chosen_faces[s_idx])]
         g = domain.faces[fk]
         b = rest_boxes[g.box_name]
-        uc = (u_fracs[s_idx] - 0.5) * g.width_units
-        vc = (v_fracs[s_idx] - 0.5) * g.height_units
+        eff_wu = max(float(g.dx), float(g.width_units))
+        eff_hv = max(float(g.dx), float(g.height_units))
+        uc = (u_fracs[s_idx] - 0.5) * eff_wu
+        vc = (v_fracs[s_idx] - 0.5) * eff_hv
         noff = float(np.abs(g.normal_box) @ (np.asarray(b.size, dtype=np.float64) / 2.0))
         p_box = uc * g.tangent_right_box + vc * g.tangent_down_box + noff * g.normal_box
         if g.mirrored and spec.symmetry_mode == "mirrored":
@@ -341,8 +352,17 @@ def integrate_gray_scott_on_state(
     active_faces: set[FaceKey],
     *,
     duration: float,
+    dorsal_modulation: float = 0.04,
 ) -> int:
-    """Evolve Gray-Scott PDE in-place on ``state`` across seam-connected components."""
+    """Evolve Gray-Scott reaction-diffusion PDE in-place on ``state`` across seam-connected components.
+
+    Governing equations (Pearson, J. E., "Complex Patterns in a Simple System",
+    Science 261(5118):189-192, 1993):
+        ∂U/∂t = D_u ∇_M^2 U - U V^2 + F (1 - U)
+        ∂V/∂t = D_v ∇_M^2 V + U V^2 - (F + k) V
+    with diffusivity ratio D_u : D_v = 2 : 1, model length unit 1 u = 0.0625 m,
+    and automatic CFL sub-stepping Δt <= 0.18 Δx^2 / max(D_u, D_v).
+    """
     if not active_faces:
         return 0
 
@@ -392,8 +412,8 @@ def integrate_gray_scott_on_state(
                 g = domain.faces[fk]
                 u_c = u_map[fk]
                 v_c = v_map[fk]
-                # Mild anatomical modulation along dorsal coordinate
-                f_loc = spec.rd_feed * (1.0 + 0.04 * (g.dorsal_coord - 0.5))
+                # Optional mild anatomical modulation along dorsal coordinate (0.0 for pure Pearson 1993)
+                f_loc = spec.rd_feed * (1.0 + dorsal_modulation * (g.dorsal_coord - 0.5))
                 k_loc = spec.rd_kill
                 uvv = u_c * v_c * v_c
                 u_next = np.clip(u_c + dt * (spec.rd_du * lap_u[fk] - uvv + f_loc * (1.0 - u_c)), 0.0, 1.0)
@@ -406,6 +426,71 @@ def integrate_gray_scott_on_state(
             state.patches[fk].rd_u = u_map[fk]
             state.patches[fk].rd_v = v_map[fk]
     return total_steps
+
+
+def classify_gray_scott_regime(
+    v_field: np.ndarray,
+    *,
+    threshold: float = 0.16,
+) -> dict[str, float | int | str]:
+    """Classify a 2D Gray-Scott morphogen V field into Pearson (1993) morphological regimes.
+
+    Distinguishes:
+    - ``"homogeneous"``: trivial extinction (V -> 0) or uniform high-V state (std < 1e-3);
+    - ``"spots"``: discrete disconnected high-V mitosis/soliton islands (n_components >= 2,
+      active_fraction < 0.42, max_component_fraction < 0.20);
+    - ``"stripes_labyrinth"``: extended connected coral/labyrinthine bands (active_fraction >= 0.35
+      or max_component_fraction >= 0.20 with non-trivial spatial variance).
+    """
+    v = np.asarray(v_field, dtype=np.float64)
+    v_std = float(np.std(v))
+    v_max = float(np.max(v))
+    if v_std < 1e-3 or v_max < threshold:
+        return {
+            "regime": "homogeneous",
+            "v_max": v_max,
+            "v_std": v_std,
+            "active_fraction": 0.0 if v_max < threshold else float(np.mean(v >= threshold)),
+            "n_components": 0,
+            "max_component_fraction": 0.0,
+        }
+
+    mask = v >= threshold
+    h, w = mask.shape
+    visited = np.zeros_like(mask, dtype=bool)
+    comp_sizes: list[int] = []
+    for r in range(h):
+        for c in range(w):
+            if mask[r, c] and not visited[r, c]:
+                stack = [(r, c)]
+                visited[r, c] = True
+                sz = 0
+                while stack:
+                    cr, cc = stack.pop()
+                    sz += 1
+                    for dr, dc in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                        nr, nc = cr + dr, cc + dc
+                        if 0 <= nr < h and 0 <= nc < w and mask[nr, nc] and not visited[nr, nc]:
+                            visited[nr, nc] = True
+                            stack.append((nr, nc))
+                comp_sizes.append(sz)
+
+    total_px = float(max(1, h * w))
+    active_frac = float(np.mean(mask))
+    n_comp = len(comp_sizes)
+    max_comp_frac = float(max(comp_sizes) / total_px) if comp_sizes else 0.0
+    if n_comp >= 2 and max_comp_frac < 0.20 and active_frac < 0.42:
+        regime = "spots"
+    else:
+        regime = "stripes_labyrinth"
+    return {
+        "regime": regime,
+        "v_max": v_max,
+        "v_std": v_std,
+        "active_fraction": active_frac,
+        "n_components": n_comp,
+        "max_component_fraction": max_comp_frac,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -475,10 +560,14 @@ def evaluate_airy_thin_film_linear_rgb(
     cos_theta_i: np.ndarray | float,
     substrate_rgb_lin: np.ndarray,
 ) -> np.ndarray:
-    """Evaluate single-layer dielectric thin-film interference reflectance in linear sRGB.
+    """Evaluate single-layer dielectric thin-film Airy interference reflectance in linear sRGB.
 
-    Uses representative RGB wavelengths (650 nm, 532 nm, 460 nm) and Snell's law
-    sin(theta_t) = sin(theta_i) / n_film.
+    Implements Born & Wolf, *Principles of Optics* (7th ed., 1999, §7.6.1, Eq. 14):
+        R(λ) = (r_01^2 + r_12^2 + 2 r_01 r_12 cos δ) / (1 + r_01^2 r_12^2 + 2 r_01 r_12 cos δ)
+    with Snell's law sin(θ_t) = sin(θ_i) / n_film, effective optical path difference
+    Δ = 2 n_film d cos(θ_t) + λ/2 (incorporating the π reflection phase shift at the
+    rarer-to-denser air->film interface), phase δ = 2π Δ / λ, and representative CIE
+    RGB wavelengths λ = (650 nm, 532 nm, 460 nm).
     """
     n1 = np.maximum(1.01, np.asarray(film_ior, dtype=np.float64))
     cos_i = np.clip(np.asarray(cos_theta_i, dtype=np.float64), 0.05, 1.0)
@@ -556,7 +645,8 @@ def evaluate_optical_fields(
         rows, cols = grid.shape
 
         p3 = _material_coords_3d(grid, spec)
-        u_m = (grid.width_units - grid.u_units) if (grid.mirrored and spec.symmetry_mode == "mirrored") else grid.u_units
+        eff_wu_grid = max(float(grid.dx), float(grid.width_units))
+        u_m = (eff_wu_grid - grid.u_units) if (grid.mirrored and spec.symmetry_mode == "mirrored") else grid.u_units
         v_m = grid.v_units
 
         c_sub = oklch_to_linear_srgb(spec.substrate_lch)
@@ -576,6 +666,9 @@ def evaluate_optical_fields(
         irid_nm = np.zeros((rows, cols), dtype=np.float64)
         irid_ior = np.full((rows, cols), spec.film_ior, dtype=np.float64)
 
+        # Cumulative dimensionless Archard (1953) wear depth Δh / h_coat,0
+        # evolved in world/transitions.py via ARCHARD_SWEPT_CONTACT_COUPLING (0.22)
+        # and ARCHARD_DIRECT_RUBBING_COUPLING (0.45); see ARCHARD_WEAR_NORMALIZATION.
         total_wear = st.wear + st.coating_damage
         fam = spec.family
 
@@ -695,7 +788,10 @@ def evaluate_optical_fields(
             albedo = np.clip(scale_col * dorsal_shade[..., None], 0.0, 1.0)
             height = 0.055 * imbrication
             rough = np.clip(spec.perceptual_roughness + 0.25 * (1.0 - plate) + 0.20 * np.clip(total_wear, 0.0, 1.0), 0.08, 1.0)
-            f0_arr = np.full((rows, cols), ior_to_dielectric_f0(1.55), dtype=np.float64)
+            # Reptilian/avian α-keratin refractive index n = 1.55 -> F0 = 0.0465
+            # (Leertouwer, Wilts & Stavenga, J. R. Soc. Interface 8:1687-1694, 2011)
+            keratin_ior = float(DIELECTRIC_IOR_REFERENCE_TABLE["alpha_keratin_scale"]["ior"])
+            f0_arr = np.full((rows, cols), ior_to_dielectric_f0(keratin_ior), dtype=np.float64)
             subsurf = np.full((rows, cols), max(0.12, spec.subsurface), dtype=np.float64)
             metal = np.zeros((rows, cols), dtype=np.float64)
 

@@ -44,6 +44,88 @@ _CORNER_SIGNS = np.asarray(
     dtype=np.float64,
 )
 
+_MX_REFLECT = np.diag((-1.0, 1.0, 1.0))
+
+# SyncCraft corner signs s_sync = (sx, sy, sz) map under M_x reflection to Bedrock
+# local corner signs (-sx, sy, sz): M_x (w_ctr_sync + W_sync (s_sync * h)) == w_ctr_bed + W_bed (s_bed * h).
+_BEDROCK_CORNER_SIGNS_FOR_SYNC_ORDER = np.asarray(
+    tuple((-float(s[0]), float(s[1]), float(s[2])) for s in _CORNER_SIGNS),
+    dtype=np.float64,
+)
+
+
+def sync_point_to_bedrock(pt_sync: Any) -> np.ndarray:
+    """Convert right-handed SyncCraft point/pivot/locator/position (x, y, z) to Bedrock (-x, y, z)."""
+    p = np.asarray(pt_sync, dtype=np.float64)
+    return np.array((-float(p[0]), float(p[1]), float(p[2])), dtype=np.float64)
+
+
+def bedrock_point_to_sync(pt_bedrock: Any) -> np.ndarray:
+    """Convert Bedrock point/pivot/locator/position (bx, by, bz) to right-handed SyncCraft (-bx, by, bz)."""
+    p = np.asarray(pt_bedrock, dtype=np.float64)
+    return np.array((-float(p[0]), float(p[1]), float(p[2])), dtype=np.float64)
+
+
+def sync_cube_from_to_bedrock_origin(from_sync: Any, size_xyz: Any) -> np.ndarray:
+    """Convert SyncCraft cube min-corner ``from_sync`` and ``size_xyz`` to Bedrock cube ``origin`` (C5).
+
+    Blockbench / Bedrock 1.12.0 negates the X interval ``[from_x, from_x + size_x]`` into
+    ``[-(from_x + size_x), -from_x]``, so ``bedrock_origin_x = -(sync_from_x + size_x)``.
+    """
+    fr = np.asarray(from_sync, dtype=np.float64)
+    sz = np.asarray(size_xyz, dtype=np.float64)
+    return np.array((-(float(fr[0]) + float(sz[0])), float(fr[1]), float(fr[2])), dtype=np.float64)
+
+
+def bedrock_origin_to_sync_cube_from(origin_bedrock: Any, size_xyz: Any) -> np.ndarray:
+    """Invert Bedrock 1.12.0 cube ``origin`` back to SyncCraft cube min-corner ``sync_from`` (C5)."""
+    ob = np.asarray(origin_bedrock, dtype=np.float64)
+    sz = np.asarray(size_xyz, dtype=np.float64)
+    return np.array((-(float(ob[0]) + float(sz[0])), float(ob[1]), float(ob[2])), dtype=np.float64)
+
+
+def bedrock_rotation_matrix(euler_bedrock_deg: tuple[float, float, float] | np.ndarray) -> np.ndarray:
+    """Evaluate Bedrock 1.12.0 / 1.8.0 left-handed bone/cube rotation matrix R_bed(bx, by, bz).
+
+    In Blockbench's Bedrock codec, right-handed ZYX/intrinsic-XYZ Euler ``(rx, ry, rz)`` maps to
+    Bedrock ``(bx, by, bz) = (-rx, -ry, rz)``. Under X-reflection ``M_x = diag(-1, 1, 1)``:
+        M_x @ euler_xyz_matrix((rx, ry, rz)) @ M_x == euler_xyz_matrix((rx, -ry, -rz))
+                                                   == euler_xyz_matrix((-bx, by, -bz)).
+    """
+    bx, by, bz = (float(x) for x in euler_bedrock_deg)
+    return euler_xyz_matrix((-bx, by, -bz))
+
+
+def sync_euler_to_bedrock(euler_sync_deg: Any, *, verify_o3: bool = True) -> tuple[float, float, float]:
+    """Conjugate right-handed SyncCraft XYZ Euler angles across X-reflection into Bedrock (-rx, -ry, rz)."""
+    rx, ry, rz = (float(x) for x in euler_sync_deg)
+    bed = (-rx, -ry, rz)
+    if verify_o3:
+        r_sync = euler_xyz_matrix((rx, ry, rz))
+        r_conj = _MX_REFLECT @ r_sync @ _MX_REFLECT
+        r_bed = bedrock_rotation_matrix(bed)
+        if not np.allclose(r_conj, r_bed, atol=1e-12, rtol=0.0):
+            raise ExportError("O(3) X-reflection conjugation mismatch in sync_euler_to_bedrock")
+    return bed
+
+
+def bedrock_euler_to_sync(euler_bedrock_deg: Any, *, verify_o3: bool = True) -> tuple[float, float, float]:
+    """Conjugate Bedrock 1.12.0 / 1.8.0 Euler angles (bx, by, bz) back to SyncCraft (-bx, -by, bz)."""
+    bx, by, bz = (float(x) for x in euler_bedrock_deg)
+    sync_e = (-bx, -by, bz)
+    if verify_o3:
+        r_bed = bedrock_rotation_matrix((bx, by, bz))
+        r_sync = euler_xyz_matrix(sync_e)
+        if not np.allclose(_MX_REFLECT @ r_bed @ _MX_REFLECT, r_sync, atol=1e-12, rtol=0.0):
+            raise ExportError("O(3) X-reflection conjugation mismatch in bedrock_euler_to_sync")
+    return sync_e
+
+
+def _format_size_value(val: float) -> int | float:
+    f = float(val)
+    r = round(f)
+    return int(r) if abs(f - r) <= 1e-9 else round(f, 6)
+
 
 def _infer_locator_role_hint(raw_name: str) -> str:
     low = raw_name.lower()
@@ -61,7 +143,7 @@ def _infer_locator_role_hint(raw_name: str) -> str:
 
 
 def _reaudit_serialized_bedrock_geometry(geo_doc: dict[str, Any], scene: Any) -> float:
-    """Independently reconstruct 8-corner world vertices from serialized .geo.json and verify < 1e-6 drift."""
+    """Independently evaluate Bedrock 1.12.0 left-handed kinematics on serialized .geo.json and verify < 1e-6 drift."""
     bones_json = geo_doc["minecraft:geometry"][0]["bones"]
     piv_by_bone: dict[str, np.ndarray] = {}
     world_piv_by_bone: dict[str, np.ndarray] = {}
@@ -71,31 +153,43 @@ def _reaudit_serialized_bedrock_geometry(geo_doc: dict[str, Any], scene: Any) ->
     for rec in bones_json:
         bname = str(rec["name"])
         parent_name = rec.get("parent")
-        piv = np.asarray(rec.get("pivot", [0.0, 0.0, 0.0]), dtype=np.float64)
-        rot_e = tuple(float(x) for x in rec.get("rotation", [0.0, 0.0, 0.0]))
-        piv_by_bone[bname] = piv
+        piv_bed = np.asarray(rec.get("pivot", [0.0, 0.0, 0.0]), dtype=np.float64)
+        rot_bed = tuple(float(x) for x in rec.get("rotation", [0.0, 0.0, 0.0]))
+        piv_by_bone[bname] = piv_bed
+        r_local_bed = bedrock_rotation_matrix(rot_bed)
         if parent_name is None:
-            w_piv = piv.copy()
-            w_rot = euler_xyz_matrix(rot_e)
+            w_piv_bed = piv_bed.copy()
+            w_rot_bed = r_local_bed
         else:
-            p_piv = piv_by_bone[str(parent_name)]
-            pw_piv = world_piv_by_bone[str(parent_name)]
-            pw_rot = world_rot_by_bone[str(parent_name)]
-            w_piv = pw_piv + pw_rot @ (piv - p_piv)
-            w_rot = pw_rot @ euler_xyz_matrix(rot_e)
-        world_piv_by_bone[bname] = w_piv
-        world_rot_by_bone[bname] = w_rot
+            p_piv_bed = piv_by_bone[str(parent_name)]
+            pw_piv_bed = world_piv_by_bone[str(parent_name)]
+            pw_rot_bed = world_rot_by_bone[str(parent_name)]
+            w_piv_bed = pw_piv_bed + pw_rot_bed @ (piv_bed - p_piv_bed)
+            w_rot_bed = pw_rot_bed @ r_local_bed
+        world_piv_by_bone[bname] = w_piv_bed
+        world_rot_by_bone[bname] = w_rot_bed
 
         for cube in rec.get("cubes") or []:
-            origin = np.asarray(cube["origin"], dtype=np.float64)
+            origin_bed = np.asarray(cube["origin"], dtype=np.float64)
             sz = np.asarray(cube["size"], dtype=np.float64)
             inf = float(cube.get("inflate", 0.0))
-            ctr = origin + 0.5 * sz
-            loc_c = ctr - piv
-            w_ctr = w_piv + w_rot @ loc_c
-            corners_raw = (_CORNER_SIGNS * (sz * 0.5)) @ w_rot.T + w_ctr
-            corners_inf = (_CORNER_SIGNS * (sz * 0.5 + inf)) @ w_rot.T + w_ctr
-            reconstructed_list.append((corners_raw, corners_inf))
+            ctr_bed = origin_bed + 0.5 * sz
+            if "rotation" in cube and any(abs(float(x)) > 1e-9 for x in cube["rotation"]):
+                c_rot_bed = tuple(float(x) for x in cube["rotation"])
+                c_piv_bed = np.asarray(cube.get("pivot", ctr_bed.tolist()), dtype=np.float64)
+                r_cube_bed = bedrock_rotation_matrix(c_rot_bed)
+                w_cube_rot_bed = w_rot_bed @ r_cube_bed
+                w_ctr_bed = w_piv_bed + w_rot_bed @ (c_piv_bed - piv_bed) + w_cube_rot_bed @ (ctr_bed - c_piv_bed)
+            else:
+                w_cube_rot_bed = w_rot_bed
+                w_ctr_bed = w_piv_bed + w_rot_bed @ (ctr_bed - piv_bed)
+
+            corners_bed_raw = (_BEDROCK_CORNER_SIGNS_FOR_SYNC_ORDER * (sz * 0.5)) @ w_cube_rot_bed.T + w_ctr_bed
+            corners_bed_inf = (_BEDROCK_CORNER_SIGNS_FOR_SYNC_ORDER * (sz * 0.5 + inf)) @ w_cube_rot_bed.T + w_ctr_bed
+            # Map Bedrock world space (-X, +Y, +Z) back to SyncCraft right-handed world space (+X, +Y, +Z)
+            corners_sync_raw = corners_bed_raw @ _MX_REFLECT
+            corners_sync_inf = corners_bed_inf @ _MX_REFLECT
+            reconstructed_list.append((corners_sync_raw, corners_sync_inf))
 
     # Match scene boxes in bone emission order
     expected_boxes_ordered: list[Any] = []
@@ -174,29 +268,61 @@ def _serialize_behavior_animations(
             coupled_bones.add(m.tendon_coupling.bone)
     if getattr(program, "kinematics", None) is not None:
         for ikc in program.kinematics.ik_chains:
-            coupled_bones.add(ikc.upper)
-            coupled_bones.add(ikc.lower)
+            bones_seq = getattr(ikc, "bones", ()) or ()
+            if bones_seq:
+                coupled_bones.update(bones_seq)
+            if getattr(ikc, "upper", ""):
+                coupled_bones.add(ikc.upper)
+            if getattr(ikc, "lower", ""):
+                coupled_bones.add(ikc.lower)
+        for sp in getattr(program.kinematics, "springs", ()):
+            coupled_bones.add(sp.bone)
+    for sp in getattr(program.behavior, "springs", ()):
+        coupled_bones.add(sp.bone)
 
     animations_dict: dict[str, Any] = {}
     axis_order = ("x", "y", "z")
 
+    def _fmt_time_key(t_val: float) -> str:
+        t_key = f"{round(float(t_val), 4):.4f}".rstrip("0").rstrip(".")
+        return f"{t_key}.0" if "." not in t_key else t_key
+
     for clip in program.behavior.clips:
         samples = evaluate_behavior_clip(program, clip.name, num_frames=n_frames)
         bones_payload: dict[str, dict[str, Any]] = {}
+        explicit_kf_channels: set[tuple[str, str]] = set()
 
-        # Root translation keyframes when forward gait / heave is non-zero
-        if any(math.hypot(s.root_translation_delta[0], math.hypot(s.root_translation_delta[1], s.root_translation_delta[2])) > 1e-5 for s in samples):
+        for kf_tr in getattr(clip, "keyframes", ()):
+            explicit_kf_channels.add((kf_tr.bone, kf_tr.channel))
+            ch_dict: dict[str, Any] = {}
+            is_catmull = getattr(kf_tr, "interpolation", "linear") == "catmullrom"
+            for t_s, vec_v in kf_tr.keys:
+                if kf_tr.channel == "rotation":
+                    bed_v = sync_euler_to_bedrock(vec_v)
+                elif kf_tr.channel == "position":
+                    p_b = sync_point_to_bedrock(vec_v)
+                    bed_v = (float(p_b[0]), float(p_b[1]), float(p_b[2]))
+                else:
+                    bed_v = (float(vec_v[0]), float(vec_v[1]), float(vec_v[2]))
+                vec_fmt = vector([round(bed_v[0], 4), round(bed_v[1], 4), round(bed_v[2], 4)])
+                ch_dict[_fmt_time_key(t_s)] = (
+                    {"post": vec_fmt, "lerp_mode": "catmullrom"} if is_catmull else vec_fmt
+                )
+            if ch_dict:
+                bones_payload.setdefault(kf_tr.bone, {})[kf_tr.channel] = ch_dict
+
+        # Root translation keyframes when forward gait / heave is non-zero (Bedrock negates position X!)
+        if (root_bone_name, "position") not in explicit_kf_channels and any(
+            math.hypot(s.root_translation_delta[0], math.hypot(s.root_translation_delta[1], s.root_translation_delta[2])) > 1e-5
+            for s in samples
+        ):
             pos_kfs: dict[str, list[float]] = {}
             for s in samples:
-                t_key = f"{round(float(s.time_s), 4):.4f}".rstrip("0").rstrip(".")
-                if "." not in t_key:
-                    t_key = f"{t_key}.0"
-                pos_kfs[t_key] = vector([round(float(x), 4) for x in s.root_translation_delta])
+                p_bed = sync_point_to_bedrock(s.root_translation_delta)
+                pos_kfs[_fmt_time_key(s.time_s)] = vector([round(float(x), 4) for x in p_bed])
             if clip.loop and not any(abs(d.stride) > 1e-6 for d in clip.ik_drives):
-                end_key = f"{round(float(clip.duration_s), 4):.4f}".rstrip("0").rstrip(".")
-                if "." not in end_key:
-                    end_key = f"{end_key}.0"
-                pos_kfs[end_key] = vector([round(float(x), 4) for x in samples[0].root_translation_delta])
+                p0_bed = sync_point_to_bedrock(samples[0].root_translation_delta)
+                pos_kfs[_fmt_time_key(clip.duration_s)] = vector([round(float(x), 4) for x in p0_bed])
             bones_payload.setdefault(root_bone_name, {})["position"] = pos_kfs
 
         tracks_by_bone: dict[str, list[Any]] = {}
@@ -205,7 +331,7 @@ def _serialize_behavior_animations(
 
         for bone in scene.bones:
             bname = bone.name
-            if bname == root_bone_name:
+            if (bname, "rotation") in explicit_kf_channels:
                 continue
 
             b_tracks = tracks_by_bone.get(bname, [])
@@ -220,23 +346,27 @@ def _serialize_behavior_animations(
                 molang_vec: list[Any] = [0.0, 0.0, 0.0]
                 for tr in b_tracks:
                     ax_i = axis_order.index(tr.axis)
+                    # Bedrock 1.8.0 negates X and Y rotation angles relative to right-handed SyncCraft (C5)
+                    axis_sign = -1.0 if tr.axis in ("x", "y") else 1.0
+                    amp_bed = axis_sign * float(tr.amp_deg)
+                    bias_bed = axis_sign * float(tr.bias_deg)
                     deg_per_s = round(float(tr.freq_hz) * 360.0, 4)
-                    if abs(tr.amp_deg) < 1e-6:
-                        molang_vec[ax_i] = round(float(tr.bias_deg), 4)
+                    if abs(amp_bed) < 1e-6:
+                        molang_vec[ax_i] = round(bias_bed, 4)
                     else:
                         phase_part = ""
                         if abs(tr.phase_deg) > 1e-6:
                             sign_s = "+" if tr.phase_deg >= 0 else "-"
                             phase_part = f" {sign_s} {round(abs(float(tr.phase_deg)), 4)}"
-                        core = f"math.sin(query.anim_time * {deg_per_s}{phase_part}) * {round(float(tr.amp_deg), 4)}"
-                        if abs(tr.bias_deg) > 1e-6:
-                            b_sign = "+" if tr.bias_deg >= 0 else "-"
-                            core = f"{core} {b_sign} {round(abs(float(tr.bias_deg)), 4)}"
+                        core = f"math.sin(query.anim_time * {deg_per_s}{phase_part}) * {round(amp_bed, 4)}"
+                        if abs(bias_bed) > 1e-6:
+                            b_sign = "+" if bias_bed >= 0 else "-"
+                            core = f"{core} {b_sign} {round(abs(bias_bed), 4)}"
                         molang_vec[ax_i] = core
                 bones_payload.setdefault(bname, {})["rotation"] = molang_vec
                 continue
 
-            # Baked exact SE(3) / Hill-muscle / stance-IK rotation keyframes
+            # Baked exact SE(3) / Hill-muscle / stance-IK rotation keyframes (Bedrock negates X & Y!)
             frame_vecs = _extract_so3_euler_keyframe_deltas(samples, bone)
             max_abs = max(max(abs(v[0]), abs(v[1]), abs(v[2])) for v in frame_vecs)
             if max_abs < 1e-4:
@@ -244,19 +374,15 @@ def _serialize_behavior_animations(
 
             rot_kfs: dict[str, list[float]] = {}
             for s, vec_d in zip(samples, frame_vecs):
-                t_key = f"{round(float(s.time_s), 4):.4f}".rstrip("0").rstrip(".")
-                if "." not in t_key:
-                    t_key = f"{t_key}.0"
-                rot_kfs[t_key] = vector([round(float(vec_d[0]), 4), round(float(vec_d[1]), 4), round(float(vec_d[2]), 4)])
+                bed_d = sync_euler_to_bedrock(vec_d, verify_o3=False)
+                rot_kfs[_fmt_time_key(s.time_s)] = vector([round(bed_d[0], 4), round(bed_d[1], 4), round(bed_d[2], 4)])
 
             if clip.loop:
-                end_key = f"{round(float(clip.duration_s), 4):.4f}".rstrip("0").rstrip(".")
-                if "." not in end_key:
-                    end_key = f"{end_key}.0"
                 v_last = np.asarray(frame_vecs[-1], dtype=np.float64)
                 v0_arr = np.asarray(frame_vecs[0], dtype=np.float64)
                 v_wrap = v_last + (((v0_arr - v_last) + 180.0) % 360.0 - 180.0)
-                rot_kfs[end_key] = vector([round(float(v_wrap[0]), 4), round(float(v_wrap[1]), 4), round(float(v_wrap[2]), 4)])
+                bed_wrap = sync_euler_to_bedrock(v_wrap, verify_o3=False)
+                rot_kfs[_fmt_time_key(clip.duration_s)] = vector([round(bed_wrap[0], 4), round(bed_wrap[1], 4), round(bed_wrap[2], 4)])
 
             bones_payload.setdefault(bname, {})["rotation"] = rot_kfs
 
@@ -294,6 +420,9 @@ def _export_bedrock_or_gecko_common(
 
     if atlas is not None:
         tex_w, tex_h = validate_atlas(atlas, scene, embedded=False)
+    elif program is not None and getattr(program, "textures", ()):
+        t0 = program.textures[0]
+        tex_w, tex_h = int(t0.width), int(t0.height)
     else:
         tex_w, tex_h = 64, 64
 
@@ -322,19 +451,49 @@ def _export_bedrock_or_gecko_common(
         b_entry: dict[str, Any] = {"name": bone.name}
         if bone.parent_name is not None:
             b_entry["parent"] = bone.parent_name
-        b_entry["pivot"] = vector(origins[bone.name])
-        rot_vec = vector(bone.local_euler)
-        if any(abs(x) > 1e-9 for x in rot_vec):
-            b_entry["rotation"] = rot_vec
+        b_entry["pivot"] = vector(sync_point_to_bedrock(origins[bone.name]))
+        rot_bed = vector(sync_euler_to_bedrock(bone.local_euler))
+        if any(abs(x) > 1e-9 for x in rot_bed):
+            b_entry["rotation"] = rot_bed
 
         cubes_out: list[dict[str, Any]] = []
         for box in boxes_by_bone[bone.name]:
-            ctr = origins[bone.name] + np.asarray(box.local_center, dtype=np.float64)
-            half = 0.5 * np.asarray(box.size, dtype=np.float64)
+            bone_origin = origins[bone.name]
+            sz_arr = np.asarray(box.size, dtype=np.float64)
+            half = 0.5 * sz_arr
+            raw_loc_euler = getattr(box, "local_euler", None)
+            has_loc_rot = raw_loc_euler is not None and np.any(np.abs(np.asarray(raw_loc_euler, dtype=np.float64)) > 1e-9)
+
+            if has_loc_rot:
+                loc_e = np.asarray(raw_loc_euler, dtype=np.float64)
+                r_loc = euler_xyz_matrix((float(loc_e[0]), float(loc_e[1]), float(loc_e[2])))
+                raw_lpiv = getattr(box, "local_pivot", None)
+                c_piv_bone = (
+                    np.asarray(raw_lpiv, dtype=np.float64)
+                    if raw_lpiv is not None
+                    else np.asarray(box.local_center, dtype=np.float64)
+                )
+                raw_unrot = getattr(box, "unrotated_local_center", None)
+                c_unrot_bone = (
+                    np.asarray(raw_unrot, dtype=np.float64)
+                    if raw_unrot is not None
+                    else (c_piv_bone + r_loc.T @ (np.asarray(box.local_center, dtype=np.float64) - c_piv_bone))
+                )
+                sync_from = bone_origin + c_unrot_bone - half
+                sync_cpiv = bone_origin + c_piv_bone
+            else:
+                sync_ctr = bone_origin + np.asarray(box.local_center, dtype=np.float64)
+                sync_from = sync_ctr - half
+                sync_cpiv = None
+                loc_e = None
+
             cube_entry: dict[str, Any] = {
-                "origin": vector(ctr - half),
-                "size": [int(box.size[0]), int(box.size[1]), int(box.size[2])],
+                "origin": vector(sync_cube_from_to_bedrock_origin(sync_from, sz_arr)),
+                "size": [_format_size_value(box.size[0]), _format_size_value(box.size[1]), _format_size_value(box.size[2])],
             }
+            if has_loc_rot and sync_cpiv is not None and loc_e is not None:
+                cube_entry["pivot"] = vector(sync_point_to_bedrock(sync_cpiv))
+                cube_entry["rotation"] = vector(sync_euler_to_bedrock(loc_e))
             if float(box.inflate) > 0.0:
                 cube_entry["inflate"] = round(float(box.inflate), 6)
             if atlas is not None:
@@ -346,6 +505,18 @@ def _export_bedrock_or_gecko_common(
                         "uv_size": vector([u1 - u0, v1 - v0]),
                     }
                 cube_entry["uv"] = uv_faces
+            elif getattr(box, "uv_faces", None):
+                uv_faces_ast: dict[str, dict[str, list[float]]] = {}
+                for face, rect in box.uv_faces.items():
+                    u0, v0, u1, v1 = rect
+                    uv_faces_ast[face] = {
+                        "uv": vector([u0, v0]),
+                        "uv_size": vector([u1 - u0, v1 - v0]),
+                    }
+                cube_entry["uv"] = uv_faces_ast
+            elif getattr(box, "uv", None) is not None:
+                bu, bv = box.uv
+                cube_entry["uv"] = [_format_size_value(bu), _format_size_value(bv)]
             else:
                 cube_entry["uv"] = [0, 0]
             cubes_out.append(cube_entry)
@@ -370,7 +541,7 @@ def _export_bedrock_or_gecko_common(
                 suffix += 1
             used_loc_keys.add(cand_key)
 
-            pos_vec = vector(origins[bone.name] + np.asarray(loc.local_offset, dtype=np.float64))
+            pos_vec = vector(sync_point_to_bedrock(origins[bone.name] + np.asarray(loc.local_offset, dtype=np.float64)))
             if _infer_locator_role_hint(cand_key) == loc.role:
                 loc_dict[cand_key] = pos_vec
             else:

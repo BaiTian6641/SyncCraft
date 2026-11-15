@@ -1,7 +1,12 @@
 """Stateful surface-material representations, canonical SurfaceDomain, and PDE/solid processes (P1-03a/b)."""
 
 from .contracts import (
+    ARCHARD_DIRECT_RUBBING_COUPLING,
+    ARCHARD_SWEPT_CONTACT_COUPLING,
+    ARCHARD_WEAR_NORMALIZATION,
+    DIELECTRIC_IOR_REFERENCE_TABLE,
     FIDELITY_BY_FAMILY,
+    FIDELITY_TIERS,
     MATERIAL_FAMILIES,
     STAMP_SHAPES,
     SYMMETRY_MODES,
@@ -38,6 +43,7 @@ from .domain import (
     remap_surface_state,
 )
 from .processes import (
+    classify_gray_scott_regime,
     derive_seam_consistent_tangent_normals,
     evaluate_airy_thin_film_linear_rgb,
     evaluate_optical_fields,
@@ -50,8 +56,13 @@ from .processes import (
 )
 
 __all__ = [
+    "ARCHARD_DIRECT_RUBBING_COUPLING",
+    "ARCHARD_SWEPT_CONTACT_COUPLING",
+    "ARCHARD_WEAR_NORMALIZATION",
+    "DIELECTRIC_IOR_REFERENCE_TABLE",
     "FACE_AXES_BOX",
     "FIDELITY_BY_FAMILY",
+    "FIDELITY_TIERS",
     "MATERIAL_FAMILIES",
     "STAMP_SHAPES",
     "SYMMETRY_MODES",
@@ -73,6 +84,7 @@ __all__ = [
     "SymmetryLink",
     "WorldState",
     "build_surface_domain",
+    "classify_gray_scott_regime",
     "derive_seam_consistent_tangent_normals",
     "evaluate_airy_thin_film_linear_rgb",
     "evaluate_optical_fields",

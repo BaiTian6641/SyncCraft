@@ -82,15 +82,19 @@ def allocate_uv_layout(
     placements = []
     faces = {b.name: {} for b in scene.boxes}
     for box in ordered_boxes:
-        sx, sy, sz = map(int, box.size)
+        sx, sy, sz = map(float, box.size)
         sizes = {"north": (sx, sy), "south": (sx, sy), "east": (sz, sy),
                  "west": (sz, sy), "up": (sx, sz), "down": (sx, sz)}
         for face in ordered_faces:
             u, v = sizes[face]
+            u_is_pos_int = math.isclose(u, round(u), abs_tol=1e-9) and u > 0.0
+            v_is_pos_int = math.isclose(v, round(v), abs_tol=1e-9) and v > 0.0
             fw, fh = u * density, v * density
-            if not math.isclose(fw, round(fw)) or not math.isclose(fh, round(fh)):
+            if (u_is_pos_int and not math.isclose(fw, round(fw), abs_tol=1e-7)) or (
+                v_is_pos_int and not math.isclose(fh, round(fh), abs_tol=1e-7)
+            ):
                 raise ValueError("texel_density produces fractional texels; integer atlas required")
-            w, h = int(round(fw)), int(round(fh))
+            w, h = max(1, int(round(fw))), max(1, int(round(fh)))
             if min(w, h) < 1 or w + 2 * padding > max_width:
                 raise ValueError("face cannot fit atlas width at the requested density")
             if x + w + padding > max_width:
