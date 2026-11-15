@@ -16,10 +16,13 @@ macro_params: macro_param ("," macro_param)*
 macro_param: IDENT ("=" expr)?
 macro_body: let_decl* ("bone" IDENT "{" bone_interior "}" | bone_interior)
 
-meta: "@meta" "{" "archetype" ":" IDENT "," "target_profile" ":" IDENT "," "texel_density" ":" expr ("," meta_opt)* "}"
-meta_opt: "dsl_version" ":" (STRING | NUMBER | IDENT)
-        | "size_step" ":" expr
-        | "audit_profile" ":" (STRING | IDENT)
+meta: "@meta" "{" meta_field ("," meta_field)* ","? "}"
+meta_field: "archetype" ":" IDENT
+          | "target_profile" ":" IDENT
+          | "texel_density" ":" expr
+          | "dsl_version" ":" (STRING | NUMBER | IDENT)
+          | "size_step" ":" expr
+          | "audit_profile" ":" (STRING | IDENT)
 
 textures: "@textures" "{" texture_def* "}"
 texture_def: IDENT ":" "image" "(" STRING "," expr "," expr ")" ","?

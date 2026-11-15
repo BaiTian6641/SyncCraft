@@ -220,6 +220,70 @@ class SATTests(unittest.TestCase):
         self.assertEqual(capped, MAX_HINGE_ALLOWANCE_UNITS)
         self.assertEqual(MAX_HINGE_ALLOWANCE_UNITS, 2.5)
 
+    def test_authored_audit_walks_zero_box_folder_bones_but_rejects_box_bearing_grandparent(self):
+        # 1. Empty (0-box) intermediate folder bones: root_grp[0] -> body_grp[0] -> torso[box] -> wings[0] -> wing_l[box]
+        folder_dsl = """
+        @meta { dsl_version: "3.2", archetype: entity, target_profile: bedrock_entity, texel_density: 16, audit_profile: authored }
+        @palette { hide: ramp(base_lch=[0.55, 0.12, 210], steps=4) }
+        @rig {
+          root bone root_grp {
+            locator root_piv { offset: [0, 0, 0], role: socket }
+            bone body_grp joint(parent=root_piv, at=[0, 14, 0], detached=true) {
+              locator body_piv { offset: [0, 0, 0], role: socket }
+              bone torso joint(parent=body_piv, at=[0, 0, 0], detached=true) {
+                box torso_cube_0 { size: [10, 8, 16], material: hide }
+                plane dorsal_crest place(base_box=torso_cube_0, anchor=[0, 1, 0], align=[0, -1, 0]) {
+                  size: [6, 12], normal: x, material: hide
+                }
+                bone wings joint(parent=torso_cube_0, at=[0, 3, -2], detached=true) {
+                  locator wings_piv { offset: [0, 0, 0], role: socket }
+                  bone wing_left joint(parent=wings_piv, at=[4.2, 0, 0], align=[-1, 0, 0], detached=true) mirror_x(wing_right) {
+                    rest_euler: [0, 0, -12]
+                    plane wing_blade { size: [16, 12], normal: y, material: hide, rotate: [5, 10, 0] }
+                  }
+                }
+              }
+            }
+          }
+        }
+        """
+        folder_scene = compile_geometry(parse_program(folder_dsl))
+        # Confirm intermediate folder bone 'wings' owns 0 boxes while wing_left overlaps torso_cube_0
+        self.assertEqual([b.name for b in folder_scene.boxes if b.bone_name == "wings"], [])
+        rep_folder = audit_scene(folder_scene)
+        self.assertTrue(rep_folder["passed"], msg=f"0-box folder bone rig failed authored audit: {rep_folder}")
+        exempt_by_pair = {tuple(e["pair"]): e["exemption_reason"] for e in rep_folder["authored_exempt_pairs"]}
+        self.assertIn(("torso_cube_0", "wing_blade"), exempt_by_pair)
+        self.assertEqual(exempt_by_pair[("torso_cube_0", "wing_blade")], "authored_parent_child")
+        # Strict profile still rejects undeclared/detached shoulder overlap
+        self.assertFalse(audit_scene(folder_scene, audit_profile="strict")["passed"])
+
+        # 2. Box-bearing intermediate bone: torso[box] -> upper_arm[box] -> forearm[box] folded into torso MUST fail!
+        grandparent_dsl = """
+        @meta { dsl_version: "3.2", archetype: entity, target_profile: bedrock_entity, texel_density: 16, audit_profile: authored }
+        @palette { hide: ramp(base_lch=[0.55, 0.12, 210], steps=4) }
+        @rig {
+          root bone torso {
+            pivot_local: [0, 12, 0]
+            box torso_box { size: [8, 8, 8], material: hide }
+            bone upper_arm joint(parent=torso_box, at=[4, 2, 0], align=[-1, 0, 0]) {
+              box humerus { size: [6, 3, 3], material: hide }
+              bone forearm joint(parent=humerus, at=[3, 0, 0], align=[-1, 0, 0]) {
+                rest_euler: [0, 0, 175]
+                box radius_box { size: [8, 3, 3], material: hide }
+              }
+            }
+          }
+        }
+        """
+        gp_scene = compile_geometry(parse_program(grandparent_dsl))
+        rep_gp = audit_scene(gp_scene)
+        self.assertFalse(rep_gp["passed"], msg="Box-bearing grandparent overlap must not be exempted")
+        self.assertTrue(
+            any(set(c["pair"]) == {"radius_box", "torso_box"} for c in rep_gp["collision_pairs"]),
+            msg=f"Expected (radius_box, torso_box) collision, got: {rep_gp['collision_pairs']}",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

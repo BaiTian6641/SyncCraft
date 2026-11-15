@@ -276,21 +276,44 @@ def _detect_coplanar_z_fighting(
     return None
 
 
+def _effective_box_parent_map(
+    raw_parent_map: dict[str, str | None],
+    bone_has_boxes: set[str],
+) -> dict[str, str | None]:
+    """Resolve each bone's nearest box-bearing ancestor, walking strictly through 0-box grouping bones."""
+    eff: dict[str, str | None] = {}
+    for bone_name, direct_parent in raw_parent_map.items():
+        curr = direct_parent
+        seen: set[str] = {bone_name}
+        while curr is not None and curr not in bone_has_boxes and curr not in seen:
+            seen.add(curr)
+            curr = raw_parent_map.get(curr)
+        eff[bone_name] = curr if (curr is not None and curr in bone_has_boxes) else None
+    return eff
+
+
 def _authored_bone_exemption_reason(
     left_bone: str,
     right_bone: str,
     bone_parent_map: dict[str, str | None],
+    effective_box_parent_map: dict[str, str | None] | None = None,
 ) -> str | None:
-    """Return explicit authored-rig joint exemption category, or None if bones are non-adjacent."""
+    """Return explicit authored-rig joint exemption category, or None if bones are non-adjacent.
+
+    Walks upward strictly through empty (0-box) organizational grouping bones via
+    ``effective_box_parent_map`` without ever skipping past a box-bearing intermediate bone.
+    """
     if left_bone not in bone_parent_map or right_bone not in bone_parent_map:
         return None
     if left_bone == right_bone:
         return "authored_same_bone"
     parent_l = bone_parent_map[left_bone]
     parent_r = bone_parent_map[right_bone]
-    if parent_l == right_bone or parent_r == left_bone:
+    eff_l = effective_box_parent_map.get(left_bone) if effective_box_parent_map is not None else parent_l
+    eff_r = effective_box_parent_map.get(right_bone) if effective_box_parent_map is not None else parent_r
+    if parent_l == right_bone or parent_r == left_bone or eff_l == right_bone or eff_r == left_bone:
         return "authored_parent_child"
-    if parent_l is not None and parent_l == parent_r:
+    if (parent_l is not None and parent_l == parent_r) or (eff_l is not None and eff_l == eff_r):
         return "authored_sibling_joint"
     return None
 
@@ -396,6 +419,8 @@ def audit_scene(
         errors.append("Scene has no boxes")
 
     bone_parent_map: dict[str, str | None] = {bone.name: bone.parent_name for bone in scene.bones}
+    bone_has_boxes: set[str] = {box.bone_name for box in boxes}
+    effective_box_parent_map = _effective_box_parent_map(bone_parent_map, bone_has_boxes)
 
     valid_mask = [False] * n_boxes
     world_mins = np.zeros((n_boxes, 3), dtype=np.float64)
@@ -486,7 +511,12 @@ def audit_scene(
                     contact_violations.append(z_fight)
                 if result.collision:
                     auth_reason = (
-                        _authored_bone_exemption_reason(left.bone_name, right.bone_name, bone_parent_map)
+                        _authored_bone_exemption_reason(
+                            left.bone_name,
+                            right.bone_name,
+                            bone_parent_map,
+                            effective_box_parent_map,
+                        )
                         if is_authored
                         else None
                     )

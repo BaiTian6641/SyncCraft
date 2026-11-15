@@ -459,25 +459,26 @@ class _Parser:
         )
 
     def _parse_meta_body(self) -> Meta:
-        self.field("archetype")
-        archetype = self.ident()
-        self.take(",")
-        self.field("target_profile")
-        profile = self.ident()
-        self.take(",")
-        self.field("texel_density")
-        density = int(self.number(integer=True))
+        archetype: str | None = None
+        profile: str | None = None
+        density: int | None = None
         dsl_version = "3.2"
         size_step = 1.0
         audit_profile = "strict"
-        seen_opt: set[str] = set()
-        while self.maybe_take(","):
+        seen_fields: set[str] = set()
+        while not self.at("}"):
             key = self.ident()
-            if key in seen_opt:
+            if key in seen_fields:
                 self.fail(f"duplicate @meta field {key!r}")
-            seen_opt.add(key)
+            seen_fields.add(key)
             self.take(":")
-            if key == "dsl_version":
+            if key == "archetype":
+                archetype = self.ident()
+            elif key == "target_profile":
+                profile = self.ident()
+            elif key == "texel_density":
+                density = int(self.number(integer=True))
+            elif key == "dsl_version":
                 if self.token.kind == "STRING":
                     dsl_version = self.string_literal()
                 elif self.token.kind == "NUMBER":
@@ -493,12 +494,21 @@ class _Parser:
                 audit_profile = self.string_literal() if self.token.kind == "STRING" else self.ident()
             else:
                 self.fail(f"unexpected @meta field {key!r}")
+            if not self.maybe_take(","):
+                break
         self.take("}")
+        for req_name, req_val in (
+            ("archetype", archetype),
+            ("target_profile", profile),
+            ("texel_density", density),
+        ):
+            if req_val is None:
+                self.fail(f"missing required @meta field {req_name!r}")
         self.size_step = size_step
         return Meta(
-            archetype=archetype,
-            target_profile=profile,
-            texel_density=density,
+            archetype=archetype,  # type: ignore[arg-type]
+            target_profile=profile,  # type: ignore[arg-type]
+            texel_density=density,  # type: ignore[arg-type]
             dsl_version=dsl_version,
             size_step=size_step,
             audit_profile=audit_profile,
