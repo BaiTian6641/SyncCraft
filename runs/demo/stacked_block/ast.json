@@ -72,7 +72,8 @@
         "plane_normal": null,
         "uv": null,
         "uv_faces": [],
-        "texture": null
+        "texture": null,
+        "blend_with": []
       },
       {
         "name": "stem",
@@ -111,7 +112,8 @@
         "plane_normal": null,
         "uv": null,
         "uv_faces": [],
-        "texture": null
+        "texture": null,
+        "blend_with": []
       },
       {
         "name": "cap",
@@ -150,7 +152,8 @@
         "plane_normal": null,
         "uv": null,
         "uv_faces": [],
-        "texture": null
+        "texture": null,
+        "blend_with": []
       }
     ],
     "joint_limits": null,

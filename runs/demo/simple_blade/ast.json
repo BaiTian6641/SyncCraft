@@ -86,7 +86,8 @@
         "plane_normal": null,
         "uv": null,
         "uv_faces": [],
-        "texture": null
+        "texture": null,
+        "blend_with": []
       },
       {
         "name": "pommel",
@@ -125,7 +126,8 @@
         "plane_normal": null,
         "uv": null,
         "uv_faces": [],
-        "texture": null
+        "texture": null,
+        "blend_with": []
       },
       {
         "name": "guard",
@@ -181,7 +183,8 @@
             "plane_normal": null,
             "uv": null,
             "uv_faces": [],
-            "texture": null
+            "texture": null,
+            "blend_with": []
           },
           {
             "name": "blade",
@@ -237,7 +240,8 @@
                 "plane_normal": null,
                 "uv": null,
                 "uv_faces": [],
-                "texture": null
+                "texture": null,
+                "blend_with": []
               }
             ],
             "joint_limits": null,

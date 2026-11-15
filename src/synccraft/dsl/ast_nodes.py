@@ -33,10 +33,10 @@ FACE_ORDER = ("north", "south", "east", "west", "up", "down")
 AXES_3D = frozenset({"x", "y", "z"})
 MIRROR_AXES = frozenset({"x", "z"})
 ALLOWED_SIZE_STEPS = frozenset({1.0, 0.5, 0.25, 0.125, 0.0625, 0.03125, 0.1, 0.05, 0.01, 0.001})
-AUDIT_PROFILES = frozenset({"strict", "authored"})
+AUDIT_PROFILES = frozenset({"strict", "sculpted", "authored"})
 DSL_VERSIONS = frozenset({"3.0", "3.1", "3.2"})
 LOCATOR_ROLES = frozenset({"socket", "ik_effector", "vfx_emitter", "camera_focus", "hitbox", "rider_seat"})
-TRACK_LAWS = frozenset({"wave", "flap", "hinge", "impulse"})
+TRACK_LAWS = frozenset({"wave", "flap", "hinge", "impulse", "spin"})
 KEYFRAME_CHANNELS = frozenset({"rotation", "position", "scale"})
 KEYFRAME_INTERPOLATIONS = frozenset({"linear", "catmullrom"})
 CONTROLLER_OPS = frozenset({">", "<", ">=", "<=", "==", "!="})
@@ -188,10 +188,13 @@ class Box:
     uv: tuple[float, float] | None = None
     uv_faces: tuple[tuple[str, UVRect], ...] = ()
     texture: str | None = None
+    blend_with: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if isinstance(self.uv_faces, (dict, list)) or self.uv_faces is None:
             object.__setattr__(self, "uv_faces", _normalize_uv_faces(self.uv_faces))
+        if isinstance(self.blend_with, list) or self.blend_with is None:
+            object.__setattr__(self, "blend_with", tuple(self.blend_with or ()))
 
     @property
     def uv_faces_dict(self) -> dict[str, UVRect]:
@@ -211,6 +214,7 @@ def Plane(
     uv: tuple[float, float] | None = None,
     uv_faces: Any = (),
     texture: str | None = None,
+    blend_with: tuple[str, ...] = (),
 ) -> Box:
     """Construct a zero-thickness planar quad Box with 0 physical thickness along ``normal``."""
     if len(size) == 2:
@@ -241,6 +245,7 @@ def Plane(
         uv=uv,
         uv_faces=uv_faces,
         texture=texture,
+        blend_with=blend_with,
     )
 
 
@@ -867,6 +872,13 @@ def validate_program(program: Program) -> Program:
                 or any(x not in FACES for x in item.cullface)
             ):
                 raise DSLValidationError("cullface must contain unique valid face names")
+            if (
+                not isinstance(item.blend_with, tuple)
+                or any(not _valid_ident(x) for x in item.blend_with)
+                or len(set(item.blend_with)) != len(item.blend_with)
+                or item.name in item.blend_with
+            ):
+                raise DSLValidationError(f"box {item.name}: blend_with must contain unique valid partner box identifiers")
             if item.place is None:
                 if local_boxes:
                     raise DSLValidationError(f"box {item.name}: subsequent same-bone boxes require an explicit place clause")
@@ -902,6 +914,8 @@ def validate_program(program: Program) -> Program:
     # Build expanded bone parent map & expanded box set for @muscles/@kinematics/@behavior validation
     expanded_bone_parent: dict[str, str | None] = {}
     expanded_boxes: set[str] = set()
+    expanded_radial_counts: dict[str, int] = {}
+    expanded_blend_specs: list[tuple[str | None, str, tuple[str, ...]]] = []
 
     def _collect_expanded_graph(
         bone: Bone,
@@ -913,14 +927,49 @@ def validate_program(program: Program) -> Program:
         expanded_bone_parent[bname] = parent_name
         for it in bone.items:
             if isinstance(it, Box):
-                expanded_boxes.add(f"{prefix}__{it.name}" if prefix else it.name)
+                full_bname = f"{prefix}__{it.name}" if prefix else it.name
+                expanded_boxes.add(full_bname)
+                if it.blend_with:
+                    expanded_blend_specs.append((prefix, full_bname, it.blend_with))
             elif isinstance(it, Bone):
+                if isinstance(it.radial, RadialSpec):
+                    base_r = f"{prefix}__{it.name}" if prefix else it.name
+                    expanded_radial_counts[base_r] = it.radial.count
                 _collect_expanded_graph(it, bname, prefix=prefix)
                 for cr in _clone_roots_for_bone(it):
                     c_root = f"{prefix}__{cr}" if prefix else cr
                     _collect_expanded_graph(it, bname, prefix=c_root, renamed_root=c_root)
 
     _collect_expanded_graph(program.root, None)
+    for pref, full_bname, bw_targets in expanded_blend_specs:
+        for tgt in bw_targets:
+            resolved_tgt = f"{pref}__{tgt}" if (pref and f"{pref}__{tgt}" in expanded_boxes) else tgt
+            if pref and resolved_tgt == tgt:
+                m_src = re.match(r"^(.*)_r(\d+)$", pref)
+                if m_src and m_src.group(1) in expanded_radial_counts:
+                    r_root = m_src.group(1)
+                    k_cur = int(m_src.group(2))
+                    r_cnt = expanded_radial_counts[r_root]
+                    leaf_r = r_root.split("__")[-1]
+                    m_tgt = re.match(rf"^{re.escape(leaf_r)}_r(\d+)__(.+)$", tgt)
+                    if m_tgt:
+                        k_next = (k_cur + int(m_tgt.group(1))) % r_cnt
+                        outer_p = r_root[: -(len(leaf_r) + 2)] if "__" in r_root else None
+                        resolved_tgt = (
+                            (f"{outer_p}__{m_tgt.group(2)}" if outer_p else m_tgt.group(2))
+                            if k_next == 0
+                            else f"{r_root}_r{k_next}__{m_tgt.group(2)}"
+                        )
+                else:
+                    leaf_p = pref.split("__")[-1]
+                    if tgt.startswith(f"{leaf_p}__"):
+                        outer_p = pref[: -(len(leaf_p) + 2)] if "__" in pref else None
+                        base_item = tgt[len(leaf_p) + 2 :]
+                        cand_inv = f"{outer_p}__{base_item}" if outer_p else base_item
+                        if cand_inv in expanded_boxes:
+                            resolved_tgt = cand_inv
+            if resolved_tgt not in expanded_boxes or resolved_tgt == full_bname:
+                raise DSLValidationError(f"box {full_bname}: blend_with references unknown or self box {tgt!r}")
     root_bone_name = program.root.name
 
     # Validate @materials
@@ -1110,8 +1159,11 @@ def validate_program(program: Program) -> Program:
                     raise DSLValidationError(f"clip {clip.name}: unknown track law {tr.law!r}")
                 if tr.axis not in AXES_3D:
                     raise DSLValidationError(f"clip {clip.name}: track axis must be x, y, or z")
-                if not _finite_number(tr.amp_deg) or abs(tr.amp_deg) > 120.0:
-                    raise DSLValidationError(f"clip {clip.name}: track amp_deg must lie in [-120, 120]")
+                max_amp_deg = 1440.0 if tr.law == "spin" else 120.0
+                if not _finite_number(tr.amp_deg) or abs(tr.amp_deg) > max_amp_deg:
+                    raise DSLValidationError(
+                        f"clip {clip.name}: track amp_deg must lie in [-{int(max_amp_deg)}, {int(max_amp_deg)}]"
+                    )
                 if not _finite_number(tr.freq_hz) or not (0.0 < tr.freq_hz <= 20.0):
                     raise DSLValidationError(f"clip {clip.name}: track freq_hz must lie in (0, 20]")
                 if not _finite_number(tr.phase_deg) or not _finite_number(tr.bias_deg) or abs(tr.bias_deg) > 90.0:

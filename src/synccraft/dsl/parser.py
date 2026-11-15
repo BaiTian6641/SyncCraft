@@ -1371,6 +1371,7 @@ class _Parser:
         uv: tuple[float, float] | None = None
         uv_faces: tuple[tuple[str, UVRect], ...] = ()
         texture: str | None = None
+        blend_with: tuple[str, ...] = ()
         seen_f: set[str] = set()
 
         while not self.at("}"):
@@ -1392,6 +1393,8 @@ class _Parser:
                 inflate = float(self.number())
             elif canon_key == "cullface":
                 cullface = self.ident_list()
+            elif canon_key == "blend_with":
+                blend_with = self.ident_list()
             elif canon_key == "rotate":
                 rv = self.vector(3)
                 rotate = (float(rv[0]), float(rv[1]), float(rv[2]))
@@ -1440,6 +1443,7 @@ class _Parser:
                 uv=uv,
                 uv_faces=uv_faces,
                 texture=texture,
+                blend_with=blend_with,
             )
         if len(size_raw) != 3:
             self.fail(f"box {name}: size must have 3 components")
@@ -1456,6 +1460,7 @@ class _Parser:
             uv=uv,
             uv_faces=uv_faces,
             texture=texture,
+            blend_with=blend_with,
         )
 
     def box(self) -> Box:
@@ -1712,7 +1717,8 @@ class _Parser:
                             float(pl_new.offset[2]) * scale_k,
                         )
                         pl_new = Place(mapped_b, pl_new.anchor, pl_new.align, off_new)
-                    seg_items.append(replace(it, name=rename_local[it.name], size=s_new, place=pl_new))
+                    bw_new = tuple(rename_local.get(bw, bw) for bw in it.blend_with) if it.blend_with else ()
+                    seg_items.append(replace(it, name=rename_local[it.name], size=s_new, place=pl_new, blend_with=bw_new))
                 elif isinstance(it, Locator):
                     off_l = (
                         float(it.offset[0]) * scale_k,
@@ -2000,6 +2006,8 @@ def format_program(program: Program) -> str:
                 b_fields.append(f"texture: {item.texture}")
             if item.cullface:
                 b_fields.append(f"cullface: [{', '.join(item.cullface)}]")
+            if item.blend_with:
+                b_fields.append(f"blend_with: [{', '.join(item.blend_with)}]")
             lines.append(f"{b_start} {{ {', '.join(b_fields)} }}")
         lines.append(pad + "}")
 

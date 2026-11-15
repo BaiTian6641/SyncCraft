@@ -195,7 +195,11 @@ def _worst_violation_score(audit_report: dict[str, Any]) -> float:
 def _max_collision_overlap(audit_report: dict[str, Any]) -> float:
     overlaps = [float(c.get("raw_min_overlap", 0.0)) for c in audit_report.get("collision_pairs", ())]
     for cv in audit_report.get("contact_violations", ()):
-        if cv.get("violation") == "excessive_contact_penetration":
+        if cv.get("violation") in (
+            "excessive_contact_penetration",
+            "excessive_sculpted_overlap",
+            "swallowed_redundant_box",
+        ):
             overlaps.append(float(cv.get("raw_min_overlap", 0.0)))
     return max(overlaps, default=0.0)
 
@@ -283,7 +287,7 @@ def _single_projection_step(
         v_kind = cv.get("violation")
         reason = cv.get("reason")
 
-        if reason == "place" and w_l.bone_name == w_r.bone_name:
+        if reason in ("place", "declared_place", "sculpted_same_bone_miter", "declared_blend") and w_l.bone_name == w_r.bone_name:
             bone_rot = scene.bone_by_name[w_l.bone_name].rotation
             if ast_place_base.get(left_name) == right_name:
                 moving_name, w_fix, w_mov = left_name, w_r, w_l
@@ -301,7 +305,7 @@ def _single_projection_step(
                 shift = step_gain * max(0.0, raw_ov) * dir_local
             box_place_deltas[moving_name] = box_place_deltas.get(moving_name, np.zeros(3)) + shift
 
-        elif reason == "attach" and w_l.bone_name != w_r.bone_name:
+        elif reason in ("attach", "declared_attach", "sculpted_parent_child_joint", "declared_blend") and w_l.bone_name != w_r.bone_name:
             b_l = scene.bone_by_name[w_l.bone_name]
             b_r = scene.bone_by_name[w_r.bone_name]
             if b_r.parent_name == b_l.name:

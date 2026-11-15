@@ -14,6 +14,9 @@ from synccraft.kinematics.se3_chain import Scene, WorldBox
 # Explicit M4 physical upper bounds for acute hinge corner swing under strict P1-02 audit.
 MAX_HINGE_ANGLE_DEG: float = 60.0
 MAX_HINGE_ALLOWANCE_UNITS: float = 2.5
+MAX_SCULPTED_OVERLAP_RATIO: float = 0.85
+MAX_SCULPTED_HINGE_ANGLE_DEG: float = 135.0
+MAX_SCULPTED_HINGE_ALLOWANCE_UNITS: float = 6.0
 
 
 def compute_delta_hinge(
@@ -318,6 +321,145 @@ def _authored_bone_exemption_reason(
     return None
 
 
+def _min_exterior_protrusion(left: WorldBox, right: WorldBox) -> tuple[float, float]:
+    """Return exact signed exterior protrusion ``(left_outside_right, right_outside_left)`` (ADR 0007).
+
+    By convexity of an OBB, ``OBB(L) subseteq OBB(R)`` iff every one of ``L``'s 8 world corners
+    has non-positive signed distance outside ``R``'s half-extents on all 3 local axes of ``R``.
+    """
+    c_left_in_right = np.abs((left.corners(include_inflate=True) - right.center) @ right.rotation) - right.half_extents
+    prot_left = float(np.max(c_left_in_right))
+    c_right_in_left = np.abs((right.corners(include_inflate=True) - left.center) @ left.rotation) - left.half_extents
+    prot_right = float(np.max(c_right_in_left))
+    return prot_left, prot_right
+
+
+def _sculpted_exemption_reason(
+    left_bone: str,
+    right_bone: str,
+    is_blend_pair: bool,
+    bone_parent_map: dict[str, str | None],
+    effective_box_parent_map: dict[str, str | None] | None = None,
+) -> str | None:
+    """Return explicit ADR 0007 sculpted-overlap contract category, or None (never sibling immunity)."""
+    if is_blend_pair:
+        return "declared_blend"
+    if left_bone not in bone_parent_map or right_bone not in bone_parent_map:
+        return None
+    if left_bone == right_bone:
+        return "sculpted_same_bone_miter"
+    parent_l = bone_parent_map[left_bone]
+    parent_r = bone_parent_map[right_bone]
+    eff_l = effective_box_parent_map.get(left_bone) if effective_box_parent_map is not None else parent_l
+    eff_r = effective_box_parent_map.get(right_bone) if effective_box_parent_map is not None else parent_r
+    if parent_l == right_bone or parent_r == left_bone or eff_l == right_bone or eff_r == left_bone:
+        return "sculpted_parent_child_joint"
+    return None
+
+
+def _evaluate_sculpted_overlap(
+    left: WorldBox,
+    right: WorldBox,
+    pair: tuple[str, str],
+    reason: str,
+    raw_min_overlap: float,
+    *,
+    collision_tolerance: float,
+    max_contact_gap: float,
+    max_inset_depth: float,
+    enforce_gap: bool,
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    """Verify ADR 0007 sculpted partial-overlap bounds and anti-swallowing protrusion invariant."""
+    rel_rot = left.rotation.T @ right.rotation
+    cos_theta = float(np.clip((np.trace(rel_rot) - 1.0) * 0.5, -1.0, 1.0))
+    theta = math.acos(cos_theta)
+    theta_deg = math.degrees(theta)
+
+    left_pos = left.size[left.size > 1e-9]
+    right_pos = right.size[right.size > 1e-9]
+    t_med = (
+        min(float(np.median(left_pos)), float(np.median(right_pos)))
+        if (left_pos.size > 0 and right_pos.size > 0)
+        else 0.0
+    )
+    t_thin = (
+        min(float(np.min(left_pos)), float(np.min(right_pos)))
+        if (left_pos.size > 0 and right_pos.size > 0)
+        else 0.0
+    )
+
+    inflate_allowance = float(left.inflate + right.inflate)
+    hinge_allowance = compute_delta_hinge(
+        theta,
+        left.size,
+        right.size,
+        max_hinge_angle_deg=MAX_SCULPTED_HINGE_ANGLE_DEG,
+        max_hinge_allowance=MAX_SCULPTED_HINGE_ALLOWANCE_UNITS,
+    )
+    max_allowed_overlap = (
+        max(max_inset_depth, hinge_allowance, MAX_SCULPTED_OVERLAP_RATIO * t_med)
+        + inflate_allowance
+        + collision_tolerance
+    )
+
+    prot_l, prot_r = _min_exterior_protrusion(left, right)
+    min_prot = min(prot_l, prot_r)
+    has_plane = (getattr(left, "plane_normal", None) is not None) or (getattr(right, "plane_normal", None) is not None)
+    min_req_prot = collision_tolerance if has_plane else min(0.25, 0.15 * t_thin)
+
+    telemetry = {
+        "pair": list(pair),
+        "exemption_reason": reason,
+        "raw_min_overlap": raw_min_overlap,
+        "max_allowed_overlap": max_allowed_overlap,
+        "relative_angle_deg": theta_deg,
+        "min_protrusion_units": min_prot,
+        "min_required_protrusion": min_req_prot,
+    }
+
+    if enforce_gap and raw_min_overlap < -max_contact_gap:
+        return (
+            {
+                "pair": list(pair),
+                "reason": reason,
+                "violation": "separated_declared_contact",
+                "raw_min_overlap": raw_min_overlap,
+                "measured_gap": -raw_min_overlap,
+                "max_allowed_gap": max_contact_gap,
+            },
+            telemetry,
+        )
+
+    if raw_min_overlap > collision_tolerance and min_prot <= min_req_prot:
+        return (
+            {
+                "pair": list(pair),
+                "reason": reason,
+                "violation": "swallowed_redundant_box",
+                "raw_min_overlap": raw_min_overlap,
+                "min_protrusion_units": min_prot,
+                "min_required_protrusion": min_req_prot,
+            },
+            telemetry,
+        )
+
+    if raw_min_overlap > max_allowed_overlap:
+        return (
+            {
+                "pair": list(pair),
+                "reason": reason,
+                "violation": "excessive_sculpted_overlap",
+                "raw_min_overlap": raw_min_overlap,
+                "max_allowed_overlap": max_allowed_overlap,
+                "relative_angle_deg": theta_deg,
+                "min_protrusion_units": min_prot,
+            },
+            telemetry,
+        )
+
+    return None, telemetry
+
+
 def _evaluate_declared_contact(
     left: WorldBox,
     right: WorldBox,
@@ -386,6 +528,13 @@ def audit_scene(
     - ``"strict"`` (default): Enforces full P1-02 ``<= 0.5u`` inset + bounded M4
       ``delta_hinge(theta) <= 2.5u``, ``<= 1e-4`` contact gap, physical connectivity,
       exact coplanar Z-fighting rejection, and zero parent/sibling collision immunity.
+    - ``"sculpted"`` (ADR 0007): Explicit partial-overlap contract for sloped surfaces,
+      semi-curves, tapered snouts, and chamfered/domed superstructures. Permits bounded
+      non-coplanar overlap (``<= 0.85 * t_med``) with exterior silhouette protrusion on
+      declared contacts, explicit ``blend_with`` pairs, same-bone miter slopes, and
+      parent-child joints (reporting every pair in ``sculpted_overlap_pairs``), while
+      still rejecting coplanar Z-fighting, swallowed boxes, floating parts, and all
+      non-adjacent or undeclared sibling-bone SAT collisions.
     - ``"authored"``: Honors ``scene.meta.audit_profile == "authored"`` for imported/real
       authored rigs by exempting declared contacts, same-bone, parent-child, and sibling
       joint overlaps from SAT failure (reporting every exemption explicitly in
@@ -393,12 +542,16 @@ def audit_scene(
       exact coplanar Z-fighting rejection, and non-adjacent bone SAT collision rejection.
     """
     resolved_profile = audit_profile or str(getattr(scene.meta, "audit_profile", "strict"))
-    if resolved_profile not in ("strict", "authored"):
-        raise ValueError(f"Unknown audit_profile {resolved_profile!r}; expected 'strict' or 'authored'")
+    if resolved_profile not in ("strict", "sculpted", "authored"):
+        raise ValueError(
+            f"Unknown audit_profile {resolved_profile!r}; expected 'strict', 'sculpted', or 'authored'"
+        )
     is_authored = resolved_profile == "authored"
+    is_sculpted = resolved_profile == "sculpted"
 
     collisions: list[dict[str, Any]] = []
     declared_contacts: list[dict[str, Any]] = []
+    sculpted_overlap_pairs: list[dict[str, Any]] = []
     authored_exempt_pairs: list[dict[str, Any]] = []
     contact_violations: list[dict[str, Any]] = []
     z_fighting_pairs: list[dict[str, Any]] = []
@@ -473,6 +626,8 @@ def audit_scene(
                 continue
 
             z_fight = _detect_coplanar_z_fighting(left, right, collision_tolerance=collision_tolerance)
+            scene_blend_pairs = getattr(scene, "blend_pairs", frozenset())
+            is_blend_pair = pair in scene_blend_pairs
 
             entry = {"pair": list(pair), **result.to_dict()}
             if is_declared:
@@ -486,6 +641,27 @@ def audit_scene(
                         authored_exempt_pairs.append(
                             {**entry, "exemption_reason": f"declared_{reason}"}
                         )
+                elif is_sculpted:
+                    violation, sc_tel = _evaluate_sculpted_overlap(
+                        left,
+                        right,
+                        pair,
+                        f"declared_{reason}",
+                        result.raw_min_overlap,
+                        collision_tolerance=collision_tolerance,
+                        max_contact_gap=max_contact_gap,
+                        max_inset_depth=max_inset_depth,
+                        enforce_gap=enforce_physical_contact,
+                    )
+                    if violation is not None:
+                        contact_violations.append(violation)
+                        if not enforce_physical_contact:
+                            collisions.append({**entry, "violation": violation["violation"]})
+                    elif z_fight is None:
+                        physical_graph[left.name].add(right.name)
+                        physical_graph[right.name].add(left.name)
+                        if result.collision:
+                            sculpted_overlap_pairs.append({**entry, **sc_tel})
                 else:
                     violation = _evaluate_declared_contact(
                         left,
@@ -510,20 +686,48 @@ def audit_scene(
                     z_fighting_pairs.append(z_fight)
                     contact_violations.append(z_fight)
                 if result.collision:
-                    auth_reason = (
-                        _authored_bone_exemption_reason(
+                    if is_authored:
+                        auth_reason = _authored_bone_exemption_reason(
                             left.bone_name,
                             right.bone_name,
                             bone_parent_map,
                             effective_box_parent_map,
                         )
-                        if is_authored
-                        else None
-                    )
-                    if auth_reason is not None and z_fight is None:
-                        authored_exempt_pairs.append({**entry, "exemption_reason": auth_reason})
-                        physical_graph[left.name].add(right.name)
-                        physical_graph[right.name].add(left.name)
+                        if auth_reason is not None and z_fight is None:
+                            authored_exempt_pairs.append({**entry, "exemption_reason": auth_reason})
+                            physical_graph[left.name].add(right.name)
+                            physical_graph[right.name].add(left.name)
+                        else:
+                            collisions.append(entry)
+                    elif is_sculpted:
+                        sc_reason = _sculpted_exemption_reason(
+                            left.bone_name,
+                            right.bone_name,
+                            is_blend_pair,
+                            bone_parent_map,
+                            effective_box_parent_map,
+                        )
+                        if sc_reason is not None and z_fight is None:
+                            sc_viol, sc_tel = _evaluate_sculpted_overlap(
+                                left,
+                                right,
+                                pair,
+                                sc_reason,
+                                result.raw_min_overlap,
+                                collision_tolerance=collision_tolerance,
+                                max_contact_gap=max_contact_gap,
+                                max_inset_depth=max_inset_depth,
+                                enforce_gap=False,
+                            )
+                            if sc_viol is None:
+                                sculpted_overlap_pairs.append({**entry, **sc_tel})
+                                physical_graph[left.name].add(right.name)
+                                physical_graph[right.name].add(left.name)
+                            else:
+                                contact_violations.append(sc_viol)
+                                collisions.append({**entry, "violation": sc_viol["violation"]})
+                        else:
+                            collisions.append(entry)
                     else:
                         collisions.append(entry)
                 elif result.raw_min_overlap >= -max_contact_gap and z_fight is None:
@@ -566,17 +770,19 @@ def audit_scene(
         "evaluated_non_exempt_pairs": evaluated_pairs,
         "collision_tolerance": collision_tolerance,
         "contact_policy": {
-            "version": "p1-02/1.1",
+            "version": "p1-02/1.2",
             "audit_profile": resolved_profile,
             "enforced": enforce_physical_contact and not is_authored,
             "max_contact_gap": max_contact_gap,
             "max_inset_depth": max_inset_depth,
-            "max_hinge_angle_deg": MAX_HINGE_ANGLE_DEG,
-            "max_hinge_allowance": MAX_HINGE_ALLOWANCE_UNITS,
+            "max_hinge_angle_deg": MAX_SCULPTED_HINGE_ANGLE_DEG if is_sculpted else MAX_HINGE_ANGLE_DEG,
+            "max_hinge_allowance": MAX_SCULPTED_HINGE_ALLOWANCE_UNITS if is_sculpted else MAX_HINGE_ALLOWANCE_UNITS,
+            "max_sculpted_overlap_ratio": MAX_SCULPTED_OVERLAP_RATIO if is_sculpted else None,
             "authorized_detached_bones": authorized_detached,
         },
         "collision_pairs": collisions,
         "declared_contact_pairs": declared_contacts,
+        "sculpted_overlap_pairs": sculpted_overlap_pairs,
         "authored_exempt_pairs": authored_exempt_pairs,
         "z_fighting_pairs": z_fighting_pairs,
         "contact_violations": contact_violations,

@@ -25,7 +25,7 @@ def shade_asset(
     style_config: StyleConfig | None = None,
     environment: EnvironmentState | None = None,
     uv_layout: dict[str, Any] | None = None,
-    max_width: int = 512,
+    max_width: int | None = None,
     padding: int = 1,
 ) -> tuple[dict[str, Any], bytes]:
     """Compile a Program or WorldState into a shaded Vanilla RGBA atlas + PNG bytes."""

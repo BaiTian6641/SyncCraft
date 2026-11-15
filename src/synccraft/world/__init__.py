@@ -14,7 +14,14 @@ from .artist_loop import (
     ingest_artist_project_to_program,
     run_looped_artist_enhancement,
 )
-from .exemplars import build_articulated_mechanism_world, build_biological_creature_world
+from .exemplars import (
+    COLOSSAL_WALKING_CITADEL_DSL,
+    SCULPTED_ELDER_WYVERN_DSL,
+    build_articulated_mechanism_world,
+    build_biological_creature_world,
+    build_colossal_walking_citadel_world,
+    build_sculpted_elder_wyvern_world,
+)
 from .interventions import run_seven_interventions_suite
 from .inverse_inference import (
     APPROVED_NONCOMMERCIAL_RESEARCH_LICENSES,
@@ -78,10 +85,12 @@ __all__ = [
     "APPROVED_NONCOMMERCIAL_RESEARCH_LICENSES",
     "APPROVED_PERMISSIVE_LICENSES",
     "APPROVED_SHAREALIKE_LICENSES",
+    "COLOSSAL_WALKING_CITADEL_DSL",
     "COMPOSITIONAL_HELDOUT_TRIPLES",
     "LEVEL_SHORT_NAMES",
     "LICENSE_POLICIES",
     "LOCAL_WORKSPACE_LICENSE_POLICY",
+    "SCULPTED_ELDER_WYVERN_DSL",
     "WORLD_CAPABILITY_LEVELS",
     "WORLD_DATASET_PRESETS",
     "ActivateBehaviorStateAction",
@@ -112,9 +121,11 @@ __all__ = [
     "audit_converted_asset_visual_identity",
     "build_articulated_mechanism_world",
     "build_biological_creature_world",
+    "build_colossal_walking_citadel_world",
     "build_intervention_trajectory_dataset",
     "build_progressive_from_scratch_trajectory",
     "build_quarantined_research_nc_dataset",
+    "build_sculpted_elder_wyvern_world",
     "build_unlabeled_workspace_provenance",
     "build_world_capability_ladder_dataset",
     "compute_ast_edit_size",

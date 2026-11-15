@@ -398,6 +398,18 @@ def analyze_artist_project(
                 }
             )
         )[:8]
+        swallowed_cnt = sum(
+            1 for v in static_audit["contact_violations"] if v.get("violation") == "swallowed_redundant_box"
+        )
+        sculpt_deep_cnt = sum(
+            1 for v in static_audit["contact_violations"] if v.get("violation") == "excessive_sculpted_overlap"
+        )
+        sculpt_note = ""
+        if swallowed_cnt or sculpt_deep_cnt:
+            sculpt_note = (
+                f" Sculpted audit flagged {swallowed_cnt} swallowed redundant box(es) (protrude exterior silhouette) "
+                f"and {sculpt_deep_cnt} over-buried partial overlap(s) (> 0.85 * t_med)."
+            )
         suggestions.append(
             ArtistSuggestion(
                 suggestion_id="fix_static_sat_and_contacts",
@@ -407,7 +419,7 @@ def analyze_artist_project(
                 title="Resolve rest-pose OBB collisions and P1-02 joint contact gaps",
                 rationale=(
                     f"15-axis SAT audit detected {n_col} non-exempt OBB collision(s) and "
-                    f"{n_cviol} contact/connectivity violation(s) at rest."
+                    f"{n_cviol} contact/connectivity violation(s) at rest.{sculpt_note}"
                 ),
                 proposed_upgrade_op="repair_rest_contacts",
             )

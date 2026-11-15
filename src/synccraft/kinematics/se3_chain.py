@@ -152,6 +152,7 @@ class WorldBox:
     uv: tuple[float, float] | None = None
     uv_faces: dict[str, tuple[float, ...]] = field(default_factory=dict)
     texture: str | None = None
+    blend_with: tuple[str, ...] = ()
 
     @property
     def half_extents(self) -> np.ndarray:
@@ -187,6 +188,8 @@ class WorldBox:
             payload["uv_faces"] = {k: list(v) for k, v in self.uv_faces.items()}
         if self.texture is not None:
             payload["texture"] = self.texture
+        if self.blend_with:
+            payload["blend_with"] = list(self.blend_with)
         return payload
 
 
@@ -242,6 +245,7 @@ class Scene:
     meta: Any
     adjacency_reasons: dict[tuple[str, str], str] = field(default_factory=dict)
     locators: tuple[WorldLocator, ...] = ()
+    blend_pairs: frozenset[tuple[str, str]] = frozenset()
 
     @property
     def box_by_name(self) -> dict[str, WorldBox]:
@@ -279,6 +283,8 @@ class Scene:
         }
         if self.locators:
             payload["locators"] = [loc.to_dict() for loc in self.locators]
+        if self.blend_pairs:
+            payload["blend_pairs"] = [list(pair) for pair in sorted(self.blend_pairs)]
         return payload
 
 
@@ -387,6 +393,7 @@ def compile_geometry(
     bones: list[WorldBone] = []
     locators: list[WorldLocator] = []
     adjacency: dict[tuple[str, str], str] = {}
+    pending_blends: list[tuple[str | None, int, tuple[str, ...]]] = []
     names: set[str] = set()
     root_delta_vec = _vec(root_translation_delta) if root_translation_delta is not None else np.zeros(3)
 
@@ -570,7 +577,10 @@ def compile_geometry(
                     uv_faces=_stored_uv_faces(item.uv_faces_dict, sign),
                     texture=item.texture,
                 )
+                box_idx = len(boxes)
                 boxes.append(compiled_box)
+                if item.blend_with:
+                    pending_blends.append((prefix, box_idx, item.blend_with))
                 local_boxes[item.name] = compiled_box
                 if primary is None:
                     primary = compiled_box
@@ -671,6 +681,58 @@ def compile_geometry(
         sign=np.ones(3, dtype=np.float64),
         parent_scale=np.ones(3, dtype=np.float64),
     )
+    blend_pairs: set[tuple[str, str]] = set()
+    if pending_blends:
+        import re as _re
+
+        radial_counts: dict[str, int] = {}
+
+        def _collect_radial_counts(node: Bone, pref_r: str | None = None) -> None:
+            for ch in node.items:
+                if isinstance(ch, Bone):
+                    if isinstance(ch.radial, RadialSpec):
+                        base_r = f"{pref_r}__{ch.name}" if pref_r else ch.name
+                        radial_counts[base_r] = ch.radial.count
+                    _collect_radial_counts(ch, pref_r)
+                    if ch.mirror_name:
+                        mp = f"{pref_r}__{ch.mirror_name}" if pref_r else ch.mirror_name
+                        _collect_radial_counts(ch, mp)
+
+        _collect_radial_counts(program.root)
+
+        for pref, b_idx, raw_targets in pending_blends:
+            src_box = boxes[b_idx]
+            resolved_targets: list[str] = []
+            for tgt in raw_targets:
+                cand = f"{pref}__{tgt}" if (pref and f"{pref}__{tgt}" in names) else tgt
+                if pref and cand == tgt:
+                    m_src = _re.match(r"^(.*)_r(\d+)$", pref)
+                    if m_src and m_src.group(1) in radial_counts:
+                        r_root = m_src.group(1)
+                        k_cur = int(m_src.group(2))
+                        r_cnt = radial_counts[r_root]
+                        leaf_r = r_root.split("__")[-1]
+                        m_tgt = _re.match(rf"^{_re.escape(leaf_r)}_r(\d+)__(.+)$", tgt)
+                        if m_tgt:
+                            k_next = (k_cur + int(m_tgt.group(1))) % r_cnt
+                            outer_p = r_root[: -(len(leaf_r) + 2)] if "__" in r_root else None
+                            if k_next == 0:
+                                cand = f"{outer_p}__{m_tgt.group(2)}" if outer_p else m_tgt.group(2)
+                            else:
+                                cand = f"{r_root}_r{k_next}__{m_tgt.group(2)}"
+                    else:
+                        leaf_p = pref.split("__")[-1]
+                        if tgt.startswith(f"{leaf_p}__"):
+                            outer_p = pref[: -(len(leaf_p) + 2)] if "__" in pref else None
+                            base_item = tgt[len(leaf_p) + 2 :]
+                            cand_inv = f"{outer_p}__{base_item}" if outer_p else base_item
+                            if cand_inv in names:
+                                cand = cand_inv
+                if cand in names and cand != src_box.name:
+                    resolved_targets.append(cand)
+                    blend_pairs.add((src_box.name, cand) if src_box.name <= cand else (cand, src_box.name))
+            if resolved_targets:
+                object.__setattr__(src_box, "blend_with", tuple(resolved_targets))
     return Scene(
         tuple(boxes),
         tuple(bones),
@@ -678,6 +740,7 @@ def compile_geometry(
         program.meta,
         adjacency,
         tuple(locators),
+        frozenset(blend_pairs),
     )
 
 

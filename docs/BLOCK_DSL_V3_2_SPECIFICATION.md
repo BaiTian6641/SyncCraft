@@ -14,8 +14,8 @@
 5. [Section-by-Section Semantic Reference & Validation Bounds](#5-section-by-section-semantic-reference--validation-bounds)
 6. [Physical Surface & Material System (`@palette`, `@materials`, `@style`)](#6-physical-surface--material-system-palette-materials-style)
 7. [Musculoskeletal, Inverse Kinematics & Behavioral Animation (`@muscles`, `@kinematics`, `@behavior`, `@controller`)](#7-musculoskeletal-inverse-kinematics--behavioral-animation-muscles-kinematics-behavior-controller)
-8. [Strict `P1-02` Contact & 15-Axis SAT Collision Rules (Anti-Failure Guide for AI Generators)](#8-strict-p1-02-contact--15-axis-sat-collision-rules-anti-failure-guide-for-ai-generators)
-9. [Four Compiler-Verified End-to-End Golden Exemplars (Simple -> Apex)](#9-four-compiler-verified-end-to-end-golden-exemplars-simple---apex)
+8. [Strict `P1-02` & Sculpted `ADR 0007` Contact / SAT Rules (Anti-Failure Guide)](#8-strict-p1-02--sculpted-adr-0007-contact--sat-rules-anti-failure-guide)
+9. [Five Compiler-Verified End-to-End Golden Exemplars (Simple -> Colossal)](#9-five-compiler-verified-end-to-end-golden-exemplars-simple---colossal)
 10. [Dataset Gap Analysis, 5 Assistant Supervision Modes & Copy-Paste External-AI Generation Kit](#10-dataset-gap-analysis-5-assistant-supervision-modes--copy-paste-external-ai-generation-kit)
 
 ---
@@ -42,7 +42,7 @@ flowchart LR
 1. **Zero Arbitrary Code Execution**: Block-DSL is parsed into frozen dataclasses (`Program`, `Meta`, `Palette`, `Bone`, `Box`, `Locator`, `MaterialDecl`, `StyleDecl`, `MuscleDecl`, `KinematicsDecl`, `BehaviorDecl`, `ControllerDecl`). Python syntax, `import`, loops, conditionals, or unknown fields fail immediately.
 2. **Single Shared SE(3) Engine**: Rest compilation, posed animation frames, UV surface domain construction, SAT collision auditing, and all 5 backend exporters evaluate the exact same right-handed SE(3) kinematic chain.
 3. **Discrete `size` vs. Continuous `inflate`**: Box `size` defines discrete integer (or `size_step`-quantized) nominal UV dimensions; `inflate` expands physical OBB half-extents $\mathbf{h} = \max(\mathbf{0}, \tfrac{1}{2}\mathbf{s} + \delta\mathbf{1}_3)$ without altering UV island dimensions.
-4. **Explicit Physical Contact (`audit_profile: strict`)**: Blanket parent/child or sibling collision immunity is **forbidden** in clean synthetic generation. Parts must touch flush at declared `place(...)` / `attach(...)` / `joint(...)` interfaces with zero floating gaps (`> 1e-4` units) and zero non-exempt volumetric OBB overlaps (`> 1e-7` units).
+4. **Explicit Physical Contact (`strict` vs. `sculpted`)**: Blanket sibling collision immunity is **forbidden**. Use default `audit_profile: strict` for flush mechanical/architectural assemblies (`<= 0.5u` inset), or explicit `audit_profile: sculpted` (`ADR 0007`) for sloped organic silhouettes, dragons, semi-curves, and chamfered/domed vehicles where tilted cuboids intentionally miter with bounded overlap (`<= 0.85 * t_med`), mandatory exterior protrusion (`0` swallowed boxes), `0` coplanar Z-fighting, and explicit `blend_with: [...]` seams.
 5. **Explicit Rejection of Unimplemented Reserved Keywords**: `@shade`, `@ergonomics`, `@motion`, and `extrude` raise `UnsupportedFeature` (`DSLValidationError`). Never emit them.
 
 ---
@@ -137,6 +137,7 @@ elem_field: "size" ":" (vec2 | vec3)
           | ("material" | "mat") ":" IDENT
           | "inflate" ":" num_expr
           | "cullface" ":" ident_list
+          | "blend_with" ":" ident_list
           | "rotate" ":" vec3
           | "pivot" ":" vec3
           | ("normal" | "plane_normal") ":" IDENT
@@ -307,7 +308,7 @@ When a bone carries `mirror_x(twin_name)` (`S = diag(-1, 1, 1)`) or `mirror(axis
 | `texel_density` | **Yes** | Positive `int` (`8`, `16`, `32`, `64`) | — | Standard Minecraft density is `16` (`1` model unit = `1` texel). |
 | `dsl_version` | No | `"3.0"`, `"3.1"`, `"3.2"` | `"3.2"` | Omit when `"3.2"` (canonical formatter omits default). |
 | `size_step` | No | `{1.0, 0.5, 0.25, 0.125, 0.0625, 0.03125, 0.1, 0.05, 0.01, 0.001}` | `1.0` | All non-zero `box`/`plane` `size` components must be exact positive multiples of `size_step`. When `1.0`, write integer literals! |
-| `audit_profile` | No | `strict`, `authored` | `strict` | **External AI generators MUST leave this as `strict` (omit field)** so every synthetic asset passes full `P1-02` physical contact & zero-overlap SAT! (`authored` is reserved exclusively for decompiled third-party human files.) |
+| `audit_profile` | No | `strict`, `sculpted`, `authored` | `strict` | Use default `strict` (omit field) for crisp flush fits (`<= 0.5u` inset, Gate `G2`). Set `audit_profile: sculpted` (`ADR 0007`) when constructing sloped snouts/bevels, `> 60°` horns, imbricated carapaces, or chamfered/domed vehicles (`<= 0.85 * t_med` overlap + exterior protrusion). **Never** emit `authored` (reserved strictly for decompiled human files). |
 
 ### 5.2 `@palette` & `@textures`
 
@@ -330,10 +331,11 @@ When a bone carries `mirror_x(twin_name)` (`S = diag(-1, 1, 1)`) or `mirror(axis
   - When `attach(...)` is used with `detached=false` (default), every component of `offset` must lie in **`[-0.5, 0.5]`**!
   - `joint_limits`: 3 pairs `[min_deg, max_deg]` satisfying **`-180 <= min_deg <= 0 <= max_deg <= 180`** (rest pose `0` must always lie inside the interval!).
   - Every `bone` must contain **at least one direct `box`, `plane`, or `locator`** (empty wrapper bones with only child bones are rejected in `strict` DSL; place at least a `locator` or structural `box` in every bone!).
-- **`box <id> [place(...)] { size: [sx, sy, sz], material: <mat_id>, [inflate: d], [rotate: [rx, ry, rz]], [pivot: [px, py, pz]], [cullface: [...]], [uv: box(u, v)], [uv_faces: {...}], [texture: <tex_id>] }`**:
+- **`box <id> [place(...)] { size: [sx, sy, sz], material: <mat_id>, [inflate: d], [rotate: [rx, ry, rz]], [pivot: [px, py, pz]], [cullface: [...]], [blend_with: [...]], [uv: box(u, v)], [uv_faces: {...}], [texture: <tex_id>] }`**:
   - `material` (alias `mat`) must reference a declared `@palette` identifier.
-  - `inflate`: finite float `>= 0.0` in `strict` mode (e.g., `0.05`–`0.25` for armor trim/collars).
+  - `inflate`: finite float `>= 0.0` in `strict` and `sculpted` modes (e.g., `0.05`–`0.25` for armor trim/collars; negative `inflate` is rejected outside `authored`).
   - `cullface`: unique list from `{north, south, east, west, up, down}`.
+  - `blend_with`: optional list of distinct expanded box/plane identifiers for explicit miter/slope seams under `audit_profile: sculpted` (for example, `blend_with: [prow_r__plate_l]` across a `mirror_x` centerline or `blend_with: [rib_r1__arch]` around a cyclic `radial(count=4)` dome).
 - **`plane <id> [place(...)] { size: [w, h], normal: x|y|z, material: <mat_id>, ... }`**:
   - Zero-thickness 2D quad for wings, fins, capes, blades, petals, decals, and crests!
   - `size: [w, h]` gives the two positive tangential dimensions along the two axes other than `normal`:
@@ -456,9 +458,11 @@ Must contain at least one `ik_chain`, `look_chain`, or `spring`:
 Requires `target_profile` in `{bedrock_entity, geckolib, bbmodel_5}` whenever `clip` blocks are present.
 - **`clip <name> { duration_s: <0.05..60.0> [, loop: true|false] <drives...> }`**:
   Must contain >= 1 drive from:
-  1. **Analytic Harmonic / Impulse `track`** *(non-root bone)*:
-     `track <bone>: <law>(axis=x|y|z, amp_deg=<-120..120>, freq_hz=<(0, 20]>, phase_deg=<deg>, bias_deg=<-90..90>)`
-     - `law` $\in$ **`{wave, flap, hinge, impulse}`** (`wave` = traveling sinusoid, `flap` = asymmetric upstroke/downstroke wingbeat, `hinge` = mechanical/unidirectional oscillation, `impulse` = sharp strike/recoil envelope).
+  1. **Analytic Harmonic / Impulse / Continuous `spin` `track`** *(non-root bone)*:
+     `track <bone>: <law>(axis=x|y|z, amp_deg=<-120..120 or -1440..1440 for spin>, freq_hz=<(0, 20]>, phase_deg=<deg>, bias_deg=<-90..90>)`
+     - `law` $\in$ **`{wave, flap, hinge, impulse, spin}`**:
+       - `wave` = traveling sinusoid, `flap` = asymmetric upstroke/downstroke wingbeat, `hinge` = mechanical/unidirectional oscillation, `impulse` = sharp strike/recoil envelope (`|amp_deg| <= 120`).
+       - **`spin`** = continuous linear mechanical rotation $\text{bias} + \text{amp\_deg} \cdot (t \cdot \text{freq\_hz} + \text{phase\_deg}/360)$ with **`|amp_deg| <= 1440`** for wheels, propellers, windmill rotors, `360°` turrets, and meshed gear ratios (e.g. `amp_deg=360` drive wheel paired with `amp_deg=-720` `2:-1` pinion gear).
      - **Loop Continuity Tip**: Choose `freq_hz` as an integer multiple of `1.0 / duration_s` (e.g. `duration_s: 2.0` -> `freq_hz=0.5` or `1.0`) so `loop: true` clips wrap seamlessly!
   2. **Explicit Spline `key`** *(any bone, including root for body bounce)*:
      `key <bone>.<rotation|position|scale> { t0: [x, y, z], t1: [x, y, z], ..., [linear|catmullrom] }`
@@ -489,9 +493,9 @@ Requires `target_profile` in `{bedrock_entity, geckolib, bbmodel_5}` whenever `c
 
 ---
 
-## 8. Strict `P1-02` Contact & 15-Axis SAT Collision Rules (Anti-Failure Guide for AI Generators)
+## 8. Strict `P1-02` & Sculpted `ADR 0007` Contact / SAT Rules (Anti-Failure Guide)
 
-Every generated program is audited by `audit_scene(scene, enforce_physical_contact=True)` (`audit_profile: strict`) and `audit_behavior_clip(program, clip_name)`. **Memorize these 7 rules — they prevent 99% of synthetic generation failures:**
+Every generated program is audited by `audit_scene(scene, enforce_physical_contact=True)` and `audit_behavior_clip(program, clip_name)`. **Memorize these rules — they prevent 99% of synthetic generation failures:**
 
 ```mermaid
 flowchart TD
@@ -530,11 +534,18 @@ flowchart TD
 7. **Vanilla Java Profile Bounds (`java_modern` / `java_legacy`)**:
    - All box corners (including `inflate` and `rotate`) must lie inside **`[-16, 32]`** on X, Y, and Z! Center static Java block/multipart models around `[8, y, 8]` (standard `0..16` Minecraft block space) so they fit comfortably inside `[-16, 32]`.
 
+### 8.1 Sculpted Partial-Overlap Contract (`audit_profile: sculpted`, `ADR 0007`)
+
+When building **sloped organic silhouettes** (tapered dragon snouts, `> 60°` swept horns, curved armored carapaces, imbricated dorsal scales) or **chamfered/domed vehicles** (angled battleship prows, octagonal/domed castle bastions), set `audit_profile: sculpted` in `@meta`:
+- **Permitted Miter & Joint Seams**: Bounded partial OBB overlap (`<= max(0.5u, delta_hinge(theta, 135°, 6.0u), 0.85 * t_med) + inflate_sum`) is allowed on declared contacts (`place`/`attach`/`joint`), same-bone tilted miter plates, parent-child joints, and explicit `blend_with: [...]` pairs (logged in `sculpted_overlap_pairs`).
+- **Anti-Swallowing Protrusion Invariant (`swallowed_redundant_box`)**: Neither box may be 100% swallowed inside the other (`min_protrusion > min(0.25u, 0.15 * t_thin)` outside the partner's 8-corner OBB). Every cuboid must visibly contribute exterior surface silhouette!
+- **Zero Z-Fighting & Zero Sibling-Bone Immunity**: Coplanar face Z-fighting (`z_fighting_pairs`), floating gaps (`> 1e-4u` at rest), and undeclared sibling-bone or non-adjacent limb-vs-body collisions (`thigh_l` vs `thigh_r`, `wing` vs `shoulder`, `gear` vs `wheel` across `360°` `spin` diagonal envelopes!) are still **strictly rejected**.
+
 ---
 
-## 9. Four Compiler-Verified End-to-End Golden Exemplars (Simple -> Apex)
+## 9. Five Compiler-Verified End-to-End Golden Exemplars (Simple -> Colossal)
 
-All four exemplars below have been verified against `parse_program`, canonical round-trip `format_program`, `compile_geometry`, strict `audit_scene(enforce_physical_contact=True)` (`0` collisions, `0` contact violations, `0` Z-fighting), `compile_vanilla_atlas`, target exporters, and 12-frame swept `audit_behavior_clip` (`stance_slip <= 0.011u`).
+All five exemplars below have been verified against `parse_program`, canonical round-trip `format_program`, `compile_geometry`, `audit_scene(enforce_physical_contact=True)` (`0` collisions, `0` contact violations, `0` Z-fighting), `compile_vanilla_atlas`, target exporters, and 12-frame swept `audit_behavior_clip` (`stance_slip < 0.02u`).
 
 ### 9.1 Tier 1 (`tier_1_simple`) — Static Prop / Block Multipart (`java_modern`)
 
@@ -911,6 +922,240 @@ def rotor_vane(span=4, chord=2) {
 }
 ```
 
+### 9.5 Tier 4 Colossal Vehicle (`tier_4_masterwork`, `audit_profile: sculpted`) — Walking Citadel Fortress (`blend_with` Prow & Radial Dome + Continuous `spin` Drivetrain + 4-Leg `foot_cycle` IK)
+
+```dsl
+// Tier 4 (Colossal Sculpted Moving Castle Vehicle): Walking Steam Citadel
+@meta { archetype: entity, target_profile: geckolib, texel_density: 16, audit_profile: sculpted }
+
+@palette {
+  ashlar_masonry: ramp(base_lch=[0.56, 0.03, 78], steps=8, hue_shift=[-3, 3])
+  riveted_armor: ramp(base_lch=[0.42, 0.08, 245], steps=8, hue_shift=[-4, 4])
+  forged_brass: ramp(base_lch=[0.72, 0.12, 82], steps=6)
+  fortress_timber: ramp(base_lch=[0.50, 0.09, 58], steps=6)
+  boiler_firebox: ramp(base_lch=[0.74, 0.21, 38], steps=6, emissive=true)
+}
+
+@rig {
+  root bone chassis_hull {
+    pivot_local: [0, 20, 0]
+    box main_hull { size: [18, 8, 24], material: riveted_armor }
+    box underbelly_keel place(base_box=main_hull, anchor=[0, -1, 0], align=[0, 0.45, 0]) {
+      size: [12, 4, 20], material: riveted_armor, rotate: [12, 0, 0]
+    }
+    box boiler_core place(base_box=main_hull, anchor=[0, 0.1, -1], align=[0, 0, 0.8]) {
+      size: [12, 7, 6], material: boiler_firebox
+    }
+    box timber_deck place(base_box=main_hull, anchor=[0, 1, 0], align=[0, -1, 0]) {
+      size: [16, 2, 22], material: fortress_timber
+    }
+    locator helm_bridge_seat { offset: [0, 18, 6], role: rider_seat }
+
+    bone prow_wing_l attach(parent_box=main_hull, anchor=[-0.55, 0, 1], align=[0, 0, -0.5]) mirror_x(prow_wing_r) {
+      rest_euler: [0, 26, 0]
+      joint_limits: [[-5, 5], [-5, 5], [-5, 5]]
+      box prow_plate_l { size: [8, 7, 6], material: riveted_armor, blend_with: [prow_wing_r__prow_plate_l] }
+      box ram_spur_l place(base_box=prow_plate_l, anchor=[0, -0.6, 1], align=[0, 0.3, -0.4]) {
+        size: [4, 3, 4], material: forged_brass, rotate: [20, 0, 0], blend_with: [prow_wing_r__ram_spur_l]
+      }
+    }
+
+    bone citadel_keep attach(parent_box=timber_deck, anchor=[0, 1, -0.18], align=[0, -1, 0]) {
+      joint_limits: [[-4, 4], [-6, 6], [-4, 4]]
+      box keep_walls { size: [14, 10, 14], material: ashlar_masonry }
+      box buttress_fore place(base_box=keep_walls, anchor=[0, -0.1, 1], align=[0, 0, -0.5]) {
+        size: [6, 7, 3], material: ashlar_masonry, rotate: [18, 0, 0]
+      }
+      box parapet_aft place(base_box=keep_walls, anchor=[0, 1, -0.85], align=[0, -1, 0]) {
+        size: [6, 2, 2], material: ashlar_masonry
+      }
+      locator periscope_focus { offset: [0, 14, 7], role: camera_focus }
+
+      bone corner_turret_fl attach(parent_box=keep_walls, anchor=[-0.85, 1, 0.85], align=[0, -1, 0]) mirror_x(corner_turret_fr) {
+        joint_limits: [[-5, 5], [-5, 5], [-5, 5]]
+        box watchtower_fl { size: [4, 6, 4], material: ashlar_masonry }
+        box spire_roof_fl place(base_box=watchtower_fl, anchor=[0, 1, 0], align=[0, -0.6, 0]) {
+          size: [3, 4, 3], material: riveted_armor, rotate: [0, 45, 0]
+        }
+      }
+
+      bone bastion_drum attach(parent_box=keep_walls, anchor=[0, 1, 0], align=[0, -1, 0]) {
+        joint_limits: [[-4, 4], [-180, 180], [-4, 4]]
+        box drum_core { size: [6, 4, 6], material: ashlar_masonry }
+        box cupola_pedestal place(base_box=drum_core, anchor=[0, 1, 0], align=[0, -1, 0]) {
+          size: [3, 3, 3], material: ashlar_masonry
+        }
+        box cupola_crown place(base_box=cupola_pedestal, anchor=[0, 1, 0], align=[0, -1, 0]) {
+          size: [4, 2, 4], material: forged_brass
+        }
+
+        bone dome_rib joint(parent=drum_core, at=[0, 2, 2.5], align=[0, -0.8, 0.5]) radial(count=4, axis=y) {
+          rest_euler: [-22, 0, 0]
+          joint_limits: [[-4, 4], [-4, 4], [-4, 4]]
+          box arch_slab { size: [3, 3, 2], material: ashlar_masonry, blend_with: [dome_rib_r1__arch_slab, cupola_pedestal, cupola_crown] }
+        }
+
+        bone beacon_rotor attach(parent_box=cupola_crown, anchor=[0, 1, 0], align=[0, -1, 0]) {
+          joint_limits: [[-5, 5], [-180, 180], [-5, 5]]
+          box lantern_spindle { size: [2, 5, 2], material: forged_brass }
+          box beacon_lens place(base_box=lantern_spindle, anchor=[0, 1, 0], align=[0, -1, 0]) {
+            size: [4, 3, 4], material: boiler_firebox
+          }
+        }
+      }
+
+      bone windmill_mast attach(parent_box=parapet_aft, anchor=[0, 1, 0], align=[0, -1, 0]) {
+        joint_limits: [[-6, 6], [-6, 6], [-6, 6]]
+        box mast_post { size: [2, 10, 2], material: fortress_timber }
+        box mast_boom place(base_box=mast_post, anchor=[0, 0.85, -1], align=[0, 0, 1]) {
+          size: [2, 2, 3], material: fortress_timber
+        }
+
+        bone windmill_hub attach(parent_box=mast_boom, anchor=[0, 0, -1], align=[0, 0, 1]) {
+          joint_limits: [[-5, 5], [-5, 5], [-180, 180]]
+          box hub_boss { size: [3, 3, 2], material: forged_brass }
+
+          bone vane_arm joint(parent=hub_boss, at=[0, 1.5, -0.5], align=[0, -1, 0]) radial(count=4, axis=z) {
+            joint_limits: [[-5, 5], [-5, 5], [-5, 5]]
+            box sail_spar { size: [2, 5, 1], material: fortress_timber }
+          }
+        }
+      }
+    }
+
+    bone smokestack_l attach(parent_box=boiler_core, anchor=[-0.65, 1, -0.45], align=[0, -1, 0]) mirror_x(smokestack_r) {
+      rest_euler: [-8, 0, 0]
+      joint_limits: [[-18, 18], [-12, 12], [-18, 18]]
+      box flue_base_l { size: [4, 3, 4], material: riveted_armor }
+      box flue_pipe_l place(base_box=flue_base_l, anchor=[0, 1, 0], align=[0, -1, 0]) {
+        size: [3, 9, 3], material: riveted_armor
+      }
+      locator exhaust_vfx_l { offset: [0, 12, 0], role: vfx_emitter }
+    }
+
+    bone fore_cannon_turret attach(parent_box=main_hull, anchor=[0, 1, 0.92], align=[0, -1, 0]) {
+      joint_limits: [[-5, 5], [-90, 90], [-5, 5]]
+      box turret_barbette { size: [5, 3, 4], material: ashlar_masonry }
+      box turret_cupola place(base_box=turret_barbette, anchor=[0, 1, 0], align=[0, -1, 0]) {
+        size: [6, 3, 4], material: riveted_armor
+      }
+
+      bone cannon_barrel attach(parent_box=turret_cupola, anchor=[0, 0.2, 1], align=[0, 0, -1]) {
+        rest_euler: [-6, 0, 0]
+        joint_limits: [[-28, 12], [-5, 5], [-5, 5]]
+        box ordnance_tube { size: [2, 2, 8], material: forged_brass }
+        locator cannon_muzzle { offset: [0, 0, 8], role: vfx_emitter }
+      }
+    }
+
+    bone flywheel_l attach(parent_box=main_hull, anchor=[-1, 0.35, -0.12], align=[1, 0, 0]) mirror_x(flywheel_r) {
+      joint_limits: [[-180, 180], [-5, 5], [-5, 5]]
+      box drive_wheel_l { size: [2, 6, 6], material: forged_brass }
+    }
+
+    bone pinion_gear_l attach(parent_box=main_hull, anchor=[-1, 0.35, 0.45], align=[1, 0, 0]) mirror_x(pinion_gear_r) {
+      joint_limits: [[-180, 180], [-5, 5], [-5, 5]]
+      box spur_gear_l { size: [2, 3, 3], material: forged_brass }
+    }
+
+    bone leg_fore_hip_l attach(parent_box=main_hull, anchor=[-1, -0.55, 0.78], align=[1, 0.7, 0]) mirror_x(leg_fore_hip_r) {
+      rest_euler: [10, 0, 0]
+      joint_limits: [[-55, 55], [-20, 20], [-20, 20]]
+      box fore_femur_girdle_l { size: [4, 9, 4], material: riveted_armor }
+      box piston_cyl_fl place(base_box=fore_femur_girdle_l, anchor=[-1, 0.2, 0], align=[0.4, 0, 0]) {
+        size: [2, 6, 3], material: forged_brass, rotate: [0, 0, 14]
+      }
+
+      bone leg_fore_shin_l attach(parent_box=fore_femur_girdle_l, anchor=[0, -1, 0], align=[0, 1, 0]) {
+        rest_euler: [-10, 0, 0]
+        joint_limits: [[-65, 45], [-15, 15], [-15, 15]]
+        box fore_strut_l { size: [4, 9, 4], material: riveted_armor }
+        box fore_foot_pad_l place(base_box=fore_strut_l, anchor=[0, -1, 0.2], align=[0, 1, 0]) {
+          size: [6, 2, 7], material: forged_brass
+        }
+        locator pad_fl_effector { offset: [0, -11, 0.5], role: ik_effector }
+      }
+    }
+
+    bone leg_aft_hip_l attach(parent_box=main_hull, anchor=[-1, -0.55, -0.78], align=[1, 0.7, 0]) mirror_x(leg_aft_hip_r) {
+      rest_euler: [-10, 0, 0]
+      joint_limits: [[-55, 55], [-20, 20], [-20, 20]]
+      box aft_femur_girdle_l { size: [4, 9, 4], material: riveted_armor }
+
+      bone leg_aft_shin_l attach(parent_box=aft_femur_girdle_l, anchor=[0, -1, 0], align=[0, 1, 0]) {
+        rest_euler: [10, 0, 0]
+        joint_limits: [[-65, 45], [-15, 15], [-15, 15]]
+        box aft_strut_l { size: [4, 9, 4], material: riveted_armor }
+        box aft_foot_pad_l place(base_box=aft_strut_l, anchor=[0, -1, 0.2], align=[0, 1, 0]) {
+          size: [6, 2, 7], material: forged_brass
+        }
+        locator pad_hl_effector { offset: [0, -11, 0.5], role: ik_effector }
+      }
+    }
+  }
+}
+
+@materials {
+  ashlar_masonry: process(family=weathered_stone, roughness=0.82, porosity=0.48, wear=0.18, weld_group=citadel_stone)
+  riveted_armor: process(family=painted_metal, roughness=0.36, coating=0.48, wear=0.65, weld_group=hull_plates)
+  forged_brass: process(family=brushed_metal, roughness=0.26, wear=0.22)
+  fortress_timber: process(family=solid_wood, roughness=0.64, porosity=0.38, wear=0.24)
+  boiler_firebox: process(family=polymer_dielectric, roughness=0.25, emissive=0.85)
+}
+
+@style { target_encoding: vanilla, quantize_ramp: false, bevel_highlight: 0.1 }
+
+@muscles {
+  muscle hydraulic_ram_fl {
+    origin_bone: chassis_hull, insertion_bone: leg_fore_hip_l, action_axis: x, moment_arm_deg: -28,
+    tendon_coupling: [leg_fore_shin_l, x, 0.35], belly_box: piston_cyl_fl, bulge_inflate: 0.1
+  }
+  muscle hydraulic_ram_fr {
+    origin_bone: chassis_hull, insertion_bone: leg_fore_hip_r, action_axis: x, moment_arm_deg: -28,
+    tendon_coupling: [leg_fore_hip_r__leg_fore_shin_l, x, 0.35], belly_box: leg_fore_hip_r__piston_cyl_fl, bulge_inflate: 0.1
+  }
+}
+
+@kinematics {
+  ik_chain gait_fl { bones: [leg_fore_hip_l, leg_fore_shin_l], effector: [0, -10, 0.5], hinge_axis: x, pole: [0, 0, 1] }
+  ik_chain gait_fr { bones: [leg_fore_hip_r, leg_fore_hip_r__leg_fore_shin_l], effector: [0, -10, 0.5], hinge_axis: x, pole: [0, 0, 1] }
+  ik_chain gait_hl { bones: [leg_aft_hip_l, leg_aft_shin_l], effector: [0, -10, 0.5], hinge_axis: x, pole: [0, 0, -1] }
+  ik_chain gait_hr { bones: [leg_aft_hip_r, leg_aft_hip_r__leg_aft_shin_l], effector: [0, -10, 0.5], hinge_axis: x, pole: [0, 0, -1] }
+  look_chain turret_aim { bones: [fore_cannon_turret, cannon_barrel], weight_decay: 0.65 }
+  spring smokestack_l { stiffness: 38, damping: 6.0 }
+  spring smokestack_r { stiffness: 38, damping: 6.0 }
+}
+
+@behavior {
+  clip fortress_march {
+    duration_s: 2.0
+    ik_drive gait_fl: foot_cycle(stride=5.0, lift=2.0, phase_deg=0)
+    ik_drive gait_hr: foot_cycle(stride=5.0, lift=2.0, phase_deg=0)
+    ik_drive gait_fr: foot_cycle(stride=5.0, lift=2.0, phase_deg=180)
+    ik_drive gait_hl: foot_cycle(stride=5.0, lift=2.0, phase_deg=180)
+    track flywheel_l: spin(axis=x, amp_deg=360, freq_hz=0.5)
+    track flywheel_r: spin(axis=x, amp_deg=360, freq_hz=0.5)
+    track pinion_gear_l: spin(axis=x, amp_deg=-720, freq_hz=0.5)
+    track pinion_gear_r: spin(axis=x, amp_deg=-720, freq_hz=0.5)
+    track windmill_hub: spin(axis=z, amp_deg=360, freq_hz=0.5)
+    track beacon_rotor: spin(axis=y, amp_deg=360, freq_hz=0.5)
+    track fore_cannon_turret: wave(axis=y, amp_deg=22, freq_hz=0.5)
+  }
+
+  state boiler_overdrive {
+    pose_bias cannon_barrel: [-10, 0, 0]
+    muscle_tone hydraulic_ram_fl: 0.25
+    muscle_tone hydraulic_ram_fr: 0.25
+    material_mod boiler_firebox: { emissive: 1.6, moisture: 0.05, wear_delta: 0.08 }
+  }
+}
+
+@controller {
+  initial: fortress_march
+  fortress_march -> boiler_overdrive when steam_pressure >= 0.85, blend 0.3
+}
+```
+
 ---
 
 ## 10. Dataset Gap Analysis, 5 Assistant Supervision Modes & Copy-Paste External-AI Generation Kit
@@ -967,7 +1212,7 @@ You are a Principal 3D Technical Artist, Biomechanical Rigger, and Compiler Engi
      - `use macro(...) as pref` -> root `pref`, descendants `pref_<child_name>` (SINGLE underscore `_`!)
      - `chain ch ... segments=K` -> bones `ch_1 .. ch_K`, boxes `ch_{k}_<box_name>` (SINGLE underscore `_`!)
    - When `@meta.size_step` is omitted (`1.0`), ALL `box`/`plane` `size` literals MUST be positive integers (`[8, 4, 6]`, never `[8.0, 4.0, 6.0]`). If sub-unit detail is needed, declare `size_step: 0.5` or `size_step: 0.25` in `@meta`.
-   - Omit `audit_profile` (defaults to `strict`).
+   - Use default `strict` (omit `audit_profile`) for flush mechanical/architectural fits, OR declare `audit_profile: sculpted` when constructing sloped snouts/bevels, `> 60°` horns, imbricated dorsal armor, or chamfered/domed vehicles (`blend_with: [...]`, `0` swallowed boxes, `<= 0.85 * t_med` overlap). **Never** emit `audit_profile: authored`.
    - Animated `@behavior` clips MUST use `target_profile: bedrock_entity`, `geckolib`, or `bbmodel_5` (never `java_modern` or `java_legacy`, and `archetype: entity` must never pair with `java_*`).
 3. **Strict `P1-02` Flush Contact & Zero-Overlap 15-Axis SAT**:
    - Right-handed Y-up coordinates: `+X` East/Right, `+Y` Up (ground at `Y = 0`), `+Z` South/Front.
@@ -1032,8 +1277,8 @@ def verify_record(rec: dict) -> tuple[bool, str, dict | None]:
 
     try:
         program = parse_program(raw_dsl)
-        if program.meta.audit_profile != "strict":
-            return False, "non_strict_audit_profile", None
+        if program.meta.audit_profile not in ("strict", "sculpted"):
+            return False, "disallowed_authored_audit_profile", None
         formatted = format_program(program)
         if parse_program(formatted) != program:
             return False, "ast_roundtrip_mismatch", None
@@ -1041,7 +1286,7 @@ def verify_record(rec: dict) -> tuple[bool, str, dict | None]:
         scene = compile_geometry(program)
         static_audit = audit_scene(scene, enforce_physical_contact=True)
         if not static_audit["passed"]:
-            return False, f"strict_static_audit_failed:collisions={len(static_audit['collision_pairs'])},contacts={len(static_audit['contact_violations'])}", None
+            return False, f"static_audit_failed({program.meta.audit_profile}):collisions={len(static_audit['collision_pairs'])},contacts={len(static_audit['contact_violations'])}", None
 
         # Verify surface domain + RGBA texture compilation
         mat_prog = MaterialProgram.from_program(program)
@@ -1091,6 +1336,8 @@ def verify_record(rec: dict) -> tuple[bool, str, dict | None]:
         "locator_count": len(scene.locators),
         "material_slot_count": len(program.palettes),
         "clip_count": len(program.behavior.clips) if program.behavior else 0,
+        "audit_profile": program.meta.audit_profile,
+        "sculpted_overlap_count": len(static_audit.get("sculpted_overlap_pairs", ())),
         "audit_passed": True,
         "clip_stance_slip": clip_reports,
     }

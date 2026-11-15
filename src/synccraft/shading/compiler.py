@@ -510,7 +510,7 @@ def compile_vanilla_atlas(
     world_state: WorldState,
     *,
     uv_layout: dict[str, Any] | None = None,
-    max_width: int = 512,
+    max_width: int | None = None,
     padding: int = 1,
     box_order: list[str] | None = None,
     face_order: tuple[str, ...] | None = None,

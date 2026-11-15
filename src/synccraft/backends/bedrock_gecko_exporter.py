@@ -234,9 +234,16 @@ def _extract_so3_euler_keyframe_deltas(samples: list[Any], rest_bone: Any) -> li
         if raw_delta_req is None or np.allclose(raw_delta_req, 0.0, atol=1e-12):
             cur = prev + (((-prev) + 180.0) % 360.0 - 180.0)
         else:
-            posed_e = np.asarray(s.scene.bone_by_name[bname].local_euler, dtype=np.float64)
-            raw_d = posed_e - rest_e
-            cur = prev + (((raw_d - prev) + 180.0) % 360.0 - 180.0)
+            posed_b = s.scene.bone_by_name[bname]
+            req_arr = np.asarray(raw_delta_req, dtype=np.float64)
+            parent_rot = s.scene.bone_by_name[posed_b.parent_name].rotation if posed_b.parent_name else np.eye(3)
+            local_rot = parent_rot.T @ posed_b.rotation
+            if np.allclose(euler_xyz_matrix(rest_e + req_arr), local_rot, atol=1e-7):
+                cur = req_arr.copy()
+            else:
+                posed_e = np.asarray(posed_b.local_euler, dtype=np.float64)
+                raw_d = posed_e - rest_e
+                cur = prev + (((raw_d - prev) + 180.0) % 360.0 - 180.0)
         prev = cur
         out.append((float(cur[0]), float(cur[1]), float(cur[2])))
     return out
@@ -339,7 +346,7 @@ def _serialize_behavior_animations(
                 animation_mode == "molang"
                 and bool(b_tracks)
                 and bname not in coupled_bones
-                and all(tr.law == "wave" for tr in b_tracks)
+                and all(tr.law in ("wave", "spin") for tr in b_tracks)
                 and len({tr.axis for tr in b_tracks}) == len(b_tracks)
             )
             if can_emit_pure_molang:
@@ -350,6 +357,18 @@ def _serialize_behavior_animations(
                     axis_sign = -1.0 if tr.axis in ("x", "y") else 1.0
                     amp_bed = axis_sign * float(tr.amp_deg)
                     bias_bed = axis_sign * float(tr.bias_deg)
+                    if tr.law == "spin":
+                        rate_deg_s = round(amp_bed * float(tr.freq_hz), 4)
+                        const_off = round(bias_bed + amp_bed * (float(tr.phase_deg) / 360.0), 4)
+                        if abs(rate_deg_s) < 1e-6:
+                            molang_vec[ax_i] = const_off
+                        else:
+                            core = f"query.anim_time * {rate_deg_s}"
+                            if abs(const_off) > 1e-6:
+                                c_sign = "+" if const_off >= 0 else "-"
+                                core = f"{core} {c_sign} {round(abs(const_off), 4)}"
+                            molang_vec[ax_i] = core
+                        continue
                     deg_per_s = round(float(tr.freq_hz) * 360.0, 4)
                     if abs(amp_bed) < 1e-6:
                         molang_vec[ax_i] = round(bias_bed, 4)
@@ -379,8 +398,11 @@ def _serialize_behavior_animations(
 
             if clip.loop:
                 v_last = np.asarray(frame_vecs[-1], dtype=np.float64)
-                v0_arr = np.asarray(frame_vecs[0], dtype=np.float64)
-                v_wrap = v_last + (((v0_arr - v_last) + 180.0) % 360.0 - 180.0)
+                if any(tr.law == "spin" for tr in b_tracks) and len(frame_vecs) >= 2:
+                    v_wrap = v_last + (v_last - np.asarray(frame_vecs[-2], dtype=np.float64))
+                else:
+                    v0_arr = np.asarray(frame_vecs[0], dtype=np.float64)
+                    v_wrap = v_last + (((v0_arr - v_last) + 180.0) % 360.0 - 180.0)
                 bed_wrap = sync_euler_to_bedrock(v_wrap, verify_o3=False)
                 rot_kfs[_fmt_time_key(clip.duration_s)] = vector([round(bed_wrap[0], 4), round(bed_wrap[1], 4), round(bed_wrap[2], 4)])
 

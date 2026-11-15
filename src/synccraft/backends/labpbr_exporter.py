@@ -44,7 +44,7 @@ def export_labpbr_1_3(
     world_state: WorldState,
     *,
     uv_layout: dict[str, Any] | None = None,
-    max_width: int = 512,
+    max_width: int | None = None,
     padding: int = 1,
 ) -> dict[str, Any]:
     """Export ``WorldState`` to LabPBR 1.3 PNG byte streams and audited descriptor."""

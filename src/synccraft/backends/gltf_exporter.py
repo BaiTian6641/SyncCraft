@@ -67,7 +67,7 @@ def export_gltf_pbr(
     *,
     name: str = "SyncCraft_WorldAsset",
     uv_layout: dict[str, Any] | None = None,
-    max_width: int = 512,
+    max_width: int | None = None,
     padding: int = 1,
 ) -> dict[str, Any]:
     """Export ``WorldState`` to a complete glTF 2.0 PBR JSON document + texture bundle."""

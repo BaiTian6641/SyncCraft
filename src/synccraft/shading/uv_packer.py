@@ -40,7 +40,7 @@ def allocate_uv_layout(
     program,
     scene,
     *,
-    max_width=512,
+    max_width=None,
     padding=1,
     box_order=None,
     face_order=None,
@@ -49,9 +49,11 @@ def allocate_uv_layout(
 
     Keeping layout allocation separate from material evaluation allows repacking
     UVs (changing island order, max_width, or padding) without altering the
-    underlying rest-space material pattern.
+    underlying rest-space material pattern. When ``max_width`` is ``None``, sheets
+    up to ``512x512`` use ``512`` identically while colossal entities/vehicles
+    auto-expand power-of-two width up to ``8192``.
     """
-    if type(max_width) is not int or max_width < 8:
+    if max_width is not None and (type(max_width) is not int or max_width < 8):
         raise ValueError("max_width must be an integer >= 8")
     if type(padding) is not int or padding < 1:
         raise ValueError("padding must be an integer >= 1")
@@ -76,16 +78,17 @@ def allocate_uv_layout(
             raise ValueError("face_order must be an exact permutation of the six cuboid faces")
         ordered_faces = tuple(face_order)
 
-    x = y = padding
-    row_height = 0
-    occupied_width = 1
-    placements = []
-    faces = {b.name: {} for b in scene.boxes}
+    def pow2(v):
+        return 1 << (int(v) - 1).bit_length()
+
+    is_authored = getattr(program.meta, "audit_profile", "strict") == "authored"
+    measured_islands = []
+    widest_needed = 8
+    total_padded_area = 0
     for box in ordered_boxes:
         sx, sy, sz = map(float, box.size)
         sizes = {"north": (sx, sy), "south": (sx, sy), "east": (sz, sy),
                  "west": (sz, sy), "up": (sx, sz), "down": (sx, sz)}
-        is_authored = getattr(program.meta, "audit_profile", "strict") == "authored"
         for face in ordered_faces:
             u, v = sizes[face]
             u_is_pos_int = math.isclose(u, round(u), abs_tol=1e-9) and u > 0.0
@@ -97,22 +100,39 @@ def allocate_uv_layout(
             ):
                 raise ValueError("texel_density produces fractional texels; integer atlas required")
             w, h = max(1, int(round(fw))), max(1, int(round(fh)))
-            if min(w, h) < 1 or w + 2 * padding > max_width:
-                raise ValueError("face cannot fit atlas width at the requested density")
-            if x + w + padding > max_width:
-                x = padding
-                y += row_height + 2 * padding
-                row_height = 0
-            faces[box.name][face] = [x, y, x + w, y + h]
-            placements.append((box.name, face, x, y, w, h, box.material))
-            row_height = max(row_height, h)
-            occupied_width = max(occupied_width, x + w + padding)
-            x += w + 2 * padding
-    if not placements:
+            measured_islands.append((box.name, face, w, h, box.material))
+            widest_needed = max(widest_needed, w + 2 * padding)
+            total_padded_area += (w + 2 * padding) * (h + 2 * padding)
+
+    if not measured_islands:
         raise ValueError("cannot pack an empty scene")
 
-    def pow2(v):
-        return 1 << (int(v) - 1).bit_length()
+    if max_width is None:
+        if widest_needed <= 512 and total_padded_area <= 512 * 512:
+            effective_max_width = 512
+        else:
+            target_side = max(widest_needed, int(math.ceil(math.sqrt(total_padded_area * 1.35))))
+            effective_max_width = min(8192, max(512, pow2(target_side)))
+    else:
+        effective_max_width = max_width
+
+    x = y = padding
+    row_height = 0
+    occupied_width = 1
+    placements = []
+    faces = {b.name: {} for b in scene.boxes}
+    for bname, face, w, h, mat in measured_islands:
+        if min(w, h) < 1 or w + 2 * padding > effective_max_width:
+            raise ValueError("face cannot fit atlas width at the requested density")
+        if x + w + padding > effective_max_width:
+            x = padding
+            y += row_height + 2 * padding
+            row_height = 0
+        faces[bname][face] = [x, y, x + w, y + h]
+        placements.append((bname, face, x, y, w, h, mat))
+        row_height = max(row_height, h)
+        occupied_width = max(occupied_width, x + w + padding)
+        x += w + 2 * padding
 
     width, height = pow2(occupied_width), pow2(y + row_height + padding)
     if max(width, height) > 8192:
@@ -126,7 +146,7 @@ def allocate_uv_layout(
     }
 
 
-def build_atlas(program, scene, *, max_width=512, padding=1):
+def build_atlas(program, scene, *, max_width=None, padding=1):
     """Return (descriptor, PNG bytes). Every box face gets a unique padded island.
 
     texel_density means pixels per 16 model units. Fractional per-face dimensions

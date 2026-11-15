@@ -699,6 +699,8 @@ def _evaluate_track_angle(
         norm_t = min(1.0, max(0.0, time_s / max(1e-6, duration_s)))
         env = math.sin(math.pi * norm_t) ** 2
         return bias_deg + amp_deg * env * math.sin(two_pi_u)
+    if law == "spin":
+        return bias_deg + amp_deg * (time_s * freq_hz + phase_deg / 360.0)
     return bias_deg
 
 
