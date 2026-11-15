@@ -21,16 +21,19 @@ from typing import Any
 
 import numpy as np
 
+from synccraft.audit.sync_audit import audit_scene
 from synccraft.dsl.ast_nodes import (
     Attach,
     Bone,
     Box,
+    Locator,
     MaterialDecl,
     Place,
     Program,
     StyleDecl,
+    validate_program,
 )
-from synccraft.kinematics.se3_chain import Scene
+from synccraft.kinematics.se3_chain import Scene, compile_geometry
 
 HALTON_PRIMES: tuple[int, ...] = (2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37)
 
@@ -95,22 +98,33 @@ HUMAN_FAMILY_NOUNS: dict[str, tuple[str, ...]] = {
     "steam_rail_locomotive": ("boiler-and-smokestack steam rail locomotive", "cowcatcher-fitted iron railway engine", "coupled-wheel vintage steam train engine", "cab-and-tender rail locomotive"),
     "twin_rotor_helicopter_drone": ("articulated rotorcraft helicopter or heavy drone", "skid-landed rotary-wing utility helicopter", "tail-boom or twin-rotor aerial vehicle", "search-and-rescue turbine helicopter"),
     "cargo_tugboat_vessel": ("pilothouse harbor cargo tugboat vessel", "fendered marine pusher tug with twin funnels", "rudder-and-propeller workboat hull", "coastal utility towboat"),
-    # Unseen held-out families (used when generating prompts for test_unseen probes!)
-    "mechanical_crossbow": ("windlass siege arbalest crossbow", "ratcheted steel-prod crossbow", "lever-cocked mechanical crossbow"),
-    "hand_lantern": ("caged brass storm lantern", "glazed wrought-iron hand lantern", "bail-handled beacon lamp"),
-    "floating_ring_staff": ("arcane staff with levitating gyroscopic rings", "halo-crowned archmage pole-staff", "floating-orb ritual scepter"),
+    # Additional multi-domain & complex evaluation families
+    "mechanical_crossbow": ("windlass siege arbalest crossbow", "ratcheted steel-prod crossbow", "lever-cocked composite arbalest"),
+    "hand_lantern": ("caged brass storm lantern", "glazed wrought-iron beacon lantern", "bail-handled oil lamp"),
+    "floating_ring_staff": ("arcane scepter with levitating gyroscopic rings", "halo-crowned archmage pole-staff", "floating-orb ritual scepter"),
     "weeping_bonsai_arch": ("cascading root-over-rock weeping bonsai tree", "scholar-stone miniature arch pine", "tray-planted windswept bonsai"),
     "tripod_telescope": ("brass-tubed equatorial tripod telescope", "surveyor's alt-azimuth observatory refractor", "geared astronomical spyglass on tripod"),
-    "anvil_forge": ("blacksmith horn anvil and hooded coal hearth", "smithy forge with chimney and anvil block", "ironworker's hearth and London-pattern anvil"),
+    "anvil_forge": ("blacksmith horn anvil and hooded coal hearth", "smithy hearth with chimney and anvil block", "ironworker's hearth and London-pattern anvil"),
     "hydraulic_gantry_crane": ("twin-leg industrial gantry crane with hoist trolley", "hydraulic shipyard portal crane", "overhead beam girder crane"),
-    "articulated_forklift_loader": ("counterbalanced mast forklift warehouse loader", "twin-tine hydraulic pallet forklift vehicle", "compact industrial yard lift truck"),
-    "submersible_rov_craft": ("tethered deep-sea submersible ROV with twin manipulators", "syntactic-foam underwater research vehicle", "vectored-thruster marine inspection ROV"),
+    "articulated_forklift_loader": ("counterbalanced mast forklift warehouse loader", "twin-tine hydraulic pallet lift vehicle", "compact industrial yard lift truck"),
+    "submersible_rov_craft": ("tethered deep-sea submersible craft with twin manipulators", "syntactic-foam underwater research vehicle", "vectored-thruster marine inspection craft"),
     "folding_windmill": ("lattice-sailed timber smock windmill", "four-vane grain mill tower", "cantilevered wind-pump millhouse"),
     "coastal_lighthouse_keep": ("tapered masonry coastal lighthouse tower", "beacon headland keep with lantern cupola", "sea-wall lighthouse and keeper annex"),
-    "hexapod_beetle": ("six-legged armored rhinoceros beetle", "iridescent-carapace hexapod insect", "mandibled stag-or-hercules beetle"),
-    "heavy_tail_tyrannosaur": ("bipedal heavy-tailed theropod dinosaur", "jawed tyrannosaur with counterbalanced tail", "digitigrade predatory saurian"),
-    "segmented_sea_dragon": ("undulating multi-segment sea dragon leviathan", "frilled serpentine ocean wyrm", "bioluminescent finned sea serpent"),
-    "crowned_zilant": ("crowned bipedal winged serpent zilant", "mythic heraldic zilant wyrm with golden crest", "taloned winged serpent-dragon zilant"),
+    "hexapod_beetle": ("six-legged armored rhinoceros beetle", "iridescent-carapace six-limbed insect", "mandibled stag-or-hercules beetle"),
+    "heavy_tail_tyrannosaur": ("bipedal heavy-tailed theropod dinosaur", "jawed theropod saurian with counterbalanced tail", "digitigrade predatory saurian"),
+    "segmented_sea_dragon": ("undulating multi-segment pelagic dragon leviathan", "frilled serpentine ocean wyrm", "bioluminescent finned marine serpent"),
+    "crowned_zilant": ("crowned bipedal winged serpent wyvern", "mythic heraldic winged wyrm with golden three-prong crest", "taloned winged serpent-dragon"),
+    # Clean-room Apex musculoskeletal & interactive families
+    "apex_flying_wyvern": ("large biomechanical flying wyvern with nested wing digits", "crested aerial wyvern with articulated patagium wings", "raptorial soaring wyvern with segmented tail"),
+    "brute_theropod_wyvern": ("heavy bipedal theropod wyvern with dorsal ridge plates", "crushing-jawed terrestrial brute wyvern", "counterbalanced heavy-skulled saurian wyvern"),
+    "pelagic_leviathan_wyvern": ("undulating pelagic sea leviathan with hydrofoil fins", "long-bodied abyssal marine wyvern", "frilled oceanic leviathan swimmer"),
+    "fanged_thunder_wyvern": ("quadrupedal storm wyvern with dorsal capacitor spines", "muscular four-legged fulgur wyvern", "insulated-mane clawed thunder drake"),
+    "armored_arthropod_colossus": ("multi-legged carapace arthropod colossus with pincers", "chitin-plated siege arachnid-crustacean", "heavy chelicerate carapace colossus"),
+    "morphing_switch_blade_axe": ("transforming mechanical switch-blade pollaxe", "phial-charged folding cleaver-axe weapon", "hinged dual-mode mechanical war axe"),
+    "elemental_companion_critter": ("stylized elemental companion creature with expressive ears", "small agile quadruped companion critter with tail plume", "bright-eyed stylized companion beast"),
+    "modular_botanical_healing_station": ("modular botanical rejuvenation and canister station", "dual-cradle bio-botanical recovery console", "articulated botanical infusion station"),
+    "elder_calamity_dragon": ("six-limbed calamity elder dragon with great wings", "four-legged dual-winged ancient obsidian dragon", "horned six-limbed cataclysm dragon"),
+    "relic_automaton_guardian": ("ancient overgrown basalt clockwork automaton guardian", "cyclopean stone-and-bronze relic golem", "steam-flywheel monolith guardian construct"),
 }
 
 # Semantic stem synonym banks per register so remapped symbols stay meaningful yet diverse
@@ -309,42 +323,45 @@ def _remap_single_identifier(
     return f"{clean}{side_suffix}"
 
 
-def _topological_permute_bone_items(items: list[Box | Bone], rng: random.Random) -> list[Box | Bone]:
-    """Randomize sibling Box/Bone order inside a Bone while respecting all base_box/parent_box edges."""
+def _topological_permute_bone_items(
+    items: list[Box | Locator | Bone], rng: random.Random
+) -> list[Box | Locator | Bone]:
+    """Randomize sibling Box/Locator/Bone order inside a Bone while respecting all base_box/parent_box edges."""
     if len(items) <= 2:
         return list(items)
 
-    # Note ast_nodes.py line 264: first Box in a bone has place is None and MUST precede all other Boxes in that bone!
+    # First primary Box in a bone has place is None (or place.base_box is None) and MUST precede other Boxes!
     n = len(items)
-    box_index_by_name: dict[str, int] = {}
-    first_anchorless_box_idx: int | None = None
+    anchor_index_by_name: dict[str, int] = {}
+    first_primary_box_idx: int | None = None
     for idx, it in enumerate(items):
         if isinstance(it, Box):
-            box_index_by_name[it.name] = idx
-            if it.place is None and first_anchorless_box_idx is None:
-                first_anchorless_box_idx = idx
+            anchor_index_by_name[it.name] = idx
+            if (it.place is None or it.place.base_box is None) and first_primary_box_idx is None:
+                first_primary_box_idx = idx
+        elif isinstance(it, Locator):
+            anchor_index_by_name[it.name] = idx
 
     deps: dict[int, set[int]] = {i: set() for i in range(n)}
     for idx, it in enumerate(items):
         if isinstance(it, Box):
-            if first_anchorless_box_idx is not None and idx != first_anchorless_box_idx:
-                deps[idx].add(first_anchorless_box_idx)
-            if it.place is not None and it.place.base_box is not None and it.place.base_box in box_index_by_name:
-                deps[idx].add(box_index_by_name[it.place.base_box])
+            if first_primary_box_idx is not None and idx != first_primary_box_idx:
+                deps[idx].add(first_primary_box_idx)
+            if it.place is not None and it.place.base_box is not None and it.place.base_box in anchor_index_by_name:
+                deps[idx].add(anchor_index_by_name[it.place.base_box])
         elif isinstance(it, Bone):
-            if first_anchorless_box_idx is not None:
-                deps[idx].add(first_anchorless_box_idx)
-            if it.attach is not None and it.attach.parent_box in box_index_by_name:
-                deps[idx].add(box_index_by_name[it.attach.parent_box])
+            if first_primary_box_idx is not None:
+                deps[idx].add(first_primary_box_idx)
+            if it.attach is not None and it.attach.parent_box in anchor_index_by_name:
+                deps[idx].add(anchor_index_by_name[it.attach.parent_box])
 
     ready = [i for i in range(n) if not deps[i]]
     ordered_indices: list[int] = []
     placed: set[int] = set()
 
     while ready:
-        # Always place first_anchorless_box_idx first when ready so bone starts with its root box cleanly
-        if first_anchorless_box_idx is not None and first_anchorless_box_idx in ready:
-            pick = first_anchorless_box_idx
+        if first_primary_box_idx is not None and first_primary_box_idx in ready:
+            pick = first_primary_box_idx
             ready.remove(pick)
         else:
             pick = ready.pop(rng.randrange(len(ready)))
@@ -419,6 +436,9 @@ def diversify_program_ast(
             if isinstance(it, Box):
                 bx_new = alloc_symbol(it.name, "box")
                 desc_new_names.append(bx_new)
+            elif isinstance(it, Locator):
+                loc_new = alloc_symbol(it.name, "box")
+                desc_new_names.append(loc_new)
             elif isinstance(it, Bone):
                 sub_descs = collect_bone(it)
                 desc_new_names.append(symbol_map[it.name])
@@ -431,11 +451,11 @@ def diversify_program_ast(
 
     collect_bone(program.root)
 
-    # 2. Rewrite Bone tree with remapped symbols + randomized valid DAG item ordering
+    # 2. Rewrite Bone tree with remapped symbols + canonical root origin + randomized valid DAG item ordering
     permute_declarations = hvec[1] >= 0.20  # 80% of variants permute sibling/palette order
 
-    def rewrite_bone(b: Bone) -> Bone:
-        rewritten_children: list[Box | Bone] = []
+    def rewrite_bone(b: Bone, *, is_root: bool = False) -> Bone:
+        rewritten_children: list[Box | Locator | Bone] = []
         for it in b.items:
             if isinstance(it, Box):
                 new_place = None
@@ -452,8 +472,16 @@ def diversify_program_ast(
                         cullface=it.cullface,
                     )
                 )
+            elif isinstance(it, Locator):
+                rewritten_children.append(
+                    Locator(
+                        name=symbol_map[it.name],
+                        offset=it.offset,
+                        role=it.role,
+                    )
+                )
             else:
-                rewritten_children.append(rewrite_bone(it))
+                rewritten_children.append(rewrite_bone(it, is_root=False))
 
         if permute_declarations:
             rewritten_children = _topological_permute_bone_items(rewritten_children, rng)
@@ -469,11 +497,12 @@ def diversify_program_ast(
             )
         return Bone(
             name=symbol_map[b.name],
-            pivot_local=b.pivot_local,
+            pivot_local=(0.0, 0.0, 0.0) if is_root else b.pivot_local,
             rest_euler=b.rest_euler,
             attach=new_attach,
             mirror_name=symbol_map[b.mirror_name] if b.mirror_name else None,
             items=rewritten_children,
+            joint_limits=b.joint_limits,
         )
 
     new_palettes = [
@@ -489,7 +518,7 @@ def diversify_program_ast(
     if permute_declarations and len(new_palettes) > 1:
         rng.shuffle(new_palettes)
 
-    # 3. Physically grounded @materials & @style injection (~65% stratified coverage)
+    # 3. Physically grounded @materials & @style injection with small canonical deterministic seeds (1..N)
     emit_surface_materials = (hvec[2] < 0.65) or bool(program.materials)
     new_materials: list[MaterialDecl] = []
     new_style: StyleDecl | None = program.style
@@ -507,7 +536,7 @@ def diversify_program_ast(
                 (hvec[(3 + idx) % len(hvec)] + 0.17 * idx) % 1.0,
             )
             scale = round(0.65 + 1.55 * ((hvec[(4 + idx) % len(hvec)]) % 1.0), 3)
-            m_seed = int(100 + ((variant_index * 131 + idx * 37 + rng.randrange(997)) % 9000))
+            m_seed = int(idx + 1)
             new_materials.append(
                 MaterialDecl(
                     name=pal.name,
@@ -537,12 +566,17 @@ def diversify_program_ast(
     diversified = Program(
         meta=program.meta,
         palettes=new_palettes,
-        root=rewrite_bone(program.root),
+        root=rewrite_bone(program.root, is_root=True),
         shade=program.shade,
         ergonomics=program.ergonomics,
         materials=tuple(new_materials),
         style=new_style,
     )
+
+    # 4. Continuous rest-rotation broadening beyond the 24 discrete steps (SAT & envelope verified)
+    if program.meta.target_profile != "java_legacy" and hvec[0] < 0.80:
+        diversified = _broaden_continuous_rest_angles(diversified, rng=rng)
+
     info = {
         "naming_register": register,
         "declarations_permuted": permute_declarations,
@@ -551,6 +585,107 @@ def diversify_program_ast(
         "style_encoding": new_style.target_encoding if new_style is not None else "implicit_vanilla",
     }
     return diversified, info
+
+
+def _nudge_non_discrete_angle(val: float, rng: random.Random, max_mag: float) -> float:
+    """Perturb an angle to a 0.1-deg continuous value not lying on 7.5-deg or 11.25-deg discrete steps."""
+    sign = -1.0 if rng.random() < 0.5 else 1.0
+    delta = sign * rng.uniform(0.3, max_mag)
+    cand = round(val + delta, 1)
+    if abs(cand) < 0.1 or abs(cand % 7.5) < 1e-6 or abs(cand % 11.25) < 1e-6:
+        cand = round(cand + (0.3 * sign), 1)
+    return float(max(-85.0, min(85.0, cand)))
+
+
+def _check_diversified_bounds(program: Program, scene: Scene) -> bool:
+    lo, hi = (-48.0, 64.0) if program.meta.archetype == "entity" else (-16.0, 32.0)
+    for box in scene.boxes:
+        pts = box.corners()
+        if float(pts.min()) < lo - 1e-6 or float(pts.max()) > hi + 1e-6:
+            return False
+    return True
+
+
+def _broaden_continuous_rest_angles(program: Program, *, rng: random.Random) -> Program:
+    """Broaden child bone rest_euler angles onto continuous 0.1-deg values when SAT & P1-02 clean."""
+    for max_mag in (2.8, 1.1):
+        changed = False
+
+        def perturb_bone(b: Bone, *, is_root: bool = False) -> Bone:
+            nonlocal changed
+            new_items: list[Box | Locator | Bone] = [
+                perturb_bone(it, is_root=False) if isinstance(it, Bone) else it
+                for it in b.items
+            ]
+            rx, ry, rz = b.rest_euler
+            if not is_root:
+                if abs(rx) > 1e-6 or abs(ry) > 1e-6 or abs(rz) > 1e-6:
+                    nrx = _nudge_non_discrete_angle(rx, rng, max_mag) if abs(rx) > 1e-6 else 0.0
+                    nry = _nudge_non_discrete_angle(ry, rng, max_mag) if abs(ry) > 1e-6 else 0.0
+                    nrz = _nudge_non_discrete_angle(rz, rng, max_mag) if abs(rz) > 1e-6 else 0.0
+                    changed = True
+                    return Bone(
+                        name=b.name,
+                        pivot_local=b.pivot_local,
+                        rest_euler=(nrx, nry, nrz),
+                        attach=b.attach,
+                        mirror_name=b.mirror_name,
+                        items=new_items,
+                        joint_limits=b.joint_limits,
+                    )
+                if b.attach is not None and b.attach.detached:
+                    nry = _nudge_non_discrete_angle(0.0, rng, max_mag)
+                    changed = True
+                    return Bone(
+                        name=b.name,
+                        pivot_local=b.pivot_local,
+                        rest_euler=(0.0, nry, 0.0),
+                        attach=b.attach,
+                        mirror_name=b.mirror_name,
+                        items=new_items,
+                        joint_limits=b.joint_limits,
+                    )
+            return Bone(
+                name=b.name,
+                pivot_local=b.pivot_local,
+                rest_euler=b.rest_euler,
+                attach=b.attach,
+                mirror_name=b.mirror_name,
+                items=new_items,
+                joint_limits=b.joint_limits,
+            )
+
+        cand = Program(
+            meta=program.meta,
+            palettes=program.palettes,
+            root=perturb_bone(program.root, is_root=True),
+            shade=program.shade,
+            ergonomics=program.ergonomics,
+            materials=program.materials,
+            style=program.style,
+            muscles=program.muscles,
+            kinematics=program.kinematics,
+            behavior=program.behavior,
+        )
+        if not changed:
+            return program
+        try:
+            validate_program(cand)
+            sc = compile_geometry(cand)
+            if not _check_diversified_bounds(cand, sc):
+                continue
+            aud = audit_scene(
+                sc,
+                collision_tolerance=1e-7,
+                enforce_physical_contact=True,
+                max_contact_gap=1e-4,
+                max_inset_depth=0.5,
+            )
+            if aud["passed"]:
+                return cand
+        except Exception:
+            continue
+    return program
 
 
 def _color_phrase_from_lch(lch: tuple[float, float, float], emissive: bool) -> str:
@@ -575,6 +710,114 @@ def _color_phrase_from_lch(lch: tuple[float, float, float], emissive: bool) -> s
     return f"glowing {hue_word}" if emissive else f"{tone} {hue_word}"
 
 
+_FORBIDDEN_PROMPT_REGEX = re.compile(
+    r"(?<![A-Za-z])(?:held[-\s_]*out|holdout|test_unseen_params|test_compositional|test_unseen|"
+    r"unseen_complex_holdout|unseen|seen_train|validation|apricorn|cobblemon|monster[\s_-]*hunter|pok[eé]mon)(?![A-Za-z])",
+    re.IGNORECASE,
+)
+
+
+def sanitize_prompt_no_leakage(prompt: str, family_id: str = "") -> str:
+    """Enforce zero split-name, borrowed-IP, or raw snake_case family_id leakage in user prompts."""
+    cleaned = _FORBIDDEN_PROMPT_REGEX.sub("", prompt)
+    if family_id and "_" in family_id:
+        nouns = HUMAN_FAMILY_NOUNS.get(family_id)
+        replacement = nouns[0] if nouns else family_id.replace("_", " ")
+        cleaned = re.sub(re.escape(family_id), replacement, cleaned, flags=re.IGNORECASE)
+    for fam_key, fam_nouns in HUMAN_FAMILY_NOUNS.items():
+        if "_" in fam_key and fam_key.lower() in cleaned.lower():
+            cleaned = re.sub(re.escape(fam_key), fam_nouns[0], cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    cleaned = re.sub(r"\s+([,.;:])", r"\1", cleaned)
+    return cleaned.strip()
+
+
+def extract_pinned_spec_summary(
+    program: Program | None,
+    *,
+    box_count: int,
+    bone_count: int,
+    joint_angle_deg: float,
+) -> dict[str, str]:
+    """Extract exact pinned geometric dimensions and continuous joint angles from an AST."""
+    if program is None:
+        ang_str = f"[{joint_angle_deg:g}, 0.0, 0.0] deg" if abs(joint_angle_deg) > 1e-5 else "orthogonal 0.0 deg"
+        return {
+            "primary_dims": "proportional integer blocks",
+            "key_angles": ang_str,
+            "offset_clause": "",
+        }
+
+    all_boxes: list[Box] = []
+    nonzero_angles: list[str] = []
+    nonzero_offsets = 0
+    detached_count = 0
+
+    def _walk(b: Bone, is_root: bool = False) -> None:
+        nonlocal nonzero_offsets, detached_count
+        if not is_root:
+            rx, ry, rz = b.rest_euler
+            if abs(rx) > 1e-5 or abs(ry) > 1e-5 or abs(rz) > 1e-5:
+                ang_txt = f"[{rx:g}, {ry:g}, {rz:g}]"
+                if ang_txt not in nonzero_angles:
+                    nonzero_angles.append(ang_txt)
+            if b.attach is not None:
+                ox, oy, oz = b.attach.offset
+                if abs(ox) > 1e-5 or abs(oy) > 1e-5 or abs(oz) > 1e-5:
+                    nonzero_offsets += 1
+                if b.attach.detached:
+                    detached_count += 1
+        for it in b.items:
+            if isinstance(it, Box):
+                all_boxes.append(it)
+                if it.place is not None:
+                    px, py, pz = it.place.offset
+                    if abs(px) > 1e-5 or abs(py) > 1e-5 or abs(pz) > 1e-5:
+                        nonzero_offsets += 1
+            elif isinstance(it, Bone):
+                _walk(it, False)
+
+    _walk(program.root, True)
+
+    root_boxes = [it for it in program.root.items if isinstance(it, Box)]
+    primary_sz = list(root_boxes[0].size) if root_boxes else (list(all_boxes[0].size) if all_boxes else [4, 4, 4])
+    ranked_boxes = sorted(all_boxes[1:], key=lambda bx: -(bx.size[0] * bx.size[1] * bx.size[2]))
+    sec_dims: list[str] = []
+    for bx in ranked_boxes:
+        s_txt = f"[{bx.size[0]}, {bx.size[1]}, {bx.size[2]}]"
+        if s_txt not in sec_dims:
+            sec_dims.append(s_txt)
+        if len(sec_dims) >= 3:
+            break
+
+    dims_txt = f"primary mass [{primary_sz[0]}, {primary_sz[1]}, {primary_sz[2]}]"
+    if sec_dims:
+        dims_txt += f", secondary masses {', '.join(sec_dims)}"
+
+    if nonzero_angles:
+        angles_txt = ", ".join(nonzero_angles[:4]) + " deg"
+    elif abs(joint_angle_deg) > 1e-5:
+        angles_txt = f"{joint_angle_deg:g} deg"
+    else:
+        angles_txt = "0.0 deg orthogonal"
+
+    extras: list[str] = []
+    if nonzero_offsets > 0:
+        extras.append(f"{nonzero_offsets} non-zero offset placement(s)")
+    if detached_count > 0:
+        extras.append(f"{detached_count} detached floating accessory sub-bone(s)")
+
+    return {
+        "primary_dims": dims_txt,
+        "key_angles": angles_txt,
+        "offset_clause": ("; " + ", ".join(extras)) if extras else "",
+    }
+
+
+def _humanize_token(token: str) -> str:
+    return token.replace("_", " ").strip()
+
+
 def compose_multilevel_prompt(
     rng: random.Random,
     *,
@@ -594,24 +837,35 @@ def compose_multilevel_prompt(
     material_families: list[str],
     style_encoding: str,
     structural_notes: str,
+    program: Program | None = None,
 ) -> tuple[str, str]:
-    """Synthesize Text2CAD-style 4-level multi-granularity prompts to prevent shortcut overfitting."""
+    """Synthesize zero-leakage 4-level multi-granularity & pinned-specification prompts."""
     h_level = halton_scalar(variant_index + 3, 5)
     level_idx = min(3, int(h_level * 4))
-    nouns = HUMAN_FAMILY_NOUNS.get(family_id, (substyle.replace("_", " "),))
+    nouns = HUMAN_FAMILY_NOUNS.get(family_id, (_humanize_token(substyle),))
     human_subject = nouns[(variant_index + rng.randrange(len(nouns))) % len(nouns)]
-    sub_human = substyle.replace("_", " ")
+    sub_human = _humanize_token(substyle)
+    clean_notes = sanitize_prompt_no_leakage(structural_notes.replace("_", " "), family_id)
+    profile_human = _humanize_token(target_profile)
+    archetype_human = _humanize_token(archetype)
+    encoding_human = _humanize_token(style_encoding)
 
     color_phrases = [_color_phrase_from_lch(p.base_lch, p.emissive) for p in palettes[:4]]
     color_summary = ", ".join(color_phrases)
     mat_phys_summary = (
-        ", ".join(f.replace("_", " ") for f in material_families)
+        ", ".join(_humanize_token(f) for f in material_families)
         if material_families
         else "clean pixel-ramped block surfaces"
     )
+    pinned = extract_pinned_spec_summary(
+        program,
+        box_count=box_count,
+        bone_count=bone_count,
+        joint_angle_deg=joint_angle_deg,
+    )
 
     if level_idx == 0:
-        # Level 1: Pure natural human user intent (ZERO family_id slug, ZERO exact box/bone numbers!)
+        # Level 1: Natural human user intent (zero slugs, zero split labels)
         openers = (
             f"Create a 3D block model of a {human_subject}",
             f"Design an articulated {human_subject} ({sub_human} style)",
@@ -627,50 +881,72 @@ def compose_multilevel_prompt(
         det_hint = " plus a hovering detached accent element" if has_detached else ""
         prompt = (
             f"{rng.choice(openers)} {pose_hint} {sym_hint}{det_hint}. "
-            f"Color it in {color_summary} tones featuring {structural_notes}."
+            f"Color it in {color_summary} tones featuring {clean_notes}."
         )
-        return prompt, "level_1_natural_intent"
+        return sanitize_prompt_no_leakage(prompt, family_id), "level_1_natural_intent"
 
     if level_idx == 1:
-        # Level 2: Art direction & physical material-science brief (domain + surface physics + silhouette)
+        # Level 2: Art direction & physical material-science brief
         prompt = (
             f"[{domain.upper()} ART & MATERIAL BRIEF] Craft a {sub_human} ({human_subject}) "
             f"using {mat_phys_summary} in a palette of {color_summary}. "
-            f"Silhouette & assembly notes: {structural_notes}. "
-            f"Target shader/export style: {style_encoding} at {texel_density}px/block texel density "
-            f"for {target_profile}."
+            f"Silhouette & assembly notes: {clean_notes}. "
+            f"Target shader and export style: {encoding_human} at {texel_density}px/block texel density "
+            f"for the {profile_human} runtime."
         )
-        return prompt, "level_2_art_and_material_brief"
+        return sanitize_prompt_no_leakage(prompt, family_id), "level_2_art_and_material_brief"
 
     if level_idx == 2:
-        # Level 3: Kinematic rig & runtime profile specification
-        sym_clause = "bilateral mirror_x limb/wing expansion" if has_mirror_x else "asymmetric/cardinal sub-assemblies"
-        det_clause = " with an explicitly authorized detached=true floating sub-bone" if has_detached else ""
-        ang_clause = (
-            f"primary articulation posed near {joint_angle_deg:g} degrees"
-            if abs(joint_angle_deg) > 1e-5
-            else "orthogonal rest pose"
-        )
+        # Level 3: Kinematic rig & runtime profile specification with pinned counts & dimensions
+        sym_clause = "bilateral mirrored limb or wing expansion" if has_mirror_x else "asymmetric or cardinal sub-assemblies"
+        det_clause = " with an authorized detached floating sub-bone" if has_detached else ""
         prompt = (
-            f"Specify a kinematically valid Block-DSL v3.0 '{archetype}' rig ({domain} category: {human_subject}, "
-            f"variant '{sub_human}') targeting `{target_profile}` ({texel_density} texels/unit). "
-            f"Organize roughly {max(3, bone_count - 1)}-{bone_count + 1} bones using {sym_clause}{det_clause}, "
-            f"{ang_clause}, and surface materials ({mat_phys_summary}). Key sub-assemblies: {structural_notes}."
+            f"Specify a kinematically valid Block-DSL v3.0 {archetype_human} rig ({domain} category: {human_subject}, "
+            f"variant '{sub_human}') targeting the {profile_human} profile ({texel_density} texels/unit). "
+            f"Target {box_count} boxes across {bone_count} bones ({pinned['primary_dims']}) using {sym_clause}{det_clause}, "
+            f"key joint Euler angles {pinned['key_angles']}, and surface materials ({mat_phys_summary}). "
+            f"Key sub-assemblies: {clean_notes}."
         )
-        return prompt, "level_3_kinematic_rig_spec"
+        return sanitize_prompt_no_leakage(prompt, family_id), "level_3_kinematic_rig_spec"
 
-    # Level 4: Full parametric CAD engineering blueprint
-    mat_ids = ", ".join(p.name for p in palettes)
-    sym_str = "mirror_x=true" if has_mirror_x else "mirror_x=false"
-    det_str = ", detached_subrig=true" if has_detached else ""
+    # Level 4: Pinned parametric CAD engineering specification (explicit box count, dimensions, and joint angles)
+    sym_str = "bilateral mirrored symmetry enabled" if has_mirror_x else "unmirrored directional layout"
+    det_str = ", includes detached floating sub-assembly" if has_detached else ""
     prompt = (
-        f"// CAD Blueprint | domain={domain} | family={family_id} | substyle={substyle}\n"
-        f"// Meta: archetype={archetype}, profile={target_profile}, texel_density={texel_density}, encoding={style_encoding}\n"
-        f"// Topology: {box_count} OBBs across {bone_count} bones ({sym_str}{det_str}, hinge_deg={joint_angle_deg:g})\n"
-        f"// Declared palettes: [{mat_ids}] | Physical families: [{', '.join(material_families) or 'palette_only'}]\n"
-        f"// Assembly: {structural_notes}"
+        f"[PINNED CAD SPECIFICATION] Domain: {domain} | Subject: {human_subject} ({sub_human})\n"
+        f"Runtime target: {archetype_human} on {profile_human} ({texel_density}px/unit, {encoding_human} shading)\n"
+        f"Pinned topology: {box_count} boxes across {bone_count} bones at canonical [0, 0, 0] root origin ({sym_str}{det_str})\n"
+        f"Pinned dimensions & angles: {pinned['primary_dims']}; key joint angles {pinned['key_angles']}{pinned['offset_clause']}\n"
+        f"Surface palette & physics: {len(palettes)} palettes ({color_summary}) with {mat_phys_summary}\n"
+        f"Assembly details: {clean_notes}"
     )
-    return prompt, "level_4_parametric_cad_blueprint"
+    return sanitize_prompt_no_leakage(prompt, family_id), "level_4_parametric_cad_blueprint"
+
+
+def compute_program_tree_shape(program: Program, scene: Scene | None = None) -> str:
+    """Compute canonical unlabeled bone-and-box tree topology signature from lowered Scene.
+
+    Each lowered bone is represented as ``(num_boxes_in_bone:[sorted_child_signatures])``
+    so two programs share a signature iff their lowered bone-and-box trees are isomorphic.
+    """
+    sc = scene if scene is not None else compile_geometry(program)
+    box_counts: dict[str, int] = Counter(b.bone_name for b in sc.boxes)
+    children_by_parent: dict[str | None, list[str]] = {}
+    root_name: str | None = None
+    for bone in sc.bones:
+        if bone.parent_name is None:
+            root_name = bone.name
+        else:
+            children_by_parent.setdefault(bone.parent_name, []).append(bone.name)
+
+    def _sig(bname: str) -> str:
+        ch_sigs = sorted(_sig(ch) for ch in children_by_parent.get(bname, ()))
+        nb = int(box_counts.get(bname, 0))
+        if not ch_sigs:
+            return f"({nb})"
+        return f"({nb}:[{','.join(ch_sigs)}])"
+
+    return _sig(root_name) if root_name is not None else "(0)"
 
 
 def _max_bone_depth(bone: Bone, depth: int = 1) -> int:

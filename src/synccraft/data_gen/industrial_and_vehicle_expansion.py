@@ -148,11 +148,8 @@ def _jpiv(
     base_xyz: tuple[float, float, float],
     span: float = 0.45,
 ) -> tuple[float, float, float]:
-    return (
-        round(base_xyz[0] + rng.uniform(-span, span), 3),
-        round(base_xyz[1] + rng.uniform(-0.25, 0.25), 3),
-        round(base_xyz[2] + rng.uniform(-span, span), 3),
-    )
+    _ = (rng, base_xyz, span)
+    return (0.0, 0.0, 0.0)
 
 
 def _static_profile_and_density(v_idx: int) -> tuple[str, int]:
@@ -270,7 +267,7 @@ def _gen_piston_crank_engine(rng: random.Random, v_idx: int) -> tuple[Program, d
         "has_detached_bone": False,
         "inflate_detail": hub_inf,
         "material_theme": f"{p_coat.name}+{p_mach.name}+{p_block.name}",
-        "notes": f"{block_len}-long reciprocating engine ({substyle}) with cast sump pan, intake/exhaust manifolds, front radiator + pulley fan, rear {flywheel_roll:g} deg flywheel rotor, and articulated piston/conrod assemblies",
+        "notes": f"{block_len}-long reciprocating engine ({substyle.replace('_', ' ')}) with cast sump pan, intake/exhaust manifolds, front radiator + pulley fan, rear {flywheel_roll:g} deg flywheel rotor, and articulated piston/conrod assemblies",
         "extra": {"block_len": block_len, "block_h": block_h, "has_third_piston": has_third_piston},
     }
 
@@ -366,7 +363,7 @@ def _gen_cnc_milling_press(rng: random.Random, v_idx: int) -> tuple[Program, dic
         "has_detached_bone": False,
         "inflate_detail": chuck_inf,
         "material_theme": f"{p_coat.name}+{p_steel.name}+{p_cast.name}",
-        "notes": f"{col_h}-tall column CNC mill/press ({substyle}) with T-slot vise worktable, workpiece, articulated Z spindle + spinning endmill chuck, and {pendant_yaw:g} deg HMI pendant arm",
+        "notes": f"{col_h}-tall column CNC mill/press ({substyle.replace('_', ' ')}) with T-slot vise worktable, workpiece, articulated Z spindle + spinning endmill chuck, and {pendant_yaw:g} deg HMI pendant arm",
         "extra": {"base_w": base_w, "base_d": base_d, "col_h": col_h, "turret_tilt": turret_tilt},
     }
 
@@ -454,7 +451,7 @@ def _gen_centrifugal_pump_valve_skid(rng: random.Random, v_idx: int) -> tuple[Pr
         "has_detached_bone": False,
         "inflate_detail": flange_inf,
         "material_theme": f"{p_pump.name}+{p_pipe.name}+{p_valve.name}",
-        "notes": f"{skid_len}-long I-beam process pump skid ({substyle}) with finned electric drive motor, coupling guard, volute casing, vertical riser, {valve_yaw:g} deg gate-valve handwheel, pressure gauge, and bypass line",
+        "notes": f"{skid_len}-long I-beam process pump skid ({substyle.replace('_', ' ')}) with finned electric drive motor, coupling guard, volute casing, vertical riser, {valve_yaw:g} deg gate-valve handwheel, pressure gauge, and bypass line",
         "extra": {"skid_len": skid_len, "skid_w": skid_w, "valve_yaw": valve_yaw},
     }
 
@@ -544,7 +541,7 @@ def _gen_wheeled_haul_truck(rng: random.Random, v_idx: int) -> tuple[Program, di
         "has_detached_bone": False,
         "inflate_detail": hub_inf,
         "material_theme": f"{p_body.name}+{p_frame.name}+{p_tire.name}",
-        "notes": f"{chassis_len}-long offroad haul truck ({substyle}) with front grille/headlights, operator cab + beacon, mirrored front/rear axle wheels, and {bed_pitch:g} deg rear-hinged dump bed",
+        "notes": f"{chassis_len}-long offroad haul truck ({substyle.replace('_', ' ')}) with front grille/headlights, operator cab + beacon, mirrored front/rear axle wheels, and {bed_pitch:g} deg rear-hinged dump bed",
         "extra": {"chassis_len": chassis_len, "bed_pitch": bed_pitch},
     }
 
@@ -629,7 +626,7 @@ def _gen_tracked_excavator(rng: random.Random, v_idx: int) -> tuple[Program, dic
     )
 
     root_items: list[Box | Bone] = [
-        Box("carbody_h_frame", (6, 2, 8), p_track.name),
+        Box("carbody_h_frame", (6, 2, 8), p_track.name, Place(None, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0), (0.0, 2.0, 8.0))),
         Box("slew_ring_collar", (4, 2, 4), p_steel.name, Place("carbody_h_frame", (0.0, 1.0, 0.0), (0.0, -1.0, 0.0))),
         crawler_track,
         turret_bone,
@@ -649,7 +646,7 @@ def _gen_tracked_excavator(rng: random.Random, v_idx: int) -> tuple[Program, dic
         "has_detached_bone": False,
         "inflate_detail": cw_inf,
         "material_theme": f"{p_paint.name}+{p_track.name}+{p_steel.name}",
-        "notes": f"crawler excavator ({substyle}) with mirrored track pods, {turret_yaw:g} deg slewing turret, operator cab, counterweight, and 3-bone boom-stick-bucket arm",
+        "notes": f"crawler excavator ({substyle.replace('_', ' ')}) with mirrored track pods, {turret_yaw:g} deg slewing turret, operator cab, counterweight, and 3-bone boom-stick-bucket arm",
         "extra": {"turret_yaw": turret_yaw, "boom_len": boom_len, "stick_len": stick_len},
     }
 
@@ -733,7 +730,7 @@ def _gen_steam_rail_locomotive(rng: random.Random, v_idx: int) -> tuple[Program,
         "has_detached_bone": False,
         "inflate_detail": lamp_inf,
         "material_theme": f"{p_boiler.name}+{p_trim.name}+{p_brass.name}",
-        "notes": f"{chassis_len}-long steam rail locomotive ({substyle}) with boiler, smokebox headlamp, smokestack, steam/sand domes, engineer cab, coal bunker, {pilot_pitch:g} deg cowcatcher, and mirrored drive wheels + coupling rods",
+        "notes": f"{chassis_len}-long steam rail locomotive ({substyle.replace('_', ' ')}) with boiler, smokebox headlamp, smokestack, steam/sand domes, engineer cab, coal bunker, {pilot_pitch:g} deg cowcatcher, and mirrored drive wheels + coupling rods",
         "extra": {"chassis_len": chassis_len, "pilot_pitch": pilot_pitch},
     }
 
@@ -829,7 +826,7 @@ def _gen_twin_rotor_helicopter_drone(rng: random.Random, v_idx: int) -> tuple[Pr
         "has_detached_bone": False,
         "inflate_detail": sensor_inf,
         "material_theme": f"{p_airframe.name}+{p_rotor.name}+{p_canopy.name}",
-        "notes": f"rotary-wing helicopter/drone ({substyle}) with glazed canopy, FLIR nose gimbal, mirrored landing skids, tail boom + spinning tail rotor, and {rotor_yaw:g} deg 4-blade main rotor",
+        "notes": f"rotary-wing helicopter/drone ({substyle.replace('_', ' ')}) with glazed canopy, FLIR nose gimbal, mirrored landing skids, tail boom + spinning tail rotor, and {rotor_yaw:g} deg 4-blade main rotor",
         "extra": {"blade_len": blade_len, "rotor_yaw": rotor_yaw, "skid_splay": skid_splay},
     }
 
@@ -927,7 +924,7 @@ def _gen_cargo_tugboat_vessel(rng: random.Random, v_idx: int) -> tuple[Program, 
         "has_detached_bone": False,
         "inflate_detail": fender_inf,
         "material_theme": f"{p_hull.name}+{p_house.name}+{p_fender.name}",
-        "notes": f"{hull_len}-long harbor tugboat ({substyle}) with bow push-fender, deckhouse + glazed pilothouse, radar mast, mirrored raked exhaust funnels, 4-blade propeller, and {rudder_yaw:g} deg rudder",
+        "notes": f"{hull_len}-long harbor tugboat ({substyle.replace('_', ' ')}) with bow push-fender, deckhouse + glazed pilothouse, radar mast, mirrored raked exhaust funnels, 4-blade propeller, and {rudder_yaw:g} deg rudder",
         "extra": {"hull_len": hull_len, "hull_w": hull_w, "rudder_yaw": rudder_yaw},
     }
 
@@ -1021,7 +1018,7 @@ def _gen_articulated_forklift_loader(rng: random.Random, v_idx: int) -> tuple[Pr
         "has_detached_bone": False,
         "inflate_detail": cw_inf,
         "material_theme": f"{p_body.name}+{p_mast.name}+{p_tire.name}",
-        "notes": f"counterbalance mast forklift ({substyle}) with 4-post ROPS cage, rear counterweight, steerable {steer_yaw:g} deg rear wheels, {mast_tilt:g} deg tilting {mast_h}-tall twin-rail mast, and fork carriage",
+        "notes": f"counterbalance mast forklift ({substyle.replace('_', ' ')}) with 4-post ROPS cage, rear counterweight, steerable {steer_yaw:g} deg rear wheels, {mast_tilt:g} deg tilting {mast_h}-tall twin-rail mast, and fork carriage",
         "extra": {"mast_h": mast_h, "fork_len": fork_len, "lift_frac": lift_frac},
     }
 
@@ -1080,7 +1077,12 @@ def _gen_submersible_rov_craft(rng: random.Random, v_idx: int) -> tuple[Program,
     )
 
     root_items: list[Box | Bone] = [
-        Box("electronics_pressure_hull", (4, 3, rov_len - 2), p_titanium.name),
+        Box(
+            "electronics_pressure_hull",
+            (4, 3, rov_len - 2),
+            p_titanium.name,
+            Place(None, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0), (0.0, 4.0, 6.0)),
+        ),
         Box("syntactic_buoyancy_pack", (rov_w, 3, rov_len), p_foam.name, Place("electronics_pressure_hull", (0.0, 1.0, 0.0), (0.0, -1.0, 0.0))),
         Box("doppler_sonar_turret", (2, 2, 2), p_titanium.name, Place("syntactic_buoyancy_pack", (0.0, 1.0, -0.35), (0.0, -1.0, 0.0))),
         Box("umbilical_tether_bell", (2, 2, 2), p_frame.name, Place("syntactic_buoyancy_pack", (0.0, 1.0, 0.5), (0.0, -1.0, 0.0))),
@@ -1108,7 +1110,7 @@ def _gen_submersible_rov_craft(rng: random.Random, v_idx: int) -> tuple[Program,
         "has_detached_bone": False,
         "inflate_detail": dome_inf,
         "material_theme": f"{p_foam.name}+{p_titanium.name}+{p_dome.name}",
-        "notes": f"deep-sea ROV ({substyle}) with syntactic-foam buoyancy pack, acrylic viewport dome, LED light bar, mirrored {thruster_yaw:g} deg vectored thruster ducts, and twin 2-stage manipulator claws",
+        "notes": f"deep-sea ROV ({substyle.replace('_', ' ')}) with syntactic-foam buoyancy pack, acrylic viewport dome, LED light bar, mirrored {thruster_yaw:g} deg vectored thruster ducts, and twin 2-stage manipulator claws",
         "extra": {"rov_len": rov_len, "rov_w": rov_w, "thruster_yaw": thruster_yaw},
     }
 
@@ -1208,7 +1210,7 @@ def _gen_clockwork_pendulum_clock(rng: random.Random, v_idx: int) -> tuple[Progr
         "has_detached_bone": False,
         "inflate_detail": bob_inf,
         "material_theme": f"{p_wood.name}+{p_brass.name}+{p_dial.name}",
-        "notes": f"tall grandfather clock ({substyle}) with bracketed base plinth, recessed open-pilaster waist housing a {pend_deg:g} deg swinging brass pendulum, finialed dial hood, and articulated hour/minute hands",
+        "notes": f"tall grandfather clock ({substyle.replace('_', ' ')}) with bracketed base plinth, recessed open-pilaster waist housing a {pend_deg:g} deg swinging brass pendulum, finialed dial hood, and articulated hour/minute hands",
         "extra": {"waist_h": waist_h, "pend_deg": pend_deg, "minute_deg": minute_deg},
     }
 
@@ -1304,7 +1306,7 @@ def _gen_alchemical_workbench_apparatus(rng: random.Random, v_idx: int) -> tuple
         "has_detached_bone": False,
         "inflate_detail": flask_inf,
         "material_theme": f"{p_timber.name}+{p_copper.name}+{p_glass.name}",
-        "notes": f"{table_w}-wide artisan distillation & assay workbench ({substyle}) with reagent shelf, brazier furnace + copper retort, angled condenser bridge, distillate carafe, and {beam_tilt:g} deg precision balance with level hanging pans",
+        "notes": f"{table_w}-wide artisan distillation & assay workbench ({substyle.replace('_', ' ')}) with reagent shelf, brazier furnace + copper retort, angled condenser bridge, distillate carafe, and {beam_tilt:g} deg precision balance with level hanging pans",
         "extra": {"table_w": table_w, "beam_tilt": beam_tilt, "condenser_drop": condenser_drop},
     }
 

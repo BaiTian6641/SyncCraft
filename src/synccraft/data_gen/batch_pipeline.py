@@ -17,7 +17,6 @@ import json
 import math
 from pathlib import Path
 import random
-import re
 from typing import Any
 
 import numpy as np
@@ -41,12 +40,12 @@ from synccraft.surface.domain import (
 )
 from synccraft.surface.processes import integrate_gray_scott_on_state
 from .curriculum_and_assistant import apply_animation_keyframe
-
-_ANIM_COMMENT_RE = re.compile(r"//\s*@animation_plan:\s*(\{[^\n]+\})")
+from .diversity_engine import compute_program_tree_shape
+from .taxonomy_catalog import HOLDOUT_EVALUATION_SPLITS
 
 
 def extract_animation_spec_from_row(row: dict[str, Any]) -> dict[str, Any] | None:
-    """Extract structured @animation_plan dict from a dataset row if present."""
+    """Extract structured animation specification from row metadata or typed `@behavior` AST."""
     prov = row.get("prompt_and_provenance", {})
     if isinstance(prov.get("animation_plan"), dict):
         return prov["animation_plan"]
@@ -55,11 +54,29 @@ def extract_animation_spec_from_row(row: dict[str, Any]) -> dict[str, Any] | Non
             return json.loads(prov["animation_plan_json"])
         except Exception:
             pass
-    comp = prov.get("assistant_completion") or ""
-    m = _ANIM_COMMENT_RE.search(comp)
-    if m:
+    dsl_text = row.get("canonical_dsl") or prov.get("assistant_completion") or ""
+    if "@behavior" in dsl_text:
         try:
-            return json.loads(m.group(1))
+            prog = parse_program(dsl_text)
+            if prog.behavior and prog.behavior.clips:
+                clip = prog.behavior.clips[0]
+                return {
+                    "clip_name": clip.name,
+                    "duration_s": clip.duration_s,
+                    "loop": clip.loop,
+                    "channels": [
+                        {
+                            "bone": tr.bone,
+                            "wave": tr.waveform,
+                            "axis": tr.axis,
+                            "amp_deg": tr.amp_deg,
+                            "freq_hz": tr.freq_hz,
+                            "phase_deg": tr.phase_deg,
+                            "bias_deg": tr.bias_deg,
+                        }
+                        for tr in clip.tracks
+                    ],
+                }
         except Exception:
             return None
     return None
@@ -495,12 +512,15 @@ def compute_batch_statistical_qc(
     anim_verified_count = 0
     defect_rows = 0
     defect_repaired_ok = 0
+    comment_free_count = 0
+    tree_shapes_by_family: dict[str, set[str]] = {}
 
     for r in batch_rows:
         sp = r["split"]
         splits[sp] = splits.get(sp, 0) + 1
         gp = r["generator_parameters"]
         aud = r["audit_version_and_results"]
+        prov = r.get("prompt_and_provenance", {})
 
         dom = str(gp.get("domain", "artificial"))
         cat = str(gp.get("category", "general"))
@@ -517,6 +537,16 @@ def compute_batch_statistical_qc(
         qd_counts[qd] = qd_counts.get(qd, 0) + 1
         seen_hashes.add(r["canonical_dsl_sha256"])
 
+        t_sig = gp.get("tree_shape_signature")
+        if not isinstance(t_sig, str) or not t_sig:
+            t_sig = compute_program_tree_shape(parse_program(r["canonical_dsl"]))
+        tree_shapes_by_family.setdefault(r["family_id"], set()).add(t_sig)
+
+        comp_txt = str(prov.get("assistant_completion") or "")
+        canon_txt = str(r.get("canonical_dsl") or "")
+        if "//" not in comp_txt and "//" not in canon_txt:
+            comment_free_count += 1
+
         if aud.get("passed") is True and aud.get("collision_pairs", 1) == 0 and aud.get("contact_violations", 1) == 0:
             sat_passed += 1
         if sp == "test_unseen" and (int(aud.get("boxes", 0)) < 16 or q_lbl != "verified_clean"):
@@ -525,8 +555,8 @@ def compute_batch_statistical_qc(
             anim_verified_count += 1
         if q_lbl == "controlled_defect_with_repair":
             defect_rows += 1
-            prov = r.get("prompt_and_provenance", {})
-            if "DIAGNOSE_AND_REPAIR" in str(prov.get("assistant_prompt", "")) and aud.get("passed") is True:
+            ap_txt = str(prov.get("assistant_prompt", ""))
+            if ("DIAGNOSE AND REPAIR" in ap_txt or "DIAGNOSE_AND_REPAIR" in ap_txt) and aud.get("passed") is True:
                 defect_repaired_ok += 1
 
     # Shannon entropy over QD cells
@@ -541,6 +571,7 @@ def compute_batch_statistical_qc(
     anim_pass_rate = anim_verified_count / total
     controlled_bad_ratio = defect_rows / total
     defect_repair_rate = (defect_repaired_ok / defect_rows) if defect_rows > 0 else 1.0
+    comment_free_rate = comment_free_count / total
 
     rejections: list[str] = []
     if sat_pass_rate < 1.0:
@@ -555,6 +586,11 @@ def compute_batch_statistical_qc(
         rejections.append(f"controlled_bad_ratio={controlled_bad_ratio:.4f} > {max_bad_data_ratio}")
     if defect_repair_rate < 1.0:
         rejections.append(f"defect_repair_rate={defect_repair_rate:.4f} < 1.0")
+    if comment_free_rate < 1.0:
+        rejections.append(f"comment_free_rate={comment_free_rate:.4f} < 1.0")
+
+    distinct_shapes_by_fam = {fam: len(sigs) for fam, sigs in sorted(tree_shapes_by_family.items())}
+    all_distinct_shapes = set().union(*tree_shapes_by_family.values()) if tree_shapes_by_family else set()
 
     return {
         "batch_index": int(batch_index),
@@ -567,6 +603,8 @@ def compute_batch_statistical_qc(
         "complexity_tier_counts": dict(sorted(tiers.items())),
         "assistant_task_mode_counts": dict(sorted(modes.items())),
         "quality_label_counts": dict(sorted(quality_counts.items())),
+        "distinct_tree_shapes_by_family": distinct_shapes_by_fam,
+        "distinct_tree_shapes_total": len(all_distinct_shapes),
         "box_distribution": {
             "min": int(boxes.min()),
             "p10": round(float(np.percentile(boxes, 10)), 2),
@@ -585,6 +623,7 @@ def compute_batch_statistical_qc(
         },
         "clean_sat_pass_rate": round(sat_pass_rate, 6),
         "animation_swept_sat_pass_rate": round(anim_pass_rate, 6),
+        "comment_free_targets_rate": round(comment_free_rate, 6),
         "controlled_defect_ratio": round(controlled_bad_ratio, 4),
         "defect_detection_and_repair_rate": round(defect_repair_rate, 6),
         "unique_sha256_ratio": round(unique_hash_ratio, 6),
@@ -612,7 +651,9 @@ def generate_dataset_batches(
         UNSEEN_STATIC_FAMILIES,
         _write_parquet_splits_if_available,
         verify_and_package_candidate,
+        verify_and_package_compositional_candidate,
     )
+    from .taxonomy_catalog import COMPOSITIONAL_SEEN_PAIRINGS
 
     root_dir = Path(out_dir)
     batches_dir = root_dir / "batches"
@@ -625,14 +666,22 @@ def generate_dataset_batches(
         "val": root_dir / "val.jsonl",
         "test_unseen": root_dir / "test_unseen.jsonl",
     }
+    aux_holdout_paths = {
+        "test_unseen_params": root_dir / "test_unseen_params.jsonl",
+        "test_compositional": root_dir / "test_compositional.jsonl",
+    }
     split_handles = {sp: open(p, "w", encoding="utf-8") for sp, p in split_paths.items()}
+    aux_handles = {sp: open(p, "w", encoding="utf-8") for sp, p in aux_holdout_paths.items()}
     split_hashers = {sp: hashlib.sha256() for sp in split_paths}
+    aux_hashers = {sp: hashlib.sha256() for sp in aux_holdout_paths}
     seen_global_hashes: set[str] = set()
 
     batch_reports: list[dict[str, Any]] = []
     sheet_paths: list[str] = []
     split_totals = {"train": 0, "val": 0, "test_unseen": 0}
+    aux_holdout_totals = {"test_unseen_params": 0, "test_compositional": 0}
     family_totals: dict[str, int] = {}
+    global_tree_shapes: dict[str, set[str]] = {}
 
     try:
         for b_idx in range(num_batches):
@@ -720,6 +769,59 @@ def generate_dataset_batches(
                     split_totals[sp] += 1
                     fam = r["family_id"]
                     family_totals[fam] = family_totals.get(fam, 0) + 1
+                    t_sig = r["generator_parameters"].get("tree_shape_signature") or compute_program_tree_shape(
+                        parse_program(r["canonical_dsl"])
+                    )
+                    global_tree_shapes.setdefault(fam, set()).add(t_sig)
+
+            # Emit complementary holdout shards (`test_unseen_params` + `test_compositional`) per batch
+            if test_per_unseen_per_batch > 0:
+                p_slice_len = max(1, len(SEEN_STATIC_FAMILIES) // max(1, num_batches))
+                p_fams = SEEN_STATIC_FAMILIES[b_idx * p_slice_len : (b_idx + 1) * p_slice_len] or SEEN_STATIC_FAMILIES[:4]
+                for fam in p_fams:
+                    prow = verify_and_package_candidate(
+                        fam,
+                        split="test_unseen_params",
+                        variant_index=300_000 + b_idx * 17,
+                        base_seed=base_seed + 43,
+                    )
+                    salt = 1
+                    while prow["canonical_dsl_sha256"] in seen_global_hashes:
+                        prow = verify_and_package_candidate(
+                            fam,
+                            split="test_unseen_params",
+                            variant_index=300_000 + b_idx * 17 + 1_000_000 * salt,
+                            base_seed=base_seed + 43 + 7919 * salt,
+                        )
+                        salt += 1
+                    seen_global_hashes.add(prow["canonical_dsl_sha256"])
+                    pline = json.dumps(prow, sort_keys=True, ensure_ascii=False)
+                    aux_handles["test_unseen_params"].write(pline + "\n")
+                    aux_hashers["test_unseen_params"].update((pline + "\n").encode("utf-8"))
+                    aux_holdout_totals["test_unseen_params"] += 1
+
+                c_slice_len = max(1, len(COMPOSITIONAL_SEEN_PAIRINGS) // max(1, num_batches))
+                c_start = (b_idx * c_slice_len) % len(COMPOSITIONAL_SEEN_PAIRINGS)
+                for c_off in range(c_slice_len):
+                    p_idx = (c_start + c_off) % len(COMPOSITIONAL_SEEN_PAIRINGS)
+                    crow = verify_and_package_compositional_candidate(
+                        pairing_index=p_idx,
+                        variant_index=b_idx,
+                        base_seed=base_seed + 59,
+                    )
+                    salt = 1
+                    while crow["canonical_dsl_sha256"] in seen_global_hashes:
+                        crow = verify_and_package_compositional_candidate(
+                            pairing_index=p_idx,
+                            variant_index=b_idx + 100_000 * salt,
+                            base_seed=base_seed + 59 + 7919 * salt,
+                        )
+                        salt += 1
+                    seen_global_hashes.add(crow["canonical_dsl_sha256"])
+                    cline = json.dumps(crow, sort_keys=True, ensure_ascii=False)
+                    aux_handles["test_compositional"].write(cline + "\n")
+                    aux_hashers["test_compositional"].update((cline + "\n").encode("utf-8"))
+                    aux_holdout_totals["test_compositional"] += 1
 
             qc_path = batches_dir / f"batch_{b_idx:04d}_qc.json"
             qc_path.write_text(json.dumps(qc, indent=2), encoding="utf-8")
@@ -727,7 +829,6 @@ def generate_dataset_batches(
 
             if samples_to_render_per_batch > 0:
                 sample_rng = random.Random(base_seed + 9001 * (b_idx + 1))
-                # Stratified random sample across macro-domains in this batch
                 by_dom: dict[str, list[dict[str, Any]]] = {}
                 for r in batch_rows:
                     by_dom.setdefault(r["generator_parameters"]["domain"], []).append(r)
@@ -755,9 +856,19 @@ def generate_dataset_batches(
     finally:
         for h in split_handles.values():
             h.close()
+        for h in aux_handles.values():
+            h.close()
 
-    parquet_files = _write_parquet_splits_if_available(root_dir, split_paths) if write_parquet else {}
+    all_parquet_paths = {**split_paths, **aux_holdout_paths}
+    parquet_files = _write_parquet_splits_if_available(root_dir, all_parquet_paths) if write_parquet else {}
     split_sha256 = {sp: hasher.hexdigest() for sp, hasher in split_hashers.items()}
+    holdout_split_sha256 = {
+        "test_unseen_params": aux_hashers["test_unseen_params"].hexdigest(),
+        "test_unseen": split_sha256["test_unseen"],
+        "test_compositional": aux_hashers["test_compositional"].hexdigest(),
+    }
+    distinct_shapes_summary = {fam: len(sigs) for fam, sigs in sorted(global_tree_shapes.items())}
+    all_distinct_shapes = set().union(*global_tree_shapes.values()) if global_tree_shapes else set()
 
     summary = {
         "schema": "synccraft.batch-dataset-summary/1.0",
@@ -767,6 +878,15 @@ def generate_dataset_batches(
         "total_records": sum(split_totals.values()),
         "split_counts": split_totals,
         "split_sha256": split_sha256,
+        "holdout_splits": list(HOLDOUT_EVALUATION_SPLITS),
+        "holdout_split_counts": {
+            "test_unseen_params": aux_holdout_totals["test_unseen_params"],
+            "test_unseen": split_totals["test_unseen"],
+            "test_compositional": aux_holdout_totals["test_compositional"],
+        },
+        "holdout_split_sha256": holdout_split_sha256,
+        "distinct_tree_shapes_by_family": distinct_shapes_summary,
+        "distinct_tree_shapes_total": len(all_distinct_shapes),
         "family_counts": dict(sorted(family_totals.items())),
         "parquet_shards": parquet_files,
         "inspection_sheets": sheet_paths,

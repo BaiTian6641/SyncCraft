@@ -19,9 +19,13 @@ from typing import Any
 
 from synccraft.audit.sync_audit import audit_scene
 from synccraft.dsl.ast_nodes import (
+    ANIMATED_PROFILES,
+    TRACK_LAWS,
     Attach,
+    BehaviorDecl,
     Bone,
     Box,
+    ClipDecl,
     Locator,
     MaterialDecl,
     Meta,
@@ -29,10 +33,13 @@ from synccraft.dsl.ast_nodes import (
     Place,
     Program,
     StyleDecl,
+    TrackDecl,
     validate_program,
 )
 from synccraft.dsl.parser import format_program, parse_program
+from synccraft.kinematics.musculoskeletal import audit_behavior_clip
 from synccraft.kinematics.se3_chain import Scene, compile_geometry
+from .diversity_engine import sanitize_prompt_no_leakage
 from .taxonomy_catalog import (
     COMPLEXITY_TIERS,
     TAXONOMY_BY_FAMILY,
@@ -342,8 +349,12 @@ def ensure_concise_texture_program(
     rec_mats = tax.recommended_materials if tax is not None else ("painted_metal", "solid_wood")
 
     if program.materials and program.style is not None:
-        mat_decls = list(program.materials)
+        mat_decls = [
+            replace(m, seed=int(idx + 1)) if int(m.seed) > 16 or int(m.seed) < 0 else m
+            for idx, m in enumerate(program.materials)
+        ]
         style_decl = program.style
+        program = replace(program, materials=tuple(mat_decls))
     else:
         mat_decls = []
         for idx, pal in enumerate(program.palettes[:3]):
@@ -362,7 +373,7 @@ def ensure_concise_texture_program(
                     coating=coat,
                     ior=1.5,
                     scale=scale,
-                    seed=rng.randint(100, 99999),
+                    seed=int(idx + 1),
                 )
             )
         enc = rng.choice(("vanilla", "labpbr_1_3", "gltf_2_0"))
@@ -394,22 +405,56 @@ def ensure_concise_texture_program(
     return program, recipe
 
 
+_CANONICAL_LAW_MAP: dict[str, str] = {
+    "wave": "wave",
+    "flap": "flap",
+    "hinge": "hinge",
+    "impulse": "impulse",
+    "traveling_wave": "wave",
+    "counter_phase_sway": "wave",
+    "wing_flap_harmonic": "flap",
+    "counter_stride": "wave",
+    "gait_stride_harmonic": "wave",
+    "bounded_mechanism_cycle": "hinge",
+    "coupled_actuator_sweep": "hinge",
+    "wind_harmonic_sway": "wave",
+    "harmonic_oscillation": "wave",
+}
+
+
+def _eval_channel_delta_deg(ch: dict[str, Any], phase_fraction: float, duration_s: float) -> float:
+    law = _CANONICAL_LAW_MAP.get(str(ch.get("law", "wave")), "wave")
+    amp = float(ch["amp_deg"])
+    freq_hz = float(ch.get("freq_hz", 1.0))
+    phase_deg = float(ch.get("phase_deg", 0.0))
+    bias_deg = float(ch.get("bias_deg", 0.0))
+    time_s = phase_fraction * max(0.05, duration_s)
+    u = (time_s * freq_hz + phase_deg / 360.0) % 1.0
+    two_pi_u = 2.0 * math.pi * u
+    if law == "flap":
+        return bias_deg + amp * (math.sin(two_pi_u) + 0.20 * math.sin(2.0 * two_pi_u))
+    if law == "hinge":
+        return bias_deg + amp * (0.5 - 0.5 * math.cos(two_pi_u))
+    if law == "impulse":
+        norm_t = min(1.0, max(0.0, phase_fraction))
+        return bias_deg + amp * (math.sin(math.pi * norm_t) ** 2) * math.sin(two_pi_u)
+    return bias_deg + amp * math.sin(two_pi_u)
+
+
 def apply_animation_keyframe(program: Program, spec: dict[str, Any], phase_fraction: float) -> Program:
     """Evaluate analytic animation spec at phase_fraction in [0, 1] and return posed Program."""
     channels = {ch["bone"]: ch for ch in spec.get("channels", [])}
     if not channels:
         return program
 
-    two_pi_phase = 2.0 * math.pi * phase_fraction
+    duration_s = float(spec.get("cycle_seconds", 1.25))
 
     def _pose_bone(b: Bone) -> Bone:
         new_items = [_pose_bone(it) if isinstance(it, Bone) else it for it in b.items]
         ch = channels.get(b.name)
         if ch is None:
             return replace(b, items=new_items)
-        amp = float(ch["amp_deg"])
-        ph_rad = math.radians(float(ch.get("phase_deg", 0.0)))
-        delta = amp * math.sin(two_pi_phase + ph_rad)
+        delta = _eval_channel_delta_deg(ch, phase_fraction, duration_s)
         rx, ry, rz = b.rest_euler
         axis = ch["axis"]
         if axis == "x":
@@ -430,11 +475,10 @@ def synthesize_verified_animation_spec(
     family_id: str,
     rng: random.Random,
 ) -> dict[str, Any]:
-    """Build a concise analytic bone-animation spec calibrated for 0 swept-SAT self-collisions."""
+    """Build a concise analytic bone-animation spec calibrated against multi-frame SAT checks."""
     tax = TAXONOMY_BY_FAMILY.get(family_id)
     archetype = tax.motion_archetype if tax is not None else "hinge_articulation"
 
-    # Collect non-root articulated bones in breadth-first order
     articulated_bones: list[tuple[Bone, int]] = []
 
     def _walk(b: Bone, depth: int) -> None:
@@ -461,35 +505,35 @@ def synthesize_verified_animation_spec(
         "pendulum_oscillation": 0.50,
         "hinge_articulation": 0.60,
     }
-    base_freq = round(freq_map.get(archetype, 0.8) * rng.uniform(0.9, 1.1), 2)
+    base_freq = round(min(20.0, max(0.25, freq_map.get(archetype, 0.8) * rng.uniform(0.9, 1.1))), 2)
 
     raw_channels: list[dict[str, Any]] = []
     for idx, (b, depth) in enumerate(articulated_bones[:6]):
         b_low = b.name.lower()
         if archetype in ("serpentine_wave", "aquatic_undulation"):
             axis = "y"
-            law = "traveling_wave"
+            law = "wave"
             amp = 12.0
             phase = -55.0 * idx
         elif archetype == "polycephalic_sway":
             axis = "y" if idx % 2 == 0 else "x"
-            law = "counter_phase_sway"
+            law = "wave"
             amp = 10.0
             phase = 120.0 * idx
         elif archetype == "wing_and_gait":
             if any(k in b_low for k in ("wing", "spar", "pinion", "patag", "pectoral")):
                 axis = "z"
-                law = "wing_flap_harmonic"
-                amp = 16.0
+                law = "flap"
+                amp = 15.0
                 phase = -40.0 * (depth - 1)
             else:
                 axis = "x"
-                law = "counter_stride"
+                law = "wave"
                 amp = 11.0
                 phase = 180.0 * (idx % 2)
         elif archetype in ("quadruped_stride", "biped_stride"):
             axis = "x"
-            law = "gait_stride_harmonic"
+            law = "wave"
             amp = 12.0
             phase = 180.0 * (idx % 2)
         elif archetype in ("rotary_spin", "vehicle_drive_and_articulate"):
@@ -499,22 +543,22 @@ def synthesize_verified_animation_spec(
                 axis = "x"
             else:
                 axis = "z"
-            law = "bounded_mechanism_cycle"
+            law = "hinge"
             amp = 14.0
             phase = 90.0 * (idx % 4)
         elif archetype in ("hydraulic_boom_chain", "reciprocating_mechanism"):
             axis = "x" if depth % 2 == 1 else "z"
-            law = "coupled_actuator_sweep"
+            law = "hinge"
             amp = 10.0
             phase = -45.0 * idx
         elif archetype == "wind_canopy_sway":
             axis = "z" if idx % 2 == 0 else "x"
-            law = "wind_harmonic_sway"
+            law = "wave"
             amp = 6.0
             phase = 60.0 * idx
         else:
             axis = "z" if idx % 2 == 0 else "x"
-            law = "harmonic_oscillation"
+            law = "wave"
             amp = 8.0
             phase = 90.0 * (idx % 2)
 
@@ -532,12 +576,10 @@ def synthesize_verified_animation_spec(
     spec = {
         "motion_archetype": archetype,
         "cycle_seconds": round(1.0 / max(0.2, base_freq), 2),
-        "swept_sat_verified": True,
         "channels": raw_channels,
     }
 
-    # Swept-SAT calibration across 4 cycle phases: scale amplitudes down if any non-exempt collision appears
-    sample_phases = (0.15, 0.25, 0.50, 0.75)
+    sample_phases = (0.125, 0.25, 0.375, 0.50, 0.75, 0.875)
     for _attempt in range(6):
         all_clear = True
         for ph in sample_phases:
@@ -556,10 +598,98 @@ def synthesize_verified_animation_spec(
         for ch in spec["channels"]:
             ch["amp_deg"] = round(ch["amp_deg"] * 0.5, 2)
 
-    # Fallback: zero amplitudes guarantee static rest pose legality
     for ch in spec["channels"]:
         ch["amp_deg"] = 0.0
     return spec
+
+
+def attach_verified_behavior_decl(program: Program, animation_spec: dict[str, Any]) -> Program:
+    """Attach a validated @behavior ClipDecl on articulated profiles; omit on static Java profiles."""
+    if program.meta.target_profile not in ANIMATED_PROFILES:
+        return replace(program, behavior=None)
+    if program.behavior is not None and program.behavior.clips:
+        return program
+
+    sc = compile_geometry(program)
+    non_root_bones = {b.name for b in sc.bones if b.parent_name is not None}
+    if not non_root_bones:
+        return replace(program, behavior=None)
+
+    used_names: set[str] = (
+        {p.name for p in program.palettes}
+        | {b.name for b in sc.bones}
+        | {bx.name for bx in sc.boxes}
+        | {loc.name for loc in sc.locators}
+        | {m.name for m in program.muscles}
+    )
+    if program.kinematics is not None:
+        used_names |= {c.name for c in program.kinematics.ik_chains}
+        used_names |= {c.name for c in program.kinematics.look_chains}
+
+    clip_name = "idle_motion_cycle"
+    suffix_idx = 2
+    while clip_name in used_names:
+        clip_name = f"idle_motion_cycle_{suffix_idx}"
+        suffix_idx += 1
+
+    duration_s = float(min(60.0, max(0.25, float(animation_spec.get("cycle_seconds", 1.25)))))
+    raw_channels = [
+        ch
+        for ch in animation_spec.get("channels", ())
+        if ch.get("bone") in non_root_bones
+    ]
+    if not raw_channels:
+        fallback_bone = sorted(non_root_bones)[0]
+        raw_channels = [
+            {
+                "bone": fallback_bone,
+                "law": "wave",
+                "axis": "x",
+                "amp_deg": 4.0,
+                "freq_hz": round(1.0 / duration_s, 2),
+                "phase_deg": 0.0,
+            }
+        ]
+
+    amp_scale = 1.0
+    for _ in range(6):
+        tracks = tuple(
+            TrackDecl(
+                bone=str(ch["bone"]),
+                law=_CANONICAL_LAW_MAP.get(str(ch.get("law", "wave")), "wave"),
+                axis=str(ch.get("axis", "x")) if str(ch.get("axis", "x")) in ("x", "y", "z") else "x",
+                amp_deg=round(max(-120.0, min(120.0, float(ch.get("amp_deg", 0.0)) * amp_scale)), 2),
+                freq_hz=round(min(20.0, max(0.05, float(ch.get("freq_hz", 1.0)))), 2),
+                phase_deg=round(float(ch.get("phase_deg", 0.0)), 1),
+                bias_deg=round(float(ch.get("bias_deg", 0.0)), 2),
+            )
+            for ch in raw_channels
+        )
+        beh = BehaviorDecl(clips=(ClipDecl(name=clip_name, duration_s=duration_s, loop=True, tracks=tracks),))
+        cand = replace(program, behavior=beh)
+        try:
+            validate_program(cand)
+            clip_rep = audit_behavior_clip(cand, clip_name, num_frames=8)
+            if clip_rep["passed"]:
+                return cand
+        except Exception:
+            pass
+        amp_scale *= 0.5
+
+    zero_tracks = tuple(
+        TrackDecl(
+            bone=str(ch["bone"]),
+            law="wave",
+            axis=str(ch.get("axis", "x")) if str(ch.get("axis", "x")) in ("x", "y", "z") else "x",
+            amp_deg=0.0,
+            freq_hz=round(min(20.0, max(0.05, float(ch.get("freq_hz", 1.0)))), 2),
+            phase_deg=round(float(ch.get("phase_deg", 0.0)), 1),
+            bias_deg=0.0,
+        )
+        for ch in raw_channels[:1]
+    )
+    beh_zero = BehaviorDecl(clips=(ClipDecl(name=clip_name, duration_s=duration_s, loop=True, tracks=zero_tracks),))
+    return validate_program(replace(program, behavior=beh_zero))
 
 
 def build_controlled_defect_repair_pair(
@@ -662,12 +792,6 @@ def build_controlled_defect_repair_pair(
     raise RuntimeError("Failed to synthesize verified controlled-defect repair pair")
 
 
-def format_concise_animation_comment(animation_spec: dict[str, Any]) -> str:
-    """Serialize concise @animation plan alongside Block-DSL for unified assistant responses."""
-    compact_json = json.dumps(animation_spec, sort_keys=True, separators=(",", ":"))
-    return f"// @animation_plan: {compact_json}"
-
-
 def build_assistant_supervision_turn(
     *,
     task_mode: str,
@@ -678,58 +802,66 @@ def build_assistant_supervision_turn(
     texture_recipe: dict[str, Any],
     defect_bundle: dict[str, Any] | None = None,
 ) -> dict[str, str]:
-    """Format a concise Assistant World-Model (prompt, completion) pair for one of 4 modes."""
-    full_dsl = format_program(clean_program)
-    anim_line = format_concise_animation_comment(animation_spec)
+    """Format a comment-free Assistant World-Model (prompt, completion) pair for one of 4 modes."""
+    target_program = attach_verified_behavior_decl(clean_program, animation_spec)
+    full_dsl = format_program(target_program)
+    has_behavior = target_program.behavior is not None and bool(target_program.behavior.clips)
+    enc_human = str(texture_recipe["target_encoding"]).replace("_", " ")
+    motion_human = str(animation_spec.get("motion_archetype", "hinge articulation")).replace("_", " ")
+    clean_base = sanitize_prompt_no_leakage(base_prompt)
+
+    motion_clause = (
+        f" and a typed @behavior {motion_human} clip"
+        if has_behavior
+        else ""
+    )
 
     if task_mode == "diagnose_and_repair_defect" and defect_bundle is not None:
         audit_json = json.dumps(defect_bundle["defective_audit_summary"], sort_keys=True)
+        header = sanitize_prompt_no_leakage(
+            f"[MODE: DIAGNOSE AND REPAIR]\n"
+            f"Goal: {clean_base}\n"
+            f"Resolve the physical geometry defect reported in the audit telemetry and output "
+            f"the complete repaired Block-DSL program{motion_clause}."
+        )
         user_prompt = (
-            f"[MODE: DIAGNOSE_AND_REPAIR]\n"
-            f"Goal: {base_prompt}\n"
-            f"Draft Block-DSL (contains modeling defect):\n{defect_bundle['defective_dsl']}\n"
+            f"{header}\n"
             f"Physics Audit Telemetry: {audit_json}\n"
-            f"Diagnose the physical violation and output the repaired Block-DSL v3.0 + @animation_plan."
+            f"Draft Block-DSL:\n{defect_bundle['defective_dsl']}"
         )
-        completion = (
-            f"// Diagnosis: {defect_bundle['diagnosis']}\n"
-            f"{full_dsl}\n"
-            f"{anim_line}"
-        )
-        return {"assistant_prompt": user_prompt, "assistant_completion": completion}
+        return {"assistant_prompt": user_prompt, "assistant_completion": full_dsl}
 
     if task_mode == "coarse_to_fine_upgrade" and coarse_program is not None:
-        coarse_dsl = format_program(coarse_program)
-        coarse_boxes = len(compile_geometry(coarse_program).boxes)
-        fine_boxes = len(compile_geometry(clean_program).boxes)
-        user_prompt = (
-            f"[MODE: COARSE_TO_FINE_UPGRADE]\n"
-            f"Simple Blockout ({coarse_boxes} boxes):\n{coarse_dsl}\n"
-            f"Upgrade Brief: Refine this simple blockout into a {fine_boxes}-box articulated model with "
-            f"stateful @materials/@style ({texture_recipe['target_encoding']}) and collision-free @animation_plan. "
-            f"Context: {base_prompt}"
+        coarse_geo = replace(coarse_program, behavior=None)
+        coarse_dsl = format_program(coarse_geo)
+        coarse_boxes = len(compile_geometry(coarse_geo).boxes)
+        fine_boxes = len(compile_geometry(target_program).boxes)
+        brief = sanitize_prompt_no_leakage(
+            f"[MODE: COARSE TO FINE UPGRADE]\n"
+            f"Upgrade Brief: Refine this {coarse_boxes}-box blockout into a {fine_boxes}-box articulated model with "
+            f"stateful @materials and @style ({enc_human}){motion_clause}.\n"
+            f"Context: {clean_base}"
         )
-        completion = f"{full_dsl}\n{anim_line}"
-        return {"assistant_prompt": user_prompt, "assistant_completion": completion}
+        user_prompt = f"{brief}\nSimple Blockout ({coarse_boxes} boxes):\n{coarse_dsl}"
+        return {"assistant_prompt": user_prompt, "assistant_completion": full_dsl}
 
     if task_mode == "texture_and_animate_rig":
-        geo_only_prog = replace(clean_program, materials=(), style=None)
-        subs = ", ".join(f"{s['slot']}:{s['family']}" for s in texture_recipe["substrates"])
-        user_prompt = (
-            f"[MODE: TEXTURE_AND_ANIMATE]\n"
-            f"Untextured Rig:\n{format_program(geo_only_prog)}\n"
-            f"Material & Motion Brief: Bind stateful @materials ({subs}), @style ({texture_recipe['target_encoding']}, "
-            f"{texture_recipe['texel_density']}px), and a swept-SAT verified '{animation_spec['motion_archetype']}' @animation_plan."
+        geo_only_prog = replace(target_program, materials=(), style=None, behavior=None)
+        subs = ", ".join(
+            f"{s['slot']} ({str(s['family']).replace('_', ' ')})" for s in texture_recipe["substrates"]
         )
-        completion = f"{full_dsl}\n{anim_line}"
-        return {"assistant_prompt": user_prompt, "assistant_completion": completion}
+        brief = sanitize_prompt_no_leakage(
+            f"[MODE: TEXTURE AND ANIMATE]\n"
+            f"Material & Motion Brief: Bind stateful @materials ({subs}) and @style ({enc_human}, "
+            f"{texture_recipe['texel_density']}px){motion_clause}."
+        )
+        user_prompt = f"{brief}\nUntextured Rig:\n{format_program(geo_only_prog)}"
+        return {"assistant_prompt": user_prompt, "assistant_completion": full_dsl}
 
-    # Default: create_full_asset (concise unified model + texture + animation)
-    tier = classify_complexity_tier(len(compile_geometry(clean_program).boxes))
-    user_prompt = (
-        f"[MODE: CREATE_MODEL_TEXTURE_ANIMATION | TIER: {tier}]\n"
-        f"{base_prompt}\n"
-        f"Include stateful @materials/@style ({texture_recipe['target_encoding']}) and a swept-SAT safe @animation_plan."
+    tier_human = classify_complexity_tier(len(compile_geometry(target_program).boxes)).replace("_", " ")
+    user_prompt = sanitize_prompt_no_leakage(
+        f"[MODE: CREATE MODEL TEXTURE ANIMATION | TIER: {tier_human}]\n"
+        f"{clean_base}\n"
+        f"Include stateful @materials and @style ({enc_human}){motion_clause}."
     )
-    completion = f"{full_dsl}\n{anim_line}"
-    return {"assistant_prompt": user_prompt, "assistant_completion": completion}
+    return {"assistant_prompt": user_prompt, "assistant_completion": full_dsl}
