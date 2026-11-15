@@ -57,13 +57,38 @@ def validate_scene_for_export(scene: Any) -> None:
         if not np.allclose(bone.rotation, expected_rotation, atol=1e-8, rtol=0):
             raise ExportError(f"bone {bone.name}: local/world rotation disagreement")
         bones[bone.name] = bone
+    size_step = float(getattr(getattr(scene, "meta", None), "size_step", 1.0))
+    if size_step <= 0.0 or not math.isfinite(size_step):
+        raise ExportError("scene meta.size_step must be finite and positive")
+
     for box in scene.boxes:
         claim(box.name)
         if box.bone_name not in bones:
             raise ExportError(f"box {box.name}: missing bone")
         size = vec3(box.size)
-        if (size <= 0).any() or not np.equal(size, np.floor(size)).all():
-            raise ExportError(f"box {box.name}: size must contain positive integers")
+        plane_normal = getattr(box, "plane_normal", None)
+        if plane_normal is not None:
+            if plane_normal not in ("x", "y", "z"):
+                raise ExportError(f"box {box.name}: invalid plane_normal {plane_normal!r}")
+            p_idx = {"x": 0, "y": 1, "z": 2}[plane_normal]
+            if abs(float(size[p_idx])) > 1e-9:
+                raise ExportError(f"box {box.name}: plane_normal={plane_normal!r} requires zero size on that axis")
+            other = [float(size[i]) for i in range(3) if i != p_idx]
+            if any(v <= 0.0 for v in other):
+                raise ExportError(f"box {box.name}: planar tangents must have positive size")
+            if abs(size_step - 1.0) <= 1e-12:
+                if any(not math.isclose(v, round(v), abs_tol=1e-9) for v in other):
+                    raise ExportError(f"box {box.name}: size must contain positive integers when size_step == 1.0")
+            else:
+                if any(not math.isclose(v / size_step, round(v / size_step), abs_tol=1e-7) for v in other):
+                    raise ExportError(f"box {box.name}: size must align to size_step={size_step}")
+        elif abs(size_step - 1.0) <= 1e-12:
+            if (size <= 0).any() or not np.equal(size, np.floor(size)).all():
+                raise ExportError(f"box {box.name}: size must contain positive integers")
+        else:
+            if (size <= 0).any() or not np.allclose(size / size_step, np.rint(size / size_step), atol=1e-7, rtol=0):
+                raise ExportError(f"box {box.name}: size must be positive multiples of size_step={size_step}")
+
         if not isinstance(box.inflate, (int, float)) or not math.isfinite(box.inflate) or box.inflate < 0:
             raise ExportError(f"box {box.name}: inflate must be finite and nonnegative")
         bone = bones[box.bone_name]
@@ -71,7 +96,12 @@ def validate_scene_for_export(scene: Any) -> None:
         if not np.allclose(vec3(box.center), expected_center, atol=1e-8, rtol=0):
             raise ExportError(f"box {box.name}: local/world center disagreement")
         euler_zyx_degrees(box.rotation)
-        if not np.allclose(box.rotation, bone.rotation, atol=1e-8, rtol=0):
+        raw_local_euler = getattr(box, "local_euler", None)
+        if raw_local_euler is not None and np.any(np.abs(np.asarray(raw_local_euler, dtype=np.float64)) > 1e-9):
+            expected_box_rot = bone.rotation @ euler_xyz_matrix(vec3(raw_local_euler))
+            if not np.allclose(box.rotation, expected_box_rot, atol=1e-8, rtol=0):
+                raise ExportError(f"box {box.name}: rotation disagrees with bone @ local_euler")
+        elif not np.allclose(box.rotation, bone.rotation, atol=1e-8, rtol=0):
             raise ExportError(f"box {box.name}: rotation disagrees with its bone")
         if any(face not in FACES for face in box.cullface):
             raise ExportError(f"box {box.name}: invalid cullface")

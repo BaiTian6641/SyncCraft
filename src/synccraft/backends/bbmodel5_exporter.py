@@ -48,8 +48,35 @@ def _serialize_bbmodel_animations(
         samples = evaluate_behavior_clip(program, clip.name, num_frames=n_frames)
         animators: dict[str, dict[str, Any]] = {}
 
+        explicit_kf_channels: set[tuple[str, str]] = set()
+        for kf_tr in getattr(clip, "keyframes", ()):
+            explicit_kf_channels.add((kf_tr.bone, kf_tr.channel))
+            b_uid = stable_uuid("bone", kf_tr.bone, asset_name)
+            ch_kfs: list[dict[str, Any]] = []
+            interp = "catmullrom" if getattr(kf_tr, "interpolation", "linear") == "catmullrom" else "linear"
+            for k_i, (t_s, vec_v) in enumerate(kf_tr.keys):
+                ch_kfs.append({
+                    "channel": kf_tr.channel,
+                    "data_points": [{
+                        "x": round(float(vec_v[0]), 4),
+                        "y": round(float(vec_v[1]), 4),
+                        "z": round(float(vec_v[2]), 4),
+                    }],
+                    "uuid": stable_uuid(f"kf_{kf_tr.channel}", f"{clip.name}:{kf_tr.bone}:{k_i}", asset_name),
+                    "time": round(float(t_s), 4),
+                    "color": -1,
+                    "interpolation": interp,
+                })
+            if ch_kfs:
+                animators.setdefault(
+                    b_uid,
+                    {"name": kf_tr.bone, "type": "bone", "keyframes": []},
+                )["keyframes"].extend(ch_kfs)
+
         # Root position keyframes when non-zero
-        if any(any(abs(float(c)) > 1e-5 for c in s.root_translation_delta) for s in samples):
+        if (root_bone_name, "position") not in explicit_kf_channels and any(
+            any(abs(float(c)) > 1e-5 for c in s.root_translation_delta) for s in samples
+        ):
             root_uid = stable_uuid("bone", root_bone_name, asset_name)
             pos_kfs: list[dict[str, Any]] = []
             for k_i, s in enumerate(samples):
@@ -79,7 +106,7 @@ def _serialize_bbmodel_animations(
 
         for bone in scene.bones:
             bname = bone.name
-            if bname == root_bone_name:
+            if (bname, "rotation") in explicit_kf_channels:
                 continue
             frame_vecs = _extract_so3_euler_keyframe_deltas(samples, bone)
             if max(max(abs(v[0]), abs(v[1]), abs(v[2])) for v in frame_vecs) < 1e-4:
@@ -177,23 +204,58 @@ def export_bbmodel(
             outliner.append(node)
         else:
             nodes[bone.parent_name]["children"].append(node)
+    from synccraft.kinematics.se3_chain import euler_xyz_matrix
+
     elements: list[dict] = []
     for box in scene.boxes:
         if box.bone_name not in origins:
             raise ExportError(f"box {box.name} references a missing bone")
-        center = origins[box.bone_name] + np.asarray(box.local_center)
-        half_size = np.asarray(box.size) / 2
+        bone_origin = origins[box.bone_name]
+        half_size = np.asarray(box.size, dtype=np.float64) / 2.0
+        raw_loc_euler = getattr(box, "local_euler", None)
+        has_loc_rot = raw_loc_euler is not None and np.any(np.abs(np.asarray(raw_loc_euler, dtype=np.float64)) > 1e-9)
+        if has_loc_rot:
+            loc_e = np.asarray(raw_loc_euler, dtype=np.float64)
+            r_loc = euler_xyz_matrix((float(loc_e[0]), float(loc_e[1]), float(loc_e[2])))
+            raw_lpiv = getattr(box, "local_pivot", None)
+            c_piv_bone = (
+                np.asarray(raw_lpiv, dtype=np.float64)
+                if raw_lpiv is not None
+                else np.asarray(box.local_center, dtype=np.float64)
+            )
+            raw_unrot = getattr(box, "unrotated_local_center", None)
+            c_unrot_bone = (
+                np.asarray(raw_unrot, dtype=np.float64)
+                if raw_unrot is not None
+                else (c_piv_bone + r_loc.T @ (np.asarray(box.local_center, dtype=np.float64) - c_piv_bone))
+            )
+            el_from = bone_origin + c_unrot_bone - half_size
+            el_to = bone_origin + c_unrot_bone + half_size
+            el_origin = vector(bone_origin + c_piv_bone)
+            el_rot = vector(loc_e)
+        else:
+            center = bone_origin + np.asarray(box.local_center, dtype=np.float64)
+            el_from = center - half_size
+            el_to = center + half_size
+            el_origin = vector(bone_origin)
+            el_rot = [0.0, 0.0, 0.0]
+
         uid = stable_uuid("box", box.name, name)
         faces = {}
+        box_uv_faces = getattr(box, "uv_faces", None) or {}
         for face in FACES:
-            face_data = {"uv": face_uv(atlas, box.name, face, normalized=False), "texture": 0 if atlas is not None else None}
+            if box_uv_faces and face in box_uv_faces and width == 1 and height == 1:
+                uv_rect = list(box_uv_faces[face])
+            else:
+                uv_rect = face_uv(atlas, box.name, face, normalized=False)
+            face_data = {"uv": uv_rect, "texture": 0 if atlas is not None else None}
             if face in reflected_cullfaces(box):
                 face_data["cullface"] = face
             faces[face] = face_data
         elements.append({
             "name": box.name, "type": "cube", "uuid": uid,
-            "from": vector(center - half_size), "to": vector(center + half_size),
-            "origin": vector(origins[box.bone_name]), "rotation": [0.0, 0.0, 0.0],
+            "from": vector(el_from), "to": vector(el_to),
+            "origin": el_origin, "rotation": el_rot,
             "inflate": float(box.inflate), "box_uv": False, "autouv": 0,
             "faces": faces, "export": True, "visibility": True,
         })

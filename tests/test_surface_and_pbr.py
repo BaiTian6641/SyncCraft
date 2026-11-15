@@ -260,5 +260,327 @@ class TestMaterialCatalogAndPBRTargets(unittest.TestCase):
                 parse_program(dsl_with_mat + f"\n@{deferred} {{ }}\n")
 
 
+class TestScientificOpticalAndSurfaceValidation(unittest.TestCase):
+    """Reference physics & numerical validation suite for M5 and M6."""
+
+    def test_m5_three_tier_fidelity_labels_and_cited_physical_constants(self) -> None:
+        from synccraft.surface import (
+            ARCHARD_DIRECT_RUBBING_COUPLING,
+            ARCHARD_SWEPT_CONTACT_COUPLING,
+            ARCHARD_WEAR_NORMALIZATION,
+            DIELECTRIC_IOR_REFERENCE_TABLE,
+            FIDELITY_BY_FAMILY,
+            FIDELITY_TIERS,
+            MATERIAL_FAMILIES,
+            MaterialSpec,
+            StyleConfig,
+            ior_to_dielectric_f0,
+        )
+
+        self.assertEqual(
+            FIDELITY_TIERS,
+            frozenset({"physical_law_validated", "reduced_order_qualitative", "stylistic"}),
+        )
+        self.assertEqual(set(FIDELITY_BY_FAMILY.keys()), set(MATERIAL_FAMILIES))
+        self.assertTrue(set(FIDELITY_BY_FAMILY.values()).issubset(FIDELITY_TIERS))
+        for fam in MATERIAL_FAMILIES:
+            spec = MaterialSpec(name=f"m_{fam}", family=fam)
+            self.assertIn(spec.fidelity_label, FIDELITY_TIERS)
+        self.assertEqual(MaterialSpec("irid", family="thin_film_iridescence").fidelity_label, "physical_law_validated")
+        self.assertEqual(MaterialSpec("poly", family="polymer_dielectric").fidelity_label, "physical_law_validated")
+        self.assertEqual(MaterialSpec("skin", family="patterned_skin").fidelity_label, "reduced_order_qualitative")
+        self.assertEqual(StyleConfig().fidelity_label, "stylistic")
+        self.assertEqual(StyleConfig().to_dict()["fidelity_label"], "stylistic")
+
+        # Every entry in DIELECTRIC_IOR_REFERENCE_TABLE obeys Fresnel F0 = ((n - 1)/(n + 1))^2
+        self.assertGreaterEqual(len(DIELECTRIC_IOR_REFERENCE_TABLE), 5)
+        for key, entry in DIELECTRIC_IOR_REFERENCE_TABLE.items():
+            ior = float(entry["ior"])
+            f0 = float(entry["f0"])
+            self.assertGreater(ior, 1.0, msg=key)
+            self.assertAlmostEqual(ior_to_dielectric_f0(ior), f0, places=6, msg=key)
+            self.assertTrue(str(entry["source"]).strip(), msg=key)
+
+        # Archard (1953) dimensional wear normalization reproduces 0.45 and 0.22 couplings
+        c_rub_calc = (
+            float(ARCHARD_WEAR_NORMALIZATION["reference_specific_wear_rate_inv_pa"])
+            * float(ARCHARD_WEAR_NORMALIZATION["reference_contact_pressure_pa"])
+            * float(ARCHARD_WEAR_NORMALIZATION["model_unit_meters"])
+            / float(ARCHARD_WEAR_NORMALIZATION["reference_coating_thickness_m"])
+        )
+        self.assertAlmostEqual(c_rub_calc, ARCHARD_DIRECT_RUBBING_COUPLING, places=6)
+        self.assertAlmostEqual(ARCHARD_DIRECT_RUBBING_COUPLING, 0.45, places=6)
+        self.assertAlmostEqual(ARCHARD_SWEPT_CONTACT_COUPLING, 0.22, places=6)
+        self.assertIn("Archard", str(ARCHARD_WEAR_NORMALIZATION["source"]))
+
+    def test_m6_cook_torrance_ggx_white_furnace_and_helmholtz_reciprocity(self) -> None:
+        from synccraft.shading import (
+            compute_ggx_hemispherical_reflectance,
+            evaluate_cook_torrance_ggx_brdf,
+        )
+
+        # 1. White-furnace passivity: hemispherical reflectance <= 1.0 across all roughnesses & view angles
+        roughnesses = (0.02, 0.05, 0.15, 0.35, 0.65, 1.0)
+        mu_views = (0.05, 0.20, 0.50, 0.80, 1.00)
+        for rp in roughnesses:
+            for mu_o in mu_views:
+                rho_cond = compute_ggx_hemispherical_reflectance(
+                    mu_o, rp, metalness=1.0, base_color_linear=(1.0, 1.0, 1.0), n_quad=64
+                )
+                self.assertTrue(np.all(rho_cond > 0.0), msg=f"conductor rp={rp}, mu_o={mu_o}")
+                self.assertTrue(
+                    np.all(rho_cond <= 1.0 + 1e-7),
+                    msg=f"White-furnace violation on conductor rp={rp}, mu_o={mu_o}: {rho_cond}",
+                )
+                rho_diel = compute_ggx_hemispherical_reflectance(
+                    mu_o, rp, metalness=0.0, base_color_linear=(1.0, 1.0, 1.0), dielectric_f0=0.04, n_quad=64
+                )
+                self.assertTrue(
+                    np.all(rho_diel <= 1.0 + 1e-7),
+                    msg=f"White-furnace violation on dielectric rp={rp}, mu_o={mu_o}: {rho_diel}",
+                )
+
+        # Smooth mirror-like white conductor approaches unit reflectance at non-grazing incidence
+        rho_mirror = compute_ggx_hemispherical_reflectance(
+            0.85, 0.02, metalness=1.0, base_color_linear=(1.0, 1.0, 1.0), n_quad=64
+        )
+        np.testing.assert_allclose(rho_mirror, np.ones(3), atol=1e-3)
+
+        # 2. Exact Helmholtz reciprocity: f_r(wi, wo) == f_r(wo, wi)
+        rng = np.random.default_rng(20261114)
+        n_samples = 200
+        wi = rng.normal(size=(n_samples, 3))
+        wo = rng.normal(size=(n_samples, 3))
+        wi[:, 2] = np.abs(wi[:, 2]) + 0.02
+        wo[:, 2] = np.abs(wo[:, 2]) + 0.02
+        wi /= np.linalg.norm(wi, axis=-1, keepdims=True)
+        wo /= np.linalg.norm(wo, axis=-1, keepdims=True)
+        nrm = np.broadcast_to(np.array((0.0, 0.0, 1.0)), wi.shape)
+
+        for cfg in (
+            {"perceptual_roughness": 0.25, "metalness": 0.0, "base_color_linear": (0.8, 0.4, 0.2), "dielectric_f0": 0.04},
+            {"perceptual_roughness": 0.12, "metalness": 1.0, "base_color_linear": (0.95, 0.78, 0.35), "dielectric_f0": 0.04},
+            {
+                "perceptual_roughness": 0.30,
+                "metalness": 0.35,
+                "base_color_linear": (0.3, 0.6, 0.9),
+                "dielectric_f0": 0.0465,
+                "iridescence_thickness_nm": 380.0,
+                "iridescence_ior": 1.45,
+            },
+        ):
+            f_io = evaluate_cook_torrance_ggx_brdf(wi, wo, nrm, **cfg)
+            f_oi = evaluate_cook_torrance_ggx_brdf(wo, wi, nrm, **cfg)
+            np.testing.assert_allclose(f_io, f_oi, rtol=0.0, atol=1e-13)
+
+    def test_m6_airy_single_layer_thin_film_analytic_path_difference_extrema(self) -> None:
+        import math
+        from synccraft.surface import evaluate_airy_thin_film_linear_rgb
+
+        wavelengths = np.array((650.0, 532.0, 460.0), dtype=np.float64)
+        n_film = 1.46
+        r01_0 = ((1.0 - n_film) / (1.0 + n_film)) ** 2  # normal-incidence air->film R01
+
+        for theta_deg in (0.0, 45.0):
+            cos_i = math.cos(math.radians(theta_deg))
+            sin2_i = max(0.0, 1.0 - cos_i * cos_i)
+            cos_t = math.sqrt(1.0 - sin2_i / (n_film * n_film))
+            R01 = r01_0 + (1.0 - r01_0) * ((1.0 - cos_i) ** 5)
+            r1 = math.sqrt(R01)
+            sub_rgb = np.array((0.25, 0.16, 0.36), dtype=np.float64)
+            r2 = np.sqrt(sub_rgb)
+
+            r_max_analytic = ((r1 + r2) / (1.0 + r1 * r2)) ** 2
+            r_min_analytic = ((r1 - r2) / (1.0 - r1 * r2)) ** 2
+
+            for ch_idx, lam in enumerate(wavelengths):
+                # Quarter-wave optical thickness 2 n_film d cos(theta_t) = (2m + 1) * lam / 2
+                # => Δ = 2 n_film d cos(theta_t) + lam/2 = (m + 1) * lam => constructive maximum!
+                for m_order in (0, 1):
+                    d_qw = ((2 * m_order + 1) * lam) / (4.0 * n_film * cos_t)
+                    rgb_qw = evaluate_airy_thin_film_linear_rgb(np.array(d_qw), n_film, cos_i, sub_rgb)
+                    self.assertAlmostEqual(float(rgb_qw[ch_idx]), float(r_max_analytic[ch_idx]), places=12)
+
+                # Half-wave optical thickness 2 n_film d cos(theta_t) = m * lam
+                # => Δ = (m + 0.5) * lam => destructive minimum!
+                for m_order in (0, 1, 2):
+                    d_hw = (m_order * lam) / (2.0 * n_film * cos_t)
+                    rgb_hw = evaluate_airy_thin_film_linear_rgb(np.array(d_hw), n_film, cos_i, sub_rgb)
+                    self.assertAlmostEqual(float(rgb_hw[ch_idx]), float(r_min_analytic[ch_idx]), places=12)
+
+            # Matched-amplitude anti-reflection check (r2 == r1 at half-wave gives exact 0 reflectance)
+            ar_sub = np.full(3, R01, dtype=np.float64)
+            d_ar = wavelengths[1] / (2.0 * n_film * cos_t)  # half-wave for 532 nm
+            rgb_ar = evaluate_airy_thin_film_linear_rgb(np.array(d_ar), n_film, cos_i, ar_sub)
+            self.assertAlmostEqual(float(rgb_ar[1]), 0.0, places=12)
+
+    def test_m6_gray_scott_pearson_1993_pattern_map_regimes(self) -> None:
+        from synccraft.surface import (
+            FacePersistentPatch,
+            MaterialSpec,
+            PersistentSurfaceState,
+            build_surface_domain,
+            classify_gray_scott_regime,
+            integrate_gray_scott_on_state,
+        )
+
+        prog = parse_program(
+            "@meta { archetype: entity, target_profile: bbmodel_5, texel_density: 16 }\n"
+            "@palette { skin: ramp(base_lch=[0.68, 0.07, 115], steps=6) }\n"
+            "@rig { root bone body { pivot_local: [0,0,0] box slab { size: [12, 12, 12], material: skin } } }\n"
+        )
+        dom = build_surface_domain(prog, subdivisions_per_unit=4)
+        # Pearson (1993) 2:1 diffusivity ratio scaled to manifold grid spacing dx = 0.25 u:
+        du_p = 0.16 * (dom.dx ** 2)
+        dv_p = 0.08 * (dom.dx ** 2)
+
+        def eval_regime(feed: float, kill: float) -> dict[str, float | int | str]:
+            spec = MaterialSpec(
+                name="skin",
+                family="patterned_skin",
+                rd_feed=feed,
+                rd_kill=kill,
+                rd_du=du_p,
+                rd_dv=dv_p,
+                rd_initial_time=800.0,
+                anisotropy=1.0,
+                seed=42,
+            )
+            st = PersistentSurfaceState(
+                dom.subdivisions_per_unit,
+                {fk: FacePersistentPatch.zeros(g.shape) for fk, g in dom.faces.items()},
+            )
+            integrate_gray_scott_on_state(dom, st, spec, {("slab", "up")}, duration=800.0, dorsal_modulation=0.0)
+            return classify_gray_scott_regime(st.patches[("slab", "up")].rd_v, threshold=0.16)
+
+        hom_low = eval_regime(0.012, 0.065)
+        hom_high = eval_regime(0.095, 0.060)
+        spots = eval_regime(0.030, 0.062)
+        stripes = eval_regime(0.054, 0.062)
+
+        self.assertEqual(hom_low["regime"], "homogeneous")
+        self.assertLess(float(hom_low["v_std"]), 1e-4)
+        self.assertEqual(hom_high["regime"], "homogeneous")
+        self.assertLess(float(hom_high["v_std"]), 1e-4)
+
+        self.assertEqual(spots["regime"], "spots")
+        self.assertGreaterEqual(int(spots["n_components"]), 3)
+
+        self.assertEqual(stripes["regime"], "stripes_labyrinth")
+        self.assertGreater(float(stripes["active_fraction"]), float(spots["active_fraction"]))
+        self.assertGreater(float(stripes["max_component_fraction"]), float(spots["max_component_fraction"]))
+
+    def test_m6_16px_texel_survival_sensitivity_report(self) -> None:
+        from synccraft.backends.labpbr_exporter import export_labpbr_1_3
+        from synccraft.shading import compile_vanilla_atlas
+        from synccraft.surface import (
+            MaterialProgram,
+            MaterialSpec,
+            StyleConfig,
+            WorldState,
+            build_surface_domain,
+            initialize_surface_state,
+        )
+
+        prog = parse_program(
+            "@meta { archetype: entity, target_profile: bbmodel_5, texel_density: 16 }\n"
+            "@palette { body_mat: ramp(base_lch=[0.58, 0.11, 225], steps=5) }\n"
+            "@rig { root bone root_b { pivot_local: [0,0,0] box hull { size: [6, 6, 6], material: body_mat } } }\n"
+        )
+
+        def render_16px(spec: MaterialSpec) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+            import io
+            from PIL import Image
+
+            mp = MaterialProgram({"body_mat": spec})
+            dom = build_surface_domain(prog, mp, subdivisions_per_unit=4)
+            st = initialize_surface_state(dom)
+            # Apply mild deterministic wear on north face so coating_thickness sensitivity is observable
+            st.patches[("hull", "north")].wear[:, :12] = 0.30
+            ws = WorldState(
+                program=prog,
+                material_program=mp,
+                surface_state=st,
+                style_config=StyleConfig(quantize_to_palette_ramp=True),
+            )
+            _, vanilla_png = compile_vanilla_atlas(ws)
+            vanilla = np.asarray(Image.open(io.BytesIO(vanilla_png)).convert("RGBA"), dtype=np.uint8)
+            labpbr = export_labpbr_1_3(ws)
+            return vanilla, labpbr["arrays"]["atlas_s"], labpbr["arrays"]["atlas_n"]
+
+        base_metal = MaterialSpec("body_mat", family="painted_metal", coating_thickness=0.70, perceptual_roughness=0.45, dielectric_ior=1.50, feature_scale=1.0, seed=101)
+        v_base, s_base, n_base = render_16px(base_metal)
+
+        probes: list[tuple[str, MaterialSpec, tuple[np.ndarray, np.ndarray, np.ndarray]]] = [
+            (
+                "coating_thickness_macro",
+                MaterialSpec("body_mat", family="painted_metal", coating_thickness=0.18, perceptual_roughness=0.45, dielectric_ior=1.50, feature_scale=1.0, seed=101),
+                (v_base, s_base, n_base),
+            ),
+            (
+                "perceptual_roughness_macro",
+                MaterialSpec("body_mat", family="painted_metal", coating_thickness=0.70, perceptual_roughness=0.06, dielectric_ior=1.50, feature_scale=1.0, seed=101),
+                (v_base, s_base, n_base),
+            ),
+            (
+                "dielectric_ior_macro",
+                MaterialSpec("body_mat", family="painted_metal", coating_thickness=0.70, perceptual_roughness=0.45, dielectric_ior=2.10, feature_scale=1.0, seed=101),
+                (v_base, s_base, n_base),
+            ),
+            (
+                "feature_scale_macro",
+                MaterialSpec("body_mat", family="painted_metal", coating_thickness=0.18, perceptual_roughness=0.45, dielectric_ior=1.50, feature_scale=2.5, seed=101),
+                render_16px(MaterialSpec("body_mat", family="painted_metal", coating_thickness=0.18, perceptual_roughness=0.45, dielectric_ior=1.50, feature_scale=1.0, seed=101)),
+            ),
+            (
+                "thin_film_thickness_nm_macro",
+                MaterialSpec("body_mat", family="thin_film_iridescence", film_thickness_nm=460.0, perceptual_roughness=0.18, seed=101),
+                render_16px(MaterialSpec("body_mat", family="thin_film_iridescence", film_thickness_nm=240.0, perceptual_roughness=0.18, seed=101)),
+            ),
+            (
+                "countershade_strength_macro",
+                MaterialSpec("body_mat", family="keratin_scales", countershade_strength=0.85, seed=101),
+                render_16px(MaterialSpec("body_mat", family="keratin_scales", countershade_strength=0.0, seed=101)),
+            ),
+            (
+                "sub_lsb_roughness_micro",
+                MaterialSpec("body_mat", family="painted_metal", coating_thickness=0.70, perceptual_roughness=0.4501, dielectric_ior=1.50, feature_scale=1.0, seed=101),
+                (v_base, s_base, n_base),
+            ),
+        ]
+
+        report: dict[str, dict[str, int | bool]] = {}
+        for pname, p_spec, (ref_v, ref_s, ref_n) in probes:
+            cur_v, cur_s, cur_n = render_16px(p_spec)
+            dv = int(np.count_nonzero(np.any(cur_v != ref_v, axis=-1)))
+            ds = int(np.count_nonzero(np.any(cur_s != ref_s, axis=-1)))
+            dn = int(np.count_nonzero(np.any(cur_n != ref_n, axis=-1)))
+            report[pname] = {
+                "vanilla_quantized_changed_texels": dv,
+                "labpbr_s_changed_texels": ds,
+                "labpbr_n_changed_texels": dn,
+                "survives_vanilla_16px": dv > 0,
+                "survives_any_16px_target": (dv + ds + dn) > 0,
+            }
+
+        # Macro physical parameters survive to 16-px texels (vanilla and/or LabPBR _s/_n)
+        for macro_key in (
+            "coating_thickness_macro",
+            "perceptual_roughness_macro",
+            "dielectric_ior_macro",
+            "feature_scale_macro",
+            "thin_film_thickness_nm_macro",
+            "countershade_strength_macro",
+        ):
+            self.assertTrue(report[macro_key]["survives_any_16px_target"], msg=f"{macro_key}: {report[macro_key]}")
+
+        # Coating wear, countershading, and thin-film shift survive even 5-step quantized vanilla 16-px atlas
+        self.assertTrue(report["coating_thickness_macro"]["survives_vanilla_16px"])
+        self.assertTrue(report["countershade_strength_macro"]["survives_vanilla_16px"])
+        self.assertTrue(report["thin_film_thickness_nm_macro"]["survives_vanilla_16px"])
+        # Honest quantization floor: 1e-4 roughness tweak collapses under 5-step OKLab ramp quantization
+        self.assertFalse(report["sub_lsb_roughness_micro"]["survives_vanilla_16px"])
+
+
 if __name__ == "__main__":
     unittest.main()
