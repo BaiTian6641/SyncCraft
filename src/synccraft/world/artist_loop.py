@@ -3,7 +3,7 @@
 Provides two deterministic, non-diffusion artist-assistant capabilities:
 1. Project Intake, Quantitative Critique & Looped Enhancement (`analyze_artist_project`,
    `enhance_artist_project_step`, `run_looped_artist_enhancement`):
-   Ingests an artist's existing Block-DSL, `.bbmodel`, Java `.json`, or Bedrock/Cobblemon
+   Ingests an artist's existing Block-DSL, `.bbmodel`, Java `.json`, or Bedrock
    `.geo.json` (+ `.animation.json`) project, audits 5 physical/anatomical/material/motion
    pillars, emits ranked actionable suggestions, and executes rule-verified upgrades.
 2. Progressive From-Scratch Construction (`build_progressive_from_scratch_trajectory`):
@@ -16,6 +16,7 @@ Provides two deterministic, non-diffusion artist-assistant capabilities:
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+import json
 import math
 from typing import Any
 
@@ -53,7 +54,28 @@ from synccraft.kinematics.musculoskeletal import (
 )
 from synccraft.kinematics.sat_potential import sat_obb
 from synccraft.kinematics.se3_chain import Scene, compile_geometry
-from synccraft.world.inverse_inference import AssetProvenance, ingest_external_asset
+from synccraft.world.inverse_inference import (
+    BANNED_PROVENANCE_TOKENS,
+    LICENSE_POLICIES,
+    AssetProvenance,
+    LicenseGateError,
+    _decompile_bbmodel,
+    _decompile_bedrock_geojson,
+    _decompile_java_json,
+    decompile_bedrock_animation_to_behavior,
+    ingest_external_asset,
+)
+
+LOCAL_WORKSPACE_LICENSE_POLICY = "local_workspace_unverified"
+_NOAI_RESTRICTED_MARKERS: tuple[str, ...] = (
+    "noai",
+    "no-ai",
+    "no machine learning",
+    "do not train",
+    "no generative ai",
+    "tdm-reservation: 1",
+    "ai-generated",
+)
 
 
 @dataclass(frozen=True)
@@ -159,36 +181,173 @@ def _count_ast_joint_limits(bone: Bone) -> tuple[int, int]:
     return with_lim, total
 
 
+def build_unlabeled_workspace_provenance(
+    asset_id: str = "artist_workspace_input",
+) -> AssetProvenance:
+    """Return conservative NOASSERTION provenance for unlabeled local workspace inputs (H7).
+
+    Unlabeled workspace inputs are NEVER stamped permissive (e.g. CC-BY-4.0) by default
+    and are strictly flagged ``commercial_weights_eligible=False``.
+    """
+    return AssetProvenance(
+        asset_id=asset_id,
+        source_url="local://artist_workspace",
+        author="workspace_artist",
+        license_spdx="NOASSERTION",
+        attribution_notice="Unverified local workspace input; ineligible for training or commercial weights",
+    )
+
+
+def _check_local_workspace_restrictions(payload: dict[str, Any], prov: AssetProvenance) -> None:
+    """Reject Mojang/proprietary tokens and NoAI/TDM markers even in local workspace mode."""
+    meta_blob = " ".join(
+        str(getattr(prov, attr, ""))
+        for attr in ("asset_id", "source_url", "author", "license_spdx", "attribution_notice", "title", "changes_made_note")
+    )
+    doc_meta = json.dumps(
+        {
+            k: payload.get(k)
+            for k in ("name", "credit", "author", "license", "description", "meta", "minecraft:geometry")
+            if k in payload
+        },
+        sort_keys=True,
+        default=str,
+    )
+    combined = f"{meta_blob} {doc_meta}".lower()
+    for banned in BANNED_PROVENANCE_TOKENS:
+        if banned in combined:
+            raise LicenseGateError(f"Asset provenance/metadata contains prohibited source marker {banned!r}")
+    for marker in _NOAI_RESTRICTED_MARKERS:
+        if marker in combined:
+            raise LicenseGateError(f"Asset metadata contains restricted AI opt-out marker {marker!r}")
+    if "-nd" in str(prov.license_spdx).lower():
+        raise LicenseGateError(f"NoDerivatives license {prov.license_spdx!r} is forbidden")
+
+
+def ingest_artist_project_record(
+    project: Program | str | dict[str, Any],
+    *,
+    format_kind: str = "blockdsl",
+    animation_payload: dict[str, Any] | None = None,
+    provenance: AssetProvenance | None = None,
+    license_policy: str | None = None,
+) -> dict[str, Any]:
+    """Ingest an artist input and return Program alongside explicit H7 provenance & eligibility flags."""
+    prov = provenance if provenance is not None else build_unlabeled_workspace_provenance()
+    effective_policy = (
+        license_policy
+        if license_policy is not None
+        else (LOCAL_WORKSPACE_LICENSE_POLICY if provenance is None else "clean_room_permissive")
+    )
+
+    if isinstance(project, Program):
+        prog = validate_program(project)
+        eligible = bool(provenance is not None and effective_policy == "clean_room_permissive" and prov.license_spdx != "NOASSERTION")
+        return {
+            "program": prog,
+            "provenance": prov,
+            "license_spdx": prov.license_spdx,
+            "license_policy": effective_policy,
+            "license_track": effective_policy if provenance is not None else LOCAL_WORKSPACE_LICENSE_POLICY,
+            "commercial_weights_eligible": eligible,
+        }
+    if isinstance(project, str):
+        prog = parse_program(project)
+        eligible = bool(provenance is not None and effective_policy == "clean_room_permissive" and prov.license_spdx != "NOASSERTION")
+        return {
+            "program": prog,
+            "provenance": prov,
+            "license_spdx": prov.license_spdx,
+            "license_policy": effective_policy,
+            "license_track": effective_policy if provenance is not None else LOCAL_WORKSPACE_LICENSE_POLICY,
+            "commercial_weights_eligible": eligible,
+        }
+    if isinstance(project, dict):
+        _check_local_workspace_restrictions(project, prov)
+        if effective_policy == LOCAL_WORKSPACE_LICENSE_POLICY:
+            if LOCAL_WORKSPACE_LICENSE_POLICY in LICENSE_POLICIES:
+                rec = ingest_external_asset(
+                    project,
+                    format_kind=format_kind,
+                    provenance=prov,
+                    animation_payload=animation_payload,
+                    license_policy=LOCAL_WORKSPACE_LICENSE_POLICY,
+                )
+                return {
+                    "program": rec.program,
+                    "provenance": prov,
+                    "license_spdx": prov.license_spdx,
+                    "license_policy": LOCAL_WORKSPACE_LICENSE_POLICY,
+                    "license_track": LOCAL_WORKSPACE_LICENSE_POLICY,
+                    "commercial_weights_eligible": False,
+                }
+            raw_to_safe_bone: dict[str, str] | None = None
+            if format_kind == "bbmodel":
+                prog, _, _, _ = _decompile_bbmodel(project)
+            elif format_kind == "java_json":
+                prog, _, _ = _decompile_java_json(project)
+            elif format_kind == "bedrock_geojson":
+                prog, _, _, raw_to_safe_bone = _decompile_bedrock_geojson(project)
+            else:
+                raise ValueError(
+                    f"Unsupported external format_kind {format_kind!r}; expected 'bbmodel', 'java_json', or 'bedrock_geojson'"
+                )
+            if animation_payload is not None:
+                beh = decompile_bedrock_animation_to_behavior(
+                    animation_payload,
+                    prog,
+                    raw_to_safe_bone=raw_to_safe_bone,
+                )
+                prog = validate_program(replace(prog, behavior=beh))
+            return {
+                "program": prog,
+                "provenance": prov,
+                "license_spdx": prov.license_spdx,
+                "license_policy": LOCAL_WORKSPACE_LICENSE_POLICY,
+                "license_track": LOCAL_WORKSPACE_LICENSE_POLICY,
+                "commercial_weights_eligible": False,
+            }
+
+        rec = ingest_external_asset(
+            project,
+            format_kind=format_kind,
+            provenance=prov,
+            animation_payload=animation_payload,
+            license_policy=effective_policy,
+        )
+        return {
+            "program": rec.program,
+            "provenance": rec.provenance,
+            "license_spdx": rec.provenance.license_spdx,
+            "license_policy": effective_policy,
+            "license_track": rec.license_track,
+            "commercial_weights_eligible": bool(rec.commercial_weights_eligible and rec.provenance.license_spdx != "NOASSERTION"),
+        }
+    raise TypeError(f"Unsupported artist project input type {type(project).__name__}")
+
+
 def ingest_artist_project_to_program(
     project: Program | str | dict[str, Any],
     *,
     format_kind: str = "blockdsl",
     animation_payload: dict[str, Any] | None = None,
     provenance: AssetProvenance | None = None,
-    license_policy: str = "clean_room_permissive",
+    license_policy: str | None = None,
 ) -> Program:
-    """Normalize an artist input (Program, Block-DSL text, .bbmodel, .json, or .geo.json) into a validated Program."""
-    if isinstance(project, Program):
-        return validate_program(project)
-    if isinstance(project, str):
-        return parse_program(project)
-    if isinstance(project, dict):
-        prov = provenance or AssetProvenance(
-            asset_id="artist_workspace_input",
-            source_url="local://artist_workspace",
-            author="workspace_artist",
-            license_spdx="CC-BY-4.0",
-            attribution_notice="Local artist session input",
-        )
-        rec = ingest_external_asset(
-            project,
-            format_kind=format_kind,
-            provenance=prov,
-            animation_payload=animation_payload,
-            license_policy=license_policy,
-        )
-        return rec.program
-    raise TypeError(f"Unsupported artist project input type {type(project).__name__}")
+    """Normalize an artist input (Program, Block-DSL text, .bbmodel, .json, or .geo.json) into a validated Program.
+
+    Unlabeled inputs default to ``license_spdx="NOASSERTION"`` under ``local_workspace_unverified``
+    with ``commercial_weights_eligible=False``; passing ``license_policy="clean_room_permissive"`` or
+    ``"research_nc"`` without verified provenance raises ``LicenseGateError``.
+    """
+    bundle = ingest_artist_project_record(
+        project,
+        format_kind=format_kind,
+        animation_payload=animation_payload,
+        provenance=provenance,
+        license_policy=license_policy,
+    )
+    return bundle["program"]
 
 
 def analyze_artist_project(
@@ -197,7 +356,7 @@ def analyze_artist_project(
     format_kind: str = "blockdsl",
     animation_payload: dict[str, Any] | None = None,
     provenance: AssetProvenance | None = None,
-    license_policy: str = "clean_room_permissive",
+    license_policy: str | None = None,
 ) -> ArtistCritiqueReport:
     """Perform 5-pillar physical, anatomical, musculoskeletal, surface, and motion critique."""
     program = ingest_artist_project_to_program(
@@ -494,7 +653,7 @@ def _infer_material_family_from_palette(name: str, lch: Vec3, is_entity: bool) -
         return ("keratin_scales", 0.38, 0.0, "dermis_continuum" if is_entity else None)
     if any(k in low for k in ("skin", "hide", "belly", "flesh", "body", "pelt", "fur", "coat")):
         return ("patterned_skin", 0.52, 0.0, "dermis_continuum")
-    if any(k in low for k in ("wood", "timber", "oak", "handle", "shaft", "bark", "apricorn")):
+    if any(k in low for k in ("wood", "timber", "oak", "handle", "shaft", "bark", "botanical")):
         return ("solid_wood", 0.58, 0.0, None)
     if any(k in low for k in ("stone", "rock", "slate", "basalt", "brick", "relic")):
         return ("weathered_stone", 0.72, 0.0, None)
@@ -1081,17 +1240,18 @@ def run_looped_artist_enhancement(
     format_kind: str = "blockdsl",
     animation_payload: dict[str, Any] | None = None,
     provenance: AssetProvenance | None = None,
-    license_policy: str = "clean_room_permissive",
+    license_policy: str | None = None,
     max_iterations: int = 4,
 ) -> dict[str, Any]:
     """Run closed-loop critique -> rule upgrade -> re-audit iterations on an artist project."""
-    cur_prog = ingest_artist_project_to_program(
+    intake_bundle = ingest_artist_project_record(
         project,
         format_kind=format_kind,
         animation_payload=animation_payload,
         provenance=provenance,
         license_policy=license_policy,
     )
+    cur_prog: Program = intake_bundle["program"]
     initial_critique = analyze_artist_project(cur_prog)
     cur_critique = initial_critique
     history: list[dict[str, Any]] = [
@@ -1135,6 +1295,9 @@ def run_looped_artist_enhancement(
         "final_program": cur_prog,
         "final_program_dsl": format_program(cur_prog),
         "final_critique": final_critique.to_dict(),
+        "license_spdx": intake_bundle["license_spdx"],
+        "license_track": intake_bundle["license_track"],
+        "commercial_weights_eligible": intake_bundle["commercial_weights_eligible"],
         "history": history,
     }
 
@@ -1300,7 +1463,7 @@ def export_artist_project_bundle(
     num_animation_frames: int = 12,
     animation_mode: str = "keyframes",
 ) -> dict[str, Any]:
-    """Export an enhanced Program to Bedrock/Cobblemon, GeckoLib, or animated Blockbench 5.0 with roundtrip re-audit."""
+    """Export an enhanced Program to Bedrock, GeckoLib, or animated Blockbench 5.0 with roundtrip re-audit."""
     from synccraft.backends.bbmodel5_exporter import export_bbmodel
     from synccraft.backends.bedrock_gecko_exporter import export_bedrock, export_geckolib
 

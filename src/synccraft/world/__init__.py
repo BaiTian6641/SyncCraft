@@ -1,13 +1,16 @@
 """Action-conditioned 3D World Model transitions, exemplars, interventions, inverse inference, and datasets."""
 
 from .artist_loop import (
+    LOCAL_WORKSPACE_LICENSE_POLICY,
     ArtistCritiqueReport,
     ArtistSuggestion,
     ProgressiveStageRecord,
     analyze_artist_project,
     build_progressive_from_scratch_trajectory,
+    build_unlabeled_workspace_provenance,
     enhance_artist_project_step,
     export_artist_project_bundle,
+    ingest_artist_project_record,
     ingest_artist_project_to_program,
     run_looped_artist_enhancement,
 )
@@ -30,9 +33,16 @@ from .inverse_inference import (
 )
 from .trajectory_dataset import (
     COMPOSITIONAL_HELDOUT_TRIPLES,
+    LEVEL_SHORT_NAMES,
+    WORLD_CAPABILITY_LEVELS,
     WORLD_DATASET_PRESETS,
     build_intervention_trajectory_dataset,
+    build_world_capability_ladder_dataset,
+    compute_ast_edit_size,
+    decode_record_observation_image,
     evaluate_matched_budget_world_baselines,
+    evaluate_world_capability_benchmark,
+    score_world_capability_completion,
 )
 from .transitions import (
     ActivateBehaviorStateAction,
@@ -57,7 +67,10 @@ __all__ = [
     "APPROVED_NONCOMMERCIAL_RESEARCH_LICENSES",
     "APPROVED_PERMISSIVE_LICENSES",
     "COMPOSITIONAL_HELDOUT_TRIPLES",
+    "LEVEL_SHORT_NAMES",
     "LICENSE_POLICIES",
+    "LOCAL_WORKSPACE_LICENSE_POLICY",
+    "WORLD_CAPABILITY_LEVELS",
     "WORLD_DATASET_PRESETS",
     "ActivateBehaviorStateAction",
     "ApplyRubbingAction",
@@ -87,16 +100,23 @@ __all__ = [
     "build_intervention_trajectory_dataset",
     "build_progressive_from_scratch_trajectory",
     "build_quarantined_research_nc_dataset",
+    "build_unlabeled_workspace_provenance",
+    "build_world_capability_ladder_dataset",
+    "compute_ast_edit_size",
+    "decode_record_observation_image",
     "decompile_bbmodel_animations_to_behavior",
     "decompile_bedrock_animation_to_behavior",
     "enhance_artist_project_step",
     "evaluate_matched_budget_world_baselines",
+    "evaluate_world_capability_benchmark",
     "export_artist_project_bundle",
     "infer_material_posterior",
+    "ingest_artist_project_record",
     "ingest_artist_project_to_program",
     "ingest_external_asset",
     "run_looped_artist_enhancement",
     "run_seven_interventions_suite",
+    "score_world_capability_completion",
     "step_world",
     "verify_asset_provenance",
 ]

@@ -3,15 +3,21 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+import tempfile
 import unittest
+
+import numpy as np
 
 from synccraft.backends import export_bbmodel, export_java, export_labpbr_1_3
 from synccraft.data_gen.ik_motion_templates import generate_ik_clip, solve_two_bone_ik
-from synccraft.dsl import Attach, Bone, Box, Meta, Palette, Place, Program, validate_program
+from synccraft.dsl import Attach, Bone, Box, Locator, Meta, Palette, Place, Program, format_program, parse_program, validate_program
 from synccraft.kinematics.se3_chain import compile_geometry
 from synccraft.shading import compile_vanilla_atlas
 from synccraft.surface import MaterialProgram, WorldState, build_surface_domain, initialize_surface_state
 from synccraft.world import (
+    LOCAL_WORKSPACE_LICENSE_POLICY,
+    WORLD_CAPABILITY_LEVELS,
     ApplyRubbingAction,
     AssetProvenance,
     EditGeometryAction,
@@ -25,11 +31,20 @@ from synccraft.world import (
     SetTexelDensityAction,
     TwoBoneIKAction,
     action_from_dict,
+    analyze_artist_project,
     build_articulated_mechanism_world,
     build_intervention_trajectory_dataset,
+    build_unlabeled_workspace_provenance,
+    build_world_capability_ladder_dataset,
+    compute_ast_edit_size,
+    decode_record_observation_image,
     evaluate_matched_budget_world_baselines,
+    evaluate_world_capability_benchmark,
+    ingest_artist_project_record,
     ingest_external_asset,
+    run_looped_artist_enhancement,
     run_seven_interventions_suite,
+    score_world_capability_completion,
     step_world,
 )
 
@@ -201,16 +216,210 @@ class TestInverseInferenceAndTrajectoryDataset(unittest.TestCase):
         self.assertEqual(len(compile_geometry(rec_bed.program).boxes), 2)
 
     def test_trajectory_dataset_compositional_holdout_and_matched_budget(self) -> None:
-        ds_a = build_intervention_trajectory_dataset(preset="smoke_24", seed=515)
-        ds_b = build_intervention_trajectory_dataset(preset="smoke_24", seed=515)
-        self.assertEqual(ds_a["manifest_sha256"], ds_b["manifest_sha256"])
-        self.assertEqual(ds_a["total_trajectories"], 24)
-        self.assertTrue(ds_a["zero_compositional_leakage"])
-        self.assertEqual(set(ds_a["capability_counts"].keys()), {"infer", "predict", "plan_repair"})
+        with tempfile.TemporaryDirectory() as td:
+            ds_a = build_intervention_trajectory_dataset(preset="smoke_24", seed=515, output_dir=Path(td) / "a")
+            ds_b = build_world_capability_ladder_dataset(preset="smoke_24", seed=515, output_dir=Path(td) / "b")
+            self.assertEqual(ds_a["manifest_sha256"], ds_b["manifest_sha256"])
+            self.assertGreaterEqual(ds_a["total_trajectories"], 42)
+            self.assertTrue(ds_a["zero_compositional_leakage"])
+            self.assertEqual(set(ds_a["level_counts"].keys()), set(WORLD_CAPABILITY_LEVELS))
 
-        comp = evaluate_matched_budget_world_baselines(ds_a)
-        self.assertTrue(comp["matched_budget_verified"])
-        self.assertGreater(comp["world_model_policy"]["accuracy"], comp["program_only_baseline"]["accuracy"])
+            # C1: Calling evaluate_matched_budget_world_baselines without model_completions MUST fail
+            with self.assertRaises(TypeError):
+                evaluate_matched_budget_world_baselines(ds_a)  # type: ignore[call-arg]
+
+            # Empty completions must score 0.0 (never unconditional credit!)
+            comp_empty = evaluate_matched_budget_world_baselines(ds_a, {})
+            self.assertTrue(comp_empty["matched_budget_verified"])
+            self.assertEqual(comp_empty["evaluated_model"]["core_levels_1_to_6_mean_score"], 0.0)
+            self.assertEqual(comp_empty["evaluated_model"]["core_levels_1_to_6_exact_pass_rate"], 0.0)
+            self.assertLess(comp_empty["gain_over_constant_prior"], 0.0)
+
+            #Simulator ground-truth completions achieve 1.0 and beat constant-prior & NN baselines
+            gt_completions = {
+                str(r["sample_id"]): str(r["target_completion"])
+                for r in ds_a["rows"]
+                if r["split"] == "held_out_compositional_val"
+            }
+            comp_gt = evaluate_matched_budget_world_baselines(ds_a, gt_completions)
+            self.assertEqual(comp_gt["evaluated_model"]["core_levels_1_to_6_exact_pass_rate"], 1.0)
+            self.assertGreater(comp_gt["gain_over_constant_prior"], 0.15)
+            self.assertGreater(comp_gt["gain_over_nearest_neighbor"], 0.10)
+            self.assertTrue(comp_gt["simulator_oracle_upper_bound"]["is_oracle"])
+            self.assertFalse(comp_gt["simulator_oracle_upper_bound"]["is_trained_model"])
+
+    def test_c1_and_h12_seven_level_capability_benchmark_observations_and_probes(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            out_dir = Path(td) / "ladder"
+            ds = build_world_capability_ladder_dataset(preset="smoke_24", seed=2026, output_dir=out_dir)
+
+            # Verify JSON serializability of all rows (notebook & JSONL contract)
+            serialized = json.dumps(ds["rows"], sort_keys=True)
+            self.assertGreater(len(serialized), 2000)
+            self.assertTrue((out_dir / "world_capability_ladder.jsonl").is_file())
+
+            # Zero Level-7 authored rigs in train split
+            train_l7 = [r for r in ds["rows"] if r["split"] == "train" and r["level"] == "level_7_human_transfer"]
+            self.assertEqual(len(train_l7), 0)
+
+            # All 6 sub-levels explicitly represented in Level 7 Human Transfer
+            l7_rows = [r for r in ds["rows"] if r["level"] == "level_7_human_transfer"]
+            self.assertEqual({r["sub_level"] for r in l7_rows}, set(WORLD_CAPABILITY_LEVELS[:6]))
+            for r in l7_rows:
+                self.assertEqual(r["audit_profile"], "authored")
+
+            # Level 5 multi-view PNG observations rendered & decodable
+            l5_rows = [r for r in ds["rows"] if r.get("sub_level") == "level_5_invert_observation"]
+            self.assertGreaterEqual(len(l5_rows), 2)
+            for r in l5_rows:
+                img = decode_record_observation_image(r)
+                self.assertIsNotNone(img)
+                arr = np.asarray(img)
+                self.assertEqual(arr.ndim, 3)
+                self.assertEqual(arr.shape[1], 4 * arr.shape[0])
+                self.assertGreater(int((arr > 0).sum()), 100)
+                self.assertTrue(Path(r["observation_image_path"]).is_file())
+                self.assertTrue(Path(r["four_views_image_path"]).is_file())
+
+            # Zero split-label or borrowed IP leakage in prompts/IDs
+            banned = (
+                "held-out",
+                "holdout",
+                "held_out",
+                "unseen",
+                "test_unseen",
+                "seen_train",
+                "validation",
+                "apricorn",
+                "cobblemon",
+                "pokemon",
+                "pokémon",
+                "monster hunter",
+                "mojang",
+            )
+            for r in ds["rows"]:
+                blob = f"{r['sample_id']} {r['prompt']}".lower()
+                for tok in banned:
+                    self.assertNotIn(tok, blob)
+
+            # Garbage completions MUST score 0.0 across every level
+            eval_rows = [r for r in ds["rows"] if r["split"] == "held_out_compositional_val"]
+            garbage_comps = {str(r["sample_id"]): "not valid json or dsl @@@" for r in eval_rows}
+            bench_bad = evaluate_world_capability_benchmark(ds, garbage_comps, include_baselines=True)
+            self.assertEqual(bench_bad["model_results"]["core_levels_1_to_6_mean_score"], 0.0)
+            self.assertEqual(bench_bad["model_results"]["overall_parse_valid_rate"], 0.0)
+            self.assertEqual(bench_bad["model_results"]["consistency_probes"]["consistency_rate"], 0.0)
+            self.assertFalse(bench_bad["model_results"]["is_oracle"])
+            self.assertTrue(bench_bad["model_results"]["is_trained_model"])
+
+            # Verify Level 7 is reported strictly per sub-level and never collapsed
+            l7_rep = bench_bad["baselines"]["simulator_oracle_upper_bound"]["level_7_human_transfer_by_sublevel"]
+            self.assertEqual(set(l7_rep.keys()), set(WORLD_CAPABILITY_LEVELS[:6]))
+            self.assertTrue(bench_bad["model_results"]["level_7_collapsed_average_forbidden"])
+            self.assertNotIn("level_7_mean_score", bench_bad["model_results"])
+
+            # Verify baselines: constant prior gets 0.0 on directional consistency probes, oracle gets 1.0
+            prior_b = bench_bad["baselines"]["constant_prior_baseline"]
+            nn_b = bench_bad["baselines"]["nearest_neighbor_train_retrieval"]
+            oracle_b = bench_bad["baselines"]["simulator_oracle_upper_bound"]
+            self.assertEqual(prior_b["consistency_probes"]["consistency_rate"], 0.0)
+            self.assertEqual(oracle_b["consistency_probes"]["consistency_rate"], 1.0)
+            self.assertEqual(oracle_b["core_levels_1_to_6_exact_pass_rate"], 1.0)
+            self.assertFalse(prior_b["is_trained_model"])
+            self.assertFalse(nn_b["is_trained_model"])
+            self.assertTrue(oracle_b["is_oracle"])
+            self.assertFalse(oracle_b["is_trained_model"])
+            self.assertIn("NEVER report as a learned model score", oracle_b["warning"])
+
+            # Verify inverted probe responses fail directional consistency even when parse-valid
+            inverted_comps: dict[str, str] = {}
+            probe_pairs: dict[str, dict[str, dict]] = {}
+            for r in eval_rows:
+                inverted_comps[str(r["sample_id"])] = str(r["target_completion"])
+                if r.get("probe_pair_id") and r.get("probe_role"):
+                    probe_pairs.setdefault(str(r["probe_pair_id"]), {})[str(r["probe_role"])] = r
+            for grp in probe_pairs.values():
+                b_id = str(grp["base"]["sample_id"])
+                p_id = str(grp["perturbed"]["sample_id"])
+                inverted_comps[b_id], inverted_comps[p_id] = inverted_comps[p_id], inverted_comps[b_id]
+            bench_inv = evaluate_world_capability_benchmark(ds, inverted_comps, include_baselines=False)
+            self.assertEqual(bench_inv["model_results"]["consistency_probes"]["consistency_rate"], 0.0)
+
+            # Verify Level-6 AST edit-size penalty rewards minimal edits over bloated edits
+            l6_row = next(r for r in ds["rows"] if r["level"] == "level_6_edit_and_repair")
+            s_min = score_world_capability_completion(l6_row, str(l6_row["target_completion"]))
+            ref_prog = parse_program(str(l6_row["target_completion"]))
+            bloated_items = [
+                *ref_prog.root.items,
+                Locator("extra_unrequested_1", offset=(0.0, 9.0, 0.0), role="socket"),
+                Locator("extra_unrequested_2", offset=(0.0, 10.0, 0.0), role="socket"),
+                Locator("extra_unrequested_3", offset=(0.0, 11.0, 0.0), role="socket"),
+                Locator("extra_unrequested_4", offset=(0.0, 12.0, 0.0), role="socket"),
+            ]
+            from dataclasses import replace as dc_replace
+
+            bloated_prog = validate_program(dc_replace(ref_prog, root=dc_replace(ref_prog.root, items=bloated_items)))
+            self.assertGreater(
+                compute_ast_edit_size(parse_program(str(l6_row["ground_truth"]["input_dsl"])), bloated_prog),
+                s_min["metrics"]["ast_edit_size"],
+            )
+            s_bloat = score_world_capability_completion(l6_row, format_program(bloated_prog))
+            self.assertTrue(s_min["exact_pass"])
+            self.assertFalse(s_bloat["exact_pass"])
+            self.assertGreater(s_min["score"], s_bloat["score"])
+
+    def test_h7_artist_loop_unlabeled_provenance_defaults_to_noassertion(self) -> None:
+        default_prov = build_unlabeled_workspace_provenance("local_sketch_01")
+        self.assertEqual(default_prov.license_spdx, "NOASSERTION")
+
+        bedrock_doc = {
+            "format_version": "1.12.0",
+            "minecraft:geometry": [
+                {
+                    "description": {"identifier": "geometry.custom_construct", "texture_width": 64, "texture_height": 64},
+                    "bones": [
+                        {"name": "core", "pivot": [0, 6, 0], "cubes": [{"origin": [-3, 3, -3], "size": [6, 6, 6], "uv": [0, 0]}]},
+                    ],
+                }
+            ],
+        }
+        # 1. Unlabeled local workspace input defaults to NOASSERTION and commercial_weights_eligible=False
+        ing = ingest_artist_project_record(bedrock_doc, format_kind="bedrock_geojson")
+        self.assertEqual(ing["license_spdx"], "NOASSERTION")
+        self.assertNotEqual(ing["license_spdx"], "CC-BY-4.0")
+        self.assertEqual(ing["license_policy"], LOCAL_WORKSPACE_LICENSE_POLICY)
+        self.assertFalse(ing["commercial_weights_eligible"])
+
+        critique = analyze_artist_project(bedrock_doc, format_kind="bedrock_geojson")
+        self.assertGreaterEqual(critique.box_count, 1)
+
+        loop_rep = run_looped_artist_enhancement(bedrock_doc, format_kind="bedrock_geojson", max_iterations=1)
+        self.assertEqual(loop_rep["license_spdx"], "NOASSERTION")
+        self.assertFalse(loop_rep["commercial_weights_eligible"])
+
+        # 2. Requesting clean_room_permissive without explicit provenance MUST fail LicenseGateError
+        with self.assertRaises(LicenseGateError):
+            ingest_artist_project_record(
+                bedrock_doc,
+                format_kind="bedrock_geojson",
+                license_policy="clean_room_permissive",
+            )
+
+        # 3. Verified permissive provenance opts into commercial_weights_eligible=True
+        verified_prov = AssetProvenance("open_rig_01", "https://example.org/rig", "StudioArtist", "Apache-2.0")
+        ing_ok = ingest_artist_project_record(
+            bedrock_doc,
+            format_kind="bedrock_geojson",
+            provenance=verified_prov,
+            license_policy="clean_room_permissive",
+        )
+        self.assertEqual(ing_ok["license_spdx"], "Apache-2.0")
+        self.assertTrue(ing_ok["commercial_weights_eligible"])
+
+        # 4. NoAI / do-not-train markers in local payload metadata are strictly blocked
+        noai_doc = {**bedrock_doc, "credit": "Artist Name - NoAI / Do Not Train"}
+        with self.assertRaises(LicenseGateError):
+            ingest_artist_project_record(noai_doc, format_kind="bedrock_geojson")
 
 
 if __name__ == "__main__":
