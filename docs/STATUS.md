@@ -1,54 +1,41 @@
-# Starter status and handoff boundary
+# Project status and handoff boundary
 
-Release: **0.1.0**, updated 2026-11-14 (`ADR 0006` / `P1-08-r5`). Intent baseline: supplied SyncCraft v3.0
-report + `ADR 0003`–`0006`. This is a scientifically grounded local CPU world-model & compiler foundation,
-not yet a GPU-trained model checkpoint or live-GUI-verified release.
+Release: **0.1.0**, updated 2026-11-14 (`ADR 0006` / `v3.2` hygiene & peer-review reconciliation). Intent baseline: supplied SyncCraft v3.0
+report + `ADR 0001`–`0006`. This is a scientifically grounded local CPU world-model, compiler, and clean-room dataset foundation,
+not yet a GPU-trained model checkpoint or live-GUI-verified release (`TASKS.json`).
 
-## Implemented and exercised in this environment
+## Implemented and exercised on CPU in this environment
 
 | Capability | Evidence and limits |
 | --- | --- |
-| Block-DSL v3.1 (`ADR 0004`, `ADR 0006`) | Typed parsing, validation, canonical formatting (`500` seeded static AST roundtrips + full `v3.1` roundtrip); semantic 3D `locator` sockets (`6` roles), per-axis `joint_limits`, arbitrary-depth nested `mirror_x` with $O(3)$ parity toggling (`MAX_EXPANDED_MIRROR_NODES = 8192`), extended `@materials` (`weld_group`), `@style`, `@muscles`, `@kinematics`, and `@behavior` |
-| Local/world SE(3) & O(3) hierarchy | Root, `attach`, `place`, Euler composition, arbitrary-depth reflected subtrees (`det(R) = +1`), posed `joint_limits` clamping, `box_inflate_deltas`, `root_translation_delta`, and world-space `WorldLocator` compilation |
-| Reduced-order musculoskeletal & closed-loop IK (`ADR 0006`) | Hill-type muscle-tendon equilibrium (`evaluate_muscles_at_activations`) with agonist–antagonist co-contraction stiffness, biarticular `TendonCoupling` pantographs, exact 3D SE(3) fiber-shortening `belly_box` `bulge_inflate` (integer Box-UV immutable), multi-bone `solve_look_chain`, world-anchored $C^1$ `foot_cycle` stance IK (`< 0.02` units horizontal stance slip), and multi-phase swept SAT `audit_behavior_clip` |
-| CPU OBB collision & physical contact policy | Degenerate-axis-safe 15-axis SAT, 1,000 actual flush fixtures, direct-vs-smooth-loss counterexample, world-AABB broadphase, P1-02 physical contact/co-penetration/gap/connectivity policy (`enforce_physical_contact=True`), authorized `detached=true` bone tracking |
-| Categorized 55-family + 10-Apex Complex dataset (`ADR 0005` + `ADR 0006`) | `55` core procedural families (`40` seen + `15` held-out unseen `>=16` boxes) + `10` Apex Complex entity/asset families (`8` seen + `2` held-out unseen `>=40` boxes, `32–64` boxes/asset: Monster Hunter-class nested-mirror wyverns/dragons/leviathans/switch-axe + clean-room Cobblemon-class creature & interactive station), batch SPC QC, `~5%` controlled defect-repair supervision, and reserved `human_gathered_real_corpus` track |
-| Closed-loop artist assistant & non-diffusion progressive builder (`ADR 0006`) | Multi-format project intake (`Block-DSL`, animated `.bbmodel`, Java `.json`, Bedrock/Cobblemon `.geo.json` including planar `0`-thickness quads + zero-`eval` balanced-paren/affine-on-trig/`q.life_time`/ternary/`math.abs`/Catmull-Rom/timestamped-Molang & phase-faithful harmonic keyframe `.animation.json` decompiler), `CC-BY-NC` (`CC-BY-NC-4.0`/`CC-BY-NC-SA-4.0`) `research_nc` quarantine gate & `build_quarantined_research_nc_dataset`, 5-pillar quantitative artist critique (`analyze_artist_project`), iterative rule-verified upgrade loop (`run_looped_artist_enhancement`), locator-preserving 5-stage progressive from-scratch builder (`build_progressive_from_scratch_trajectory`), and roundtrip re-audited artist export (`export_artist_project_bundle`) |
-| Stateful surface & 10-family material processes (`ADR 0003`, `P1-03a`, `P1-03b`) | Separated `MaterialProgram`, `PersistentSurfaceState`, `OpticalFields`, `StyleConfig`; rest-space `SurfaceDomain` with 3 distinct graphs (`manifold_seams` honoring `weld_group`, `posed_contacts`, nested-mirror `symmetry_pairs`); conservative manifold Laplacian & stratified Gray–Scott RD; 10 material families with explicit `reduced_order_model` labels |
-| Multi-target Pixel-PBR compiler & 3D world renderer (`P1-03c`) | Exact interval-overlap `downsample_optical_fields`; linear-space Cook–Torrance GGX (`alpha = alpha_p^2`, Airy thin-film) + OKLCH palette ramp quantization; Vanilla, LabPBR 1.3 (`_n`/`_s` channel-audited), and glTF 2.0 PBR (`ORM` + `KHR_materials_iridescence`) exporters; Z-buffered orthographic 3D ray-OBB renderer `render_world_observation` |
-| Shared state evolution & causal interventions (`P1-03d`, `ADR 0006`) | Pure transition operator `step_world(S_t, a_t, E_t, dt)` over pose, trajectory, 2-bone analytic IK, `ExecuteBehaviorClipAction`, `ActivateBehaviorStateAction`, rubbing, material/geometry/density/lighting/UV-repack actions with sub-stepped swept SAT checks; 7/7 core causal intervention suite + musculoskeletal clip/state transitions verified |
-| Inverse material inference & world trajectories (`P1-03e`) | License-gated (`clean_room_permissive` vs quarantined `research_nc`) decompiler outputting top-`K` `MaterialProgram` hypotheses + `StampOverride`s + identifiability scores; 9-geometry-family `infer`/`predict`/`plan_repair` trajectory dataset with zero compositional triple leakage |
-| Colab E2E BF16 LoRA + v3.1 Musculoskeletal World-Model notebook | [notebooks/synccraft_end_to_end.ipynb](file:///Users/tianrui6641/SyncCraft/notebooks/synccraft_end_to_end.ipynb): standalone Colab bootstrap targeting `LiquidAI/LFM3-VL-2B` BF16 PEFT LoRA (`r=32, alpha=64`, `max_sequence_length=8192`, `max_new_tokens=5120`, zero quantization) synthesizing & interleaving `full_75k`, `world_1200`, and `apex_complex_v3_1` (`Block-DSL v3.1`) and probing all `15` Gate G2 unseen families + `2` held-out `>=40`-box Apex complex unseen families (CPU smoke-tested locally; live GPU run pending) |
-| Exporters, CLI, and cost/gate helpers | Blockbench 5 `.bbmodel` (static + exact $SO(3)$ matrix-composed `@behavior` keyframe animations), Bedrock `1.12.0` `.geo.json` + `1.8.0` `.animation.json` (`export_bedrock`), GeckoLib (`export_geckolib`), Java modern/legacy `.json`, LabPBR 1.3, and glTF 2.0 exporters with post-serialization 8-corner world vertex + `inflate` re-audit (`runtime_import_verified=False`); deterministic CLI; monotonic cost counters; explicit Gate G2 threshold (`configs/gate_g2_evidence.json` remains honestly blocked until unseen dense-assembly empirical evidence is recorded) |
+| Block-DSL v3.2 (`ADR 0004`, `ADR 0006`) | Typed parsing, validation, compact canonical formatting (omitting default noise `offset=[0,0,0]`, `detached=false`, `inflate: 0.0`), and Lark EBNF parity; `size_step` fractional grids, `plane` zero-thickness quads, per-box `rotate`, `locator` sockets (`6` roles), `joint_limits`, arbitrary-depth nested `mirror_x` (`MAX_EXPANDED_MIRROR_NODES = 8192`), `let`, `def`/`use`, `chain`, `mirror`/`radial`, `spring`, `@controller`, `@textures`, `@materials` (`weld_group`), `@style`, `@muscles`, `@kinematics`, and `@behavior` |
+| Shared NumPy & PyTorch SE(3) / O(3) & SAT | Right-handed `SE(3)` hierarchy (`det(R) = +1`), arbitrary-depth reflected subtrees, degenerate-axis-safe 15-axis OBB SAT cross-checked between NumPy and PyTorch, `P1-02` physical contact-patch (`>= 1e-4` area) vs `authored` audit profiles, and post-quantization 8-corner re-audit |
+| Reduced-order Zajac/Hill musculoskeletal & IK (`ADR 0006`) | Active force-length + passive parallel-elastic muscle-tendon equilibrium (`fidelity_label == "reduced_order_qualitative"`), agonist–antagonist co-contraction stiffness, biarticular `TendonCoupling` pantographs, Box-UV-safe `belly_box` `bulge_inflate`, 2-bone IK + CCD spine/tail chains, world-anchored $C^1$ `foot_cycle` stance IK (`< 0.02` units horizontal stance slip), and multi-phase swept SAT `audit_behavior_clip` |
+| Clean-room 55-family + 10-Apex dataset (`ADR 0005`, `ADR 0006`) | `55` core procedural families (`40` seen + `15` held-out unseen `>=16` boxes, including `>=35` distinct crossbow tree shapes) + `10` clean-room Apex families (`8` seen + `2` held-out unseen `>=40` boxes, neutral naming `elemental_companion_critter`, `modular_botanical_healing_station`), zero split-name prompt leakage, comment-free `@behavior` targets, `distinct_tree_shapes_by_family`, and 3 holdout splits (`test_unseen_params`, `test_unseen`, `test_compositional`) |
+| Closed-loop artist assistant & dual-track license gate (`ADR 0006`) | Multi-format intake (`Block-DSL`, animated `.bbmodel`, Java `.json`, Bedrock `.geo.json` with exact left-handed X-reflection, `0`-thickness `plane`s, per-cube `rotate`, and zero-`eval` Molang/Catmull-Rom `.animation.json`), strict `clean_room_permissive` vs `research_nc` (`CC-BY-NC-3.0`/`4.0`) quarantine rejecting `CC-BY-ND`, `NoAI`/`do-not-train` notices, and defaulting unlabeled local inputs to `NOASSERTION`, plus 5-pillar critique & 5-stage progressive builder |
+| Stateful surface & Pixel-PBR compiler (`ADR 0003`) | Separated `MaterialProgram`, `PersistentSurfaceState`, `OpticalFields`, `StyleConfig`; conservative manifold Laplacian & CFL Gray–Scott RD (`reduced_order_qualitative`); exact physical Cook–Torrance GGX (white-furnace `<= 1.0`, reciprocity) & Airy thin-film extrema (`exact_physical`), OKLab/OKLCH ramps; Vanilla, LabPBR 1.3, and glTF 2.0 exporters; Z-buffered 3D ray-OBB renderer `render_world_observation` |
+| 7-Level World Capability Benchmark & Bounded Repair | Genuine `evaluate_world_capability_benchmark(records, model_completions)` across all 7 capability levels (`read_structure`, `predict_pose_collision`, `predict_motion_gait`, `predict_surface`, `invert_observation` with rendered 4-views, `edit_and_repair`, `human_transfer`) + parametric consistency probes + explicit `simulator_oracle_upper_bound`, `constant_prior_baseline`, and `nearest_neighbor_train_retrieval`; `run_bounded_repair_policy` (`<= 3` re-audits) and `verify_prompt_adherence` |
+| Colab G4 E2E BF16 LoRA notebook | [notebooks/synccraft_end_to_end.ipynb](../notebooks/synccraft_end_to_end.ipynb): Hub-first prebuilt shard loader (`TassP0lar/synccraft-v3-blockdsl-dataset`), `StreamMixtureSampler` (100% `main` without replacement, `<= 3` aux repeats), `apply_chat_template` + `<think>` stripping, VRAM-safe pre-FP32 response-only loss (`max_seq_len=8192`), periodic 20-min full-state checkpointing & `resume_from_checkpoint`, dynamic tokenizer-measured `max_gen_tokens`, honest `LFM Open License v1.0` (`< $10M ARR`) vs `Apache-2.0` Model Card, and hard refusal to upload smoke/CPU artifacts (CPU smoke-tested locally; live GPU run pending) |
+| Exporters, CLI, and Gate G2 helpers | Blockbench 5 `.bbmodel`, Bedrock `1.12.0` `.geo.json` + `1.8.0` `.animation.json` (exact left-handed X-reflection), GeckoLib, Java modern/legacy `.json`, LabPBR 1.3, and glTF 2.0 with post-serialization 8-corner world vertex re-audit (`runtime_import_verified=False`); monotonic `CostLedger`; artifact-derived Gate G2 (`configs/gate_g2_evidence.json` remains `template_no_experiment_run` until GPU holdout evaluation is executed) |
 
-Exact executed results and runtime versions are in [artifacts/validation/summary.json](file:///Users/tianrui6641/SyncCraft/artifacts/validation/summary.json)
-and [artifacts/validation/cpu-tests.txt](file:///Users/tianrui6641/SyncCraft/artifacts/validation/cpu-tests.txt). Comprehensive architectural review is in
-[docs/REPO_COMPREHENSIVE_REVIEW.md](file:///Users/tianrui6641/SyncCraft/docs/REPO_COMPREHENSIVE_REVIEW.md).
+Validation summaries are in [artifacts/validation/summary.json](../artifacts/validation/summary.json)
+and [artifacts/validation/cpu-tests.txt](../artifacts/validation/cpu-tests.txt). Comprehensive architectural review is in
+[REPO_COMPREHENSIVE_REVIEW.md](./REPO_COMPREHENSIVE_REVIEW.md).
 
-## Not yet implemented
+## Not yet implemented or pending external/GPU execution
 
 | Capability | Blocking task |
 | --- | --- |
-| Polygon extrusion (`extrude`) and legacy `@shade` / `@motion` text keywords | P1-01 / P3-01 (`UnsupportedFeature` raised explicitly) |
-| Live Blockbench GUI roundtrip & pinned Minecraft Iris LabPBR 1.3 shader runtime verification | P0-02 / P1-03 external acceptance |
-| Grip/display solving and hand constraints (`@ergonomics`) | P1-04 |
-| Differentiable Torch geometry, gradients and PGD | P1-05 / P1-06 |
-| XGrammar, live symbol masks and real KV rollback | P1-07 |
-| Live GPU model bake-off, RTX PRO 6000 BF16 LoRA training run, GPU memory/restart proof | P0-03 / P0-04 / P1-09 |
-| Full baseline evaluation and Gate G2 empirical unlock | P1-10 |
-| Learned refiner and training | P2-01 / P2-02, conditional only (`< 90%` G2 trigger) |
-| Live Bedrock / Cobblemon / GeckoLib client runtime import verification | P3-03 external acceptance (CPU serializers `export_bedrock` / `export_geckolib` + 8-corner roundtrip re-audit are implemented with `runtime_import_verified=False`) |
-| Independent benchmark and final paper evidence | P4-01 / P4-02 |
+| Polygon contour extrusion (`extrude`) and legacy `@shade` / `@motion` keywords | `P1-01` (`UnsupportedFeature` raised explicitly) |
+| Grip/display solving and hand constraints (`@ergonomics`) | `P1-04` (`UnsupportedFeature` raised explicitly) |
+| Live tokenizer XGrammar masks and KV-cache statement rollback | `P1-07` (`NotImplementedError` raised explicitly) |
+| Live Blockbench 5 GUI roundtrip & pinned Minecraft 1.21.11 / Iris LabPBR 1.3 / Bedrock / GeckoLib client runtime verification | `P0-02` / `P3-02` external acceptance (`runtime_import_verified=False`) |
+| Live GPU candidate smoke checks, 8K 1-epoch bake-off (`LFM3-VL-2B` vs `Qwen2.5-Coder-7B-Instruct`), and Colab G4 RTX PRO 6000 BF16 LoRA training run | `P0-03` / `P0-04` / `P1-09` |
+| Full unseen dense-assembly GPU evaluation and empirical Gate G2 (`90%`) decision | `P1-10` |
+| Conditional learned residual refiner training & cached ablations | `P2-01` / `P2-02`, strictly conditional on measured valid Gate G2 pass rate `< 0.90` |
+| `HandCraft-Bench-50` external benchmark and final release package | `P4-01` / `P4-02` |
 
 ## External validation not performed here
 
-No Blockbench GUI import/save/reopen, Minecraft game import, GeckoLib runtime execution, live GPU training run,
-live tokenizer XGrammar masking run, or external human-modeler study was performed in this CPU session.
-
-## Known limitations that affect interpretation
-
-`audit_scene(..., enforce_physical_contact=True)` and `audit_behavior_clip(...)` certify finite valid OBB evaluation,
-absence of non-exempt rest/swept collisions, genuine physical surface contact or bounded shallow inset (`<= 0.5` model units)
-on declared `attach`/`place` pairs, physical connectivity up to authorized `detached=true` bones, and `< 0.02` model-unit
-horizontal stance-foot slip on `foot_cycle` IK clips. Musculoskeletal mechanics (`@muscles`) use a quasi-static reduced-order
-Hill-type equilibrium solver (`reduced_order_model`), not full rigid-body forward Euler–Lagrange multi-body contact dynamics.
+No Blockbench GUI import/save/reopen, Minecraft Java or Bedrock client import, GeckoLib runtime execution, live Colab G4 GPU training run,
+live tokenizer XGrammar masking run, or external human-modeler study was performed in this local CPU environment.

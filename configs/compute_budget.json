@@ -1,11 +1,21 @@
 {
-  "status": "source_plan_estimates_not_current_provider_quotes_or_measured_runs",
-  "source": "source/synccraft-v3-plan.pdf section 5.2",
+  "status": "planning_estimates_colab_g4_rtx_pro_6000_not_measured_billing_invoice",
+  "source": "source/synccraft-v3-plan.pdf section 5.2 updated for Colab G4 NVIDIA RTX PRO 6000 (~8.8 CU/hr) and Hub prebuilt shard loading",
   "currency_and_subscription_terms_verified": false,
-  "budget_unit": "Colab_compute_units_as_assumed_by_source_report",
+  "budget_unit": "Colab_compute_units",
+  "colab_g4_rtx_pro_6000_cu_per_hour": 8.8,
+  "prebuilt_hub_dataset_avoids_gpu_cpu_synthesis_hours": 1.8,
   "plan_budget_cap": 600,
   "buffer_fraction": 0.10,
   "rows": [
+    {"phase": "P0 candidate bakeoff (LFM3-VL-2B vs Qwen2.5-Coder-7B-Instruct)", "gpu_label": "Colab G4 RTX PRO 6000", "hours": 3.0, "cu_per_hour": 8.8, "conditional": false},
+    {"phase": "P1 static + Apex + World LoRA training (8192 seq, Hub prebuilt shards)", "gpu_label": "Colab G4 RTX PRO 6000", "hours": 14.0, "cu_per_hour": 8.8, "conditional": false},
+    {"phase": "P1 Gate G2 bounded repair (<=3 re-audits) & 7-level World evaluation", "gpu_label": "Colab G4 RTX PRO 6000", "hours": 4.5, "cu_per_hour": 8.8, "conditional": false},
+    {"phase": "P2 cached ablations", "gpu_label": "Colab L4", "hours": 18.0, "cu_per_hour": 1.6, "conditional": true},
+    {"phase": "P2 joint tuning", "gpu_label": "Colab G4 RTX PRO 6000", "hours": 8.0, "cu_per_hour": 8.8, "conditional": true},
+    {"phase": "P3/P4 dynamic and final external benchmark", "gpu_label": "Colab G4 RTX PRO 6000", "hours": 12.0, "cu_per_hour": 8.8, "conditional": false}
+  ],
+  "legacy_source_plan_rows": [
     {"phase": "P0 candidate bakeoff", "gpu_label": "L4", "hours": 7.5, "cu_per_hour": 1.6, "conditional": false},
     {"phase": "P1 static training", "gpu_label": "A100 40GB", "hours": 22.5, "cu_per_hour": 5.4, "conditional": false},
     {"phase": "P1 evaluation", "gpu_label": "L4", "hours": 12.0, "cu_per_hour": 1.6, "conditional": false},

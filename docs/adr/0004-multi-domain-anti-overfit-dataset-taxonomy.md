@@ -4,8 +4,10 @@ Status: accepted for P1-08 / P3-03 / P1-09 implementation. Date: 2026-11-14.
 
 ## Context
 
-Empirical training of `LiquidAI/LFM3-VL-2B` (BF16 LoRA, $r=32, \alpha=64$) on the initial
-8-family `full_60k` procedural static corpus drove supervised training loss from `1.0901`
+> **Provenance Note (`M8`)**: The Step 1–42 loss figures below come from a **user-supplied external diagnostic Colab pilot log snippet** shared during dataset taxonomy debugging to diagnose template memorization on an early 8-family draft corpus. They do **not** represent a committed local training artifact or a completed `P1-09` GPU benchmark run in this CPU repository (all toy smoke checkpoints have been removed from version control, and full Colab G4 GPU training remains tracked under `P1-09`).
+
+In that external diagnostic pilot of `LiquidAI/LFM3-VL-2B` (BF16 LoRA, $r=32, \alpha=64$) on an initial
+8-family procedural static draft, supervised training loss dropped rapidly from `1.0901`
 (Step 1) to `0.1171` by Step 42 (~5,376 examples, <10% of Epoch 1), while the compressed
 ZSTD Parquet training shard occupied only `17.3 MB` for `54,000` rows (~320 bytes/row).
 
@@ -77,11 +79,9 @@ families and dynamic body plans in their prescribed splits:
 4. **Text2CAD-inspired 4-level prompt paraphrasing**: Balance prompts across four
    abstraction tiers (`natural_intent` with zero internal slugs or part counts,
    `art_and_material_brief`, `kinematic_rig_spec`, and `parametric_cad_blueprint`).
-5. **Quality-Diversity (QD) entropy tracking & training regularization**: Record behavioral
-   bin coverage and Shannon entropy in `dataset_manifest.json`; use 1-epoch default over
-   `full_75k` (`67,500` train + `7,500` val + `2,400` unseen), `lora_dropout=0.10`,
-   `weight_decay=0.05`, `label_smoothing=0.03`, fixed 20% multi-domain world-trajectory
-   interleaving, and periodic held-out validation loss logging.
+5. **Quality-Diversity (QD) entropy tracking & unbiased multi-stream sampling**: Record behavioral
+   bin coverage, `distinct_tree_shapes_by_family`, and Shannon entropy in `dataset_manifest.json`; use 1-epoch default over
+   `full_75k`, `lora_dropout=0.10`, `weight_decay=0.05`, `label_smoothing=0.03`, unbiased without-replacement `StreamMixtureSampler` (iterating 100% of `main` rows once and capping `apex` and `world` auxiliary stream repeats at `<= 3`, replacing earlier modulo interleaving), zero split-name prompt leakage, and periodic held-out validation loss logging.
 
 ## Consequences
 

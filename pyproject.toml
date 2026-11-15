@@ -12,7 +12,34 @@ license = {text = "Apache-2.0"}
 dependencies = ["numpy>=1.26,<3", "Pillow>=10,<14"]
 
 [project.optional-dependencies]
-dev = ["pytest>=8,<10", "ruff>=0.9,<1"]
+test = [
+  "pytest>=8,<10",
+  "torch>=2.2",
+  "nbformat>=5.10,<6",
+  "pyarrow>=15",
+  "lark>=1.1,<2",
+]
+dev = [
+  "pytest>=8,<10",
+  "ruff>=0.9,<1",
+  "torch>=2.2",
+  "nbformat>=5.10,<6",
+  "pyarrow>=15",
+  "lark>=1.1,<2",
+]
+ml = [
+  "torch>=2.4",
+  "torchao>=0.8",
+  "transformers>=5.21.0",
+  "peft>=0.13",
+  "accelerate>=1.1",
+  "datasets>=3.0",
+  "huggingface_hub>=0.26",
+  "safetensors>=0.4",
+  "pyarrow>=15",
+  "nbformat>=5.10,<6",
+  "lark>=1.1,<2",
+]
 
 [project.scripts]
 synccraft = "synccraft.cli:main"

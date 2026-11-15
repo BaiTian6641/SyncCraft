@@ -1,28 +1,39 @@
-schema: synccraft.training-intent/0.1
-status: template_not_executable_trainer
+schema: synccraft.training-intent/0.2
+status: aligned_with_end_to_end_colab_notebook_v3_2
 task: P1-09
 model_manifest: null
-dataset_manifest: null
+dataset_manifest: TassP0lar/synccraft-v3-blockdsl-dataset
 seeds: [17, 29, 43]
-hardware_target: colab_rtx_pro_6000
+hardware_target: colab_g4_rtx_pro_6000
+colab_g4_cu_per_hour: 8.8
 default_base_model: LiquidAI/LFM3-VL-2B
+bakeoff_comparison_model: Qwen/Qwen2.5-Coder-7B-Instruct
 precision_intent: bf16_lora_2b_4b_and_7b
 quantization: none
-max_sequence_length: 2048
+max_seq_len: 8192
+max_sequence_length: 8192
+overflow_sequence_policy: drop_or_split_preserve_eos_never_truncate_mid_program
 micro_batch_size: 2
 gradient_accumulation_steps: 64
 effective_batch_size_single_gpu: 128
 epochs: 1
+stream_mixture_sampler:
+  main_without_replacement: true
+  max_aux_repeats: 3
+  streams: [main, apex, world]
+  track_exact_family_tier_stream_counts: true
 lora:
   rank: 32
   alpha: 64
   dropout: 0.10
   target_modules: resolve_from_actual_model
+  audit_layer_types: [short_conv, attention, mlp, vision_frozen]
   train_embeddings: false
   expand_vocabulary: false
   alpha_and_dropout_are_starter_proposals: true
 loss:
   response_tokens_only: true
+  pre_cast_response_indexing: true
   label_smoothing: 0.03
   chunked_fused_linear_cross_entropy: true
   kernel_and_version: null
@@ -33,14 +44,18 @@ optimizer:
   learning_rate: 2.0e-4
   weight_decay: 0.05
   status: select_on_pilot_validation
+save_every_minutes: 20
 checkpoint:
-  interval_minutes: 25
-  destination: local_until_remote_destination_authorized
+  interval_minutes: 20
+  save_every_minutes: 20
+  resume_from_checkpoint: true
+  destination: local_or_google_drive_until_remote_destination_authorized
+  refuse_hf_publish_when_smoke_or_cpu: true
   atomic_complete_manifest: true
   include: [adapters, refiner_if_enabled, optimizer, scheduler, scaler_if_used, rng_all_devices, sampler, shard_cursor, global_step, config_hash, model_revision, dataset_manifest]
 targets_not_measurements:
   bf16_4b_peak_allocated_decimal_gb_less_than: 18.0
   bf16_7b_rtx_pro_6000_full_lora: true
-  proposed_sequence_length: 2048
+  proposed_sequence_length: 8192
   proposed_micro_batch: 2
 paid_job_launch_enabled: false

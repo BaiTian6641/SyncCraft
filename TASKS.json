@@ -1,87 +1,123 @@
 {
-  "schema": "synccraft.tasks/0.1",
+  "schema": "synccraft.tasks/0.2",
   "source": "docs/tasks/BACKLOG.md",
+  "updated_note": "Synchronized with actual CPU-verified codebase vs pending GPU training/evaluation and live target-engine GUI imports.",
   "tasks": [
     {
       "id": "S0",
       "title": "Reproduce the delivered starter",
-      "status": "delivered_local_reproduction_required",
+      "status": "completed_local_cpu_verified",
       "depends_on": [],
       "owner": null,
-      "evidence": []
+      "evidence": [
+        "scripts/check.py",
+        "scripts/demo.py",
+        "docs/STATUS.md"
+      ]
     },
     {
       "id": "P0-01",
       "title": "Establish the actual development environment",
-      "status": "pending",
+      "status": "completed_cpu_env_verified_gpu_lock_pending",
       "depends_on": [
         "S0"
       ],
       "owner": null,
-      "evidence": []
+      "evidence": [
+        "pyproject.toml",
+        "requirements/cpu-starter.txt",
+        "docs/STATUS.md"
+      ]
     },
     {
       "id": "P0-02",
       "title": "Validate real target imports and freeze compatibility fixtures",
-      "status": "pending",
+      "status": "cpu_exporters_and_importers_verified_live_gui_pending",
       "depends_on": [
         "P0-01"
       ],
       "owner": null,
-      "evidence": []
+      "evidence": [
+        "src/synccraft/exporters/bbmodel.py",
+        "src/synccraft/exporters/mc_item_json.py",
+        "src/synccraft/exporters/bedrock_geo.py",
+        "src/synccraft/world/artist_loop.py",
+        "tests/test_exporters_and_quantization.py",
+        "docs/COMPATIBILITY.md"
+      ]
     },
     {
       "id": "P0-03",
       "title": "Resolve candidate models and run the first five smoke checks",
-      "status": "pending",
+      "status": "pending_gpu_smoke",
       "depends_on": [
         "P0-01"
       ],
       "owner": null,
-      "evidence": []
+      "evidence": [
+        "configs/model_candidates.yaml"
+      ]
     },
     {
       "id": "P0-04",
       "title": "Perform the comparable 8K candidate bake-off",
-      "status": "pending",
+      "status": "pending_gpu_bakeoff",
       "depends_on": [
         "P0-03",
         "P1-07",
         "P1-08"
       ],
       "owner": null,
-      "evidence": []
+      "evidence": [
+        "configs/model_candidates.yaml",
+        "notebooks/synccraft_end_to_end.ipynb"
+      ]
     },
     {
       "id": "P1-01",
       "title": "Complete static DSL and deterministic extrusion",
-      "status": "pending",
+      "status": "partial_v3_2_dsl_verified_extrude_pending",
       "depends_on": [
         "P0-01"
       ],
       "owner": null,
-      "evidence": []
+      "evidence": [
+        "src/synccraft/dsl/grammar.lark",
+        "src/synccraft/dsl/parser.py",
+        "src/synccraft/dsl/ast_nodes.py",
+        "docs/DSL_SUBSET.md"
+      ]
     },
     {
       "id": "P1-02",
       "title": "Replace broad contact exemptions with physical contact checks",
-      "status": "pending",
+      "status": "completed_cpu_verified",
       "depends_on": [
         "P0-01"
       ],
       "owner": null,
-      "evidence": []
+      "evidence": [
+        "src/synccraft/audit/contact.py",
+        "src/synccraft/audit/scene_audit.py",
+        "tests/test_data_gen_and_contact.py"
+      ]
     },
     {
       "id": "P1-03",
       "title": "Implement production integer UV and analytic pixel shading",
-      "status": "pending",
+      "status": "completed_cpu_verified",
       "depends_on": [
         "P1-01",
         "P0-02"
       ],
       "owner": null,
-      "evidence": []
+      "evidence": [
+        "src/synccraft/texture/uv_layout.py",
+        "src/synccraft/texture/procedural_shader.py",
+        "src/synccraft/texture/surface_optics.py",
+        "src/synccraft/texture/labpbr_export.py",
+        "tests/test_physics_surface_and_optics.py"
+      ]
     },
     {
       "id": "P1-04",
@@ -97,24 +133,33 @@
     {
       "id": "P1-05",
       "title": "Build differentiable shared kinematics and SAT",
-      "status": "pending",
+      "status": "completed_cpu_torch_cross_checked",
       "depends_on": [
         "P1-01",
         "P1-02"
       ],
       "owner": null,
-      "evidence": []
+      "evidence": [
+        "src/synccraft/kinematics/torch_se3.py",
+        "src/synccraft/audit/torch_sat.py",
+        "tests/test_kinematics_and_sat.py",
+        "tests/test_modeling_and_refiner.py"
+      ]
     },
     {
       "id": "P1-06",
       "title": "Implement constrained Baseline-PGD",
-      "status": "pending",
+      "status": "completed_cpu_verified",
       "depends_on": [
         "P1-05",
         "P1-04"
       ],
       "owner": null,
-      "evidence": []
+      "evidence": [
+        "src/synccraft/modeling/pgd_projector.py",
+        "src/synccraft/modeling/repair_loop.py",
+        "tests/test_modeling_and_refiner.py"
+      ]
     },
     {
       "id": "P1-07",
@@ -130,7 +175,7 @@
     {
       "id": "P1-08",
       "title": "Build audited original data generators and frozen splits",
-      "status": "pending",
+      "status": "completed_cpu_verified_scale_60k_pending",
       "depends_on": [
         "P1-01",
         "P1-02",
@@ -139,23 +184,34 @@
         "P0-02"
       ],
       "owner": null,
-      "evidence": []
+      "evidence": [
+        "src/synccraft/data_gen/static_families.py",
+        "src/synccraft/data_gen/multi_domain_taxonomy.py",
+        "src/synccraft/data_gen/complex_entity_and_asset_pack.py",
+        "configs/data_policy.yaml",
+        "tests/test_data_gen_and_contact.py",
+        "tests/test_musculoskeletal_complex_and_artist_loop.py"
+      ]
     },
     {
       "id": "P1-09",
       "title": "Implement and validate resumable LoRA training",
-      "status": "pending",
+      "status": "notebook_pipeline_cpu_verified_gpu_run_pending",
       "depends_on": [
         "P0-04",
         "P1-08"
       ],
       "owner": null,
-      "evidence": []
+      "evidence": [
+        "notebooks/synccraft_end_to_end.ipynb",
+        "configs/training_static.yaml",
+        "tests/test_notebook_e2e.py"
+      ]
     },
     {
       "id": "P1-10",
       "title": "Evaluate Repair/PGD and make the G2 decision",
-      "status": "pending",
+      "status": "evaluator_cpu_verified_gpu_g2_decision_pending",
       "depends_on": [
         "P1-06",
         "P1-07",
@@ -164,17 +220,24 @@
         "P0-02"
       ],
       "owner": null,
-      "evidence": []
+      "evidence": [
+        "src/synccraft/evaluation/gate_g2.py",
+        "configs/gate_g2_evidence.json",
+        "notebooks/synccraft_end_to_end.ipynb",
+        "tests/test_budget_and_gate.py"
+      ]
     },
     {
       "id": "P2-01",
       "title": "Implement learned residual refinement only if eligible",
-      "status": "conditional",
+      "status": "conditional_module_scaffolded_gated_on_g2",
       "depends_on": [
         "P1-10"
       ],
       "owner": null,
-      "evidence": [],
+      "evidence": [
+        "src/synccraft/modeling/learned_refiner.py"
+      ],
       "condition": "valid_G2_pass_rate_below_0.90"
     },
     {
@@ -191,35 +254,47 @@
     {
       "id": "P3-01",
       "title": "Recover motion grammar and implement analytic IK templates",
-      "status": "pending",
+      "status": "cpu_ik_and_musculoskeletal_verified",
       "depends_on": [
         "P1-10"
       ],
       "owner": null,
-      "evidence": []
+      "evidence": [
+        "src/synccraft/data_gen/ik_motion_templates.py",
+        "src/synccraft/physics/musculoskeletal.py",
+        "tests/test_musculoskeletal_complex_and_artist_loop.py"
+      ]
     },
     {
       "id": "P3-02",
       "title": "Implement Bedrock and GeckoLib with independent capabilities",
-      "status": "pending",
+      "status": "cpu_exporters_verified_live_engine_pending",
       "depends_on": [
         "P3-01",
         "P0-02"
       ],
       "owner": null,
-      "evidence": []
+      "evidence": [
+        "src/synccraft/exporters/bedrock_geo.py",
+        "src/synccraft/exporters/geckolib.py",
+        "tests/test_bedrock_and_geckolib.py",
+        "docs/COMPATIBILITY.md"
+      ]
     },
     {
       "id": "P3-03",
       "title": "Build dynamic dataset and cross-topology evaluation",
-      "status": "pending",
+      "status": "cpu_7_level_world_benchmark_verified_gpu_eval_pending",
       "depends_on": [
         "P3-01",
         "P3-02",
         "P1-09"
       ],
       "owner": null,
-      "evidence": []
+      "evidence": [
+        "src/synccraft/world/trajectory_dataset.py",
+        "tests/test_world_interventions_and_inference.py"
+      ]
     },
     {
       "id": "P4-01",

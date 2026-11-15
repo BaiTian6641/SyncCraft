@@ -1,5 +1,5 @@
-schema: synccraft.data-policy/0.3
-status: apex_musculoskeletal_and_artist_loop_p1_08_r4
+schema: synccraft.data-policy/0.4
+status: clean_room_neutral_taxonomy_and_three_holdout_splits_v3_2
 source_plan_scale_targets:
   static_train: 60000
   dynamic_train: 15000
@@ -8,6 +8,10 @@ source_plan_scale_targets:
 pilot_samples_before_scale: 200
 seeds: [17, 29, 43, 2026]
 split_by: family_and_body_plan_before_parameter_sampling
+evaluation_holdout_splits:
+  - test_unseen_params
+  - test_unseen
+  - test_compositional
 curriculum_policy:
   train_val_complexity_tiers:
     tier_1_simple: [4, 8]
@@ -19,17 +23,23 @@ curriculum_policy:
   apex_unseen_min_boxes: 40
   controlled_defect_repair_ratio_train: 0.05
   batch_statistical_qc_required: true
+  distinct_tree_shapes_audit_required: true
+  zero_split_leakage_in_prompts_required: true
+  zero_comment_claims_in_completions_required: true
 license_quarantine_tracks:
   clean_room_permissive:
     spdx_allowlist: [CC0-1.0, CC-BY-4.0, MIT, Apache-2.0, BSD-3-Clause]
+    reject_noai_or_do_not_train_notices: true
     commercial_weights_eligible: true
     default_hf_release_track: true
   research_nc:
-    spdx_allowlist: [CC-BY-NC-4.0, CC-BY-NC-SA-4.0]
+    spdx_allowlist: [CC-BY-NC-3.0, CC-BY-NC-SA-3.0, CC-BY-NC-4.0, CC-BY-NC-SA-4.0]
+    reject_noai_or_do_not_train_notices: true
+    reject_no_derivatives_nd_licenses: true
     commercial_weights_eligible: false
     requires_attribution_notice: true
     quarantined_split_prefix: research_nc/
-    notes: Permits Cobblemon-class CC-BY-NC community assets strictly inside non-commercial research/evaluation splits; never merged into Apache-2.0 commercial weights.
+    notes: Permits CC-BY-NC-3.0/4.0 community creature-mod assets (when lacking NoAI opt-outs) strictly inside non-commercial research/evaluation splits; never merged into Apache-2.0 commercial weights. Unlabeled local files default to NOASSERTION (non-commercial quarantine).
 reserved_extension_tracks:
   human_gathered_real_corpus:
     status: gathering_external_permissive_assets_deferred
@@ -112,8 +122,8 @@ apex_seen_complex_families:
   - fanged_thunder_wyvern
   - armored_arthropod_colossus
   - morphing_switch_blade_axe
-  - elemental_pocket_companion
-  - modular_apricorn_healing_station
+  - elemental_companion_critter
+  - modular_botanical_healing_station
 apex_unseen_complex_families:
   - elder_calamity_dragon
   - relic_automaton_guardian

@@ -1,94 +1,52 @@
-# Shared geometry contract
+# Shared geometry contract (`Block-DSL v3.2`)
 
-This document defines the executable **starter subset**, not a completed
-differentiable engine. Its NumPy implementation is the reference for future
-PyTorch parity tests. Compiler, preview, and audit all use the same `Scene`.
+This document defines the shared geometry, reflection, Backend handedness, and collision/contact contract across SyncCraft's NumPy reference engine, PyTorch differentiable kinematics/SAT modules, exporters, decompilers, and `audit_scene`. Compiler, preview, exporters, and audit all evaluate the same shared `Scene`.
 
 ## Coordinates, order, and units
 
-- Right-handed coordinates, Y up, column vectors.
-- DSL Euler angles are degrees; `euler_xyz_matrix` applies X, then Y, then Z:
-  `R = Rz @ Ry @ Rx`. Trigonometry converts to radians internally.
-- A root pivot is a world translation. A child pivot is measured in its direct
-  parent bone's coordinates. World transforms compose `parent @ translation @ rotation`.
-- Box sizes remain positive integer modeling units. At density 16, one modeling
-  unit corresponds to one texture pixel. `inflate` changes half extents only,
-  without changing attachment/placement dimensions.
-- The root's first box has local center zero. A child's first box without
-  `place` has local center `-0.5 * size * attach.align`.
-- A same-bone `place(base_box=...)` has center
-  `base.center + base.size/2 * anchor - size/2 * align + offset`.
-- Without `base_box`, the reference is the bone pivot. The starter requires
-  `anchor=[0,0,0]`, avoiding an undefined anchor scale.
-- An attach uses `base.center + base.size/2 * anchor + offset` for the child
-  joint. Attachment alignment positions its primary box in the child's local
-  coordinates before applying the child rotation.
+- **Internal Frame**: Right-handed coordinates (`+X` right/east, `+Y` up, `+Z` south/front), column vectors.
+- **Rotations**: DSL Euler angles are degrees; `euler_xyz_matrix` composes intrinsic XYZ (`R = Rz @ Ry @ Rx`), converting degrees to radians strictly at named trigonometric boundaries.
+- **Hierarchy**: A root `pivot_local` is a world translation (canonicalized to `[0, 0, 0]` in clean-room procedural generators). A child pivot is measured in its direct parent bone's coordinates (`parent @ translation @ rotation`).
+- **Dimensions, `size_step`, `plane`, and per-box `rotate`**:
+  - Clean-room procedural static/Apex assets use positive integer box sizes (`@meta.size_step = 1`); at `density = 16`, one modeling unit equals one UV texel.
+  - Authored/imported assets (`Block-DSL v3.2`) may declare `@meta { size_step: 0.5 | 0.25 | 0.125 }` for sub-unit fractional dimensions, zero-thickness `plane` elements for flat fins/ears/foliage quads, and optional per-box local `rotate` / `pivot` offsets without mutating parent bone frames.
+  - Continuous `inflate` (plus dynamic muscle `bulge_inflate`) expands OBB half-extents $\mathbf{h} = \frac{1}{2}\mathbf{s} + \delta\mathbf{1}_3$ without mutating nominal UV layout dimensions $\mathbf{s}$.
+- **Placement**:
+  - The root's first box without `place` centers at its bone pivot. A child's first box without `place` has local center `-0.5 * size * attach.align`.
+  - Same-bone `place(base_box=...)` has local center `base.center + 0.5 * base.size * anchor - 0.5 * size * align + offset`.
+  - Without `base_box`, `anchor` must be `[0, 0, 0]` relative to the bone pivot.
+  - Child `attach(parent_box=...)` places the joint at `base.center + 0.5 * base.size * anchor + offset` (or at the parent `locator` offset when attaching to a dimensionless 3D socket with `anchor=[0, 0, 0]`).
 
-## Mirror expansion
+## Mirror & radial expansion (`mirror_x`, `mirror`, `radial`)
 
-`mirror_x(right)` duplicates a child bone and its subtree. The duplicate root is
-named `right`; descendants use `right__original_name`. Nested mirror declarations
-are currently rejected. Material identifiers retain their names.
+- `mirror_x(right)` duplicates a child bone and its entire descendant subtree across X, supporting **arbitrary nesting depth** up to `MAX_EXPANDED_MIRROR_NODES = 8192` (`outer_r__inner_r__leaf`).
+- Reflection conjugates rotations by $\mathbf{S} = \operatorname{diag}(-1, 1, 1)$ (`(rx, ry, rz) -> (rx, -ry, -rz)`, X components of anchors/offsets/locators negated) so every compiled OBB frame remains a proper right-handed rotation with $\det(\mathbf{R}) = +1$.
+- Reflection parity composes in $\mathbb{Z}_2$ (`mirrored = parent.mirrored ^ is_mirror_clone`): odd reflection depths swap `east <-> west` cullfaces, while doubly-mirrored subtrees ($\mathbf{S}^2 = \mathbf{I}_3$) restore original handedness.
+- v3.2 sugar constructs (`chain`, `mirror`, `radial`, `let`, `def`/`use`) lower deterministically into explicit `SE(3)` bone/box nodes before audit and export.
 
-The mirror plane is the attached parent box's local X center plane. The root
-attachment keeps the parent box center and reflects X anchor/offset components.
-Every subtree local center, attachment vector, and placement vector reflects X;
-Euler angles map `(x,y,z)` to `(x,-y,-z)`. This uses `S R S`, `S=diag(-1,1,1)`,
-so each exported OBB orientation remains a proper rotation with determinant +1.
-It reflects geometry; texture handedness needs separate exporter/UV acceptance.
-This parent-box-centered convention is an explicit resolution of the report's
-implicit mirror frame, and must be preserved in the PyTorch implementation.
+## Bedrock left-handed X-axis conversion (`C5` / `M16`)
 
-## SAT: exact audit versus optimization surrogate
+Minecraft Bedrock `1.12.0` `.geo.json` and `1.8.0` `.animation.json` use a left-handed X convention relative to SyncCraft's right-handed space:
+- **Outbound (`export_bedrock` / `export_geckolib`)** and **Inbound (`_decompile_bedrock_geojson` / `decompile_bedrock_animation_to_behavior`)** apply the exact involution:
+  - Cube origin X: `origin_x_bedrock = -(origin_x_rh + size_x)`
+  - Bone pivot X and locator X: negated (`-x`)
+  - Rest and keyframe Euler rotations: X and Y negated (`(-rx, -ry, rz)` in Bedrock convention so asymmetric rotated rigs reconstruct all 8 world corners to `< 1e-4`)
+  - Animation bone position X: negated (`-tx`)
 
-`sat_obb` tests the two boxes' six face normals and their nine pairwise edge
-cross products. It drops numerically degenerate cross products rather than
-normalizing them to zero. Including a zero candidate would incorrectly make
-identical parallel boxes appear collision-free.
+## SAT: exact audit versus smooth surrogate
 
-The deterministic audit uses the **raw minimum axis overlap** with a `1e-7`
-distance tolerance. Returned `penetration_depth` is a distance, never an exact
-intersection volume. Touching and separated boxes return zero depth/energy.
+- `sat_obb` (NumPy) and `torch_sat` (PyTorch) test all 6 face normals plus 9 pairwise edge cross products, masking near-parallel cross products ($\|\mathbf{u}_i \times \mathbf{v}_j\|_2 \le 10^{-8}$) rather than normalizing degenerate axes to zero.
+- Final acceptance always uses **direct raw minimum axis overlap** (`collision_tolerance = 1e-7`). Returned `penetration_depth` is a linear projection distance, never an intersection volume.
+- Smooth `softmin` / LogSumExp potentials are optimization surrogates only: **zero smooth surrogate loss is never interpreted as zero overlap**. Every PGD/repair candidate and quantized/serialized export undergoes a fresh direct raw-SAT re-audit.
 
-The planned `softmin(beta=25)` surrogate is also reported, with the report's
-`energy_tolerance=0.01`. Its unnormalised log-sum-exp is a lower bound on the
-minimum; it can be negative when all exact axis overlaps are slightly positive.
-Consequently, **zero surrogate loss is not evidence of zero collision**. Every
-projection result, including rounded output, requires a fresh raw-SAT audit.
-The test suite contains a corner-overlap counterexample proving this distinction.
+## Physical contact profiles (`P1-02` vs `authored`)
 
-## Declared-contact exclusions
+Blanket parent/sibling collision immunity is prohibited:
+1. Only explicitly declared non-detached `attach` pairs and `place(base_box=...)` pairs enter `Scene.adjacency` (`declared_contact_pairs`), and every exempted pair still logs its raw SAT depth.
+2. **`audit_profile="P1-02"` (default for clean-room generation & Gate G2)**: Enforces positive coplanar contact-patch area (`>= 1e-4` sq units) or bounded hinge inset (`<= 0.5` units without burying box centers), zero floating gaps (`< -1e-4`), and full physical connectivity across non-detached subtrees.
+3. **`audit_profile="authored"` (for imported human-authored rigs & Level-7 Human Transfer)**: Audits non-exempt collisions, finite valid transforms, and tree integrity while accommodating intentional artistic hinge insets and floating decorative sub-elements common in community `.bbmodel`/`.geo.json` rigs.
 
-Only these pairs enter the starter `Scene.adjacency` set:
+## Current status vs remaining milestones
 
-1. A non-detached attach's parent box and the child bone's first box.
-2. A placed box and its explicitly named same-bone base box.
-
-All other pairs are audited, including ordinary siblings and mirrored siblings.
-The report mentions an additional symmetric-root exemption; it is deliberately
-not inferred here because no unambiguous AST marker identifies those intended
-contacts. Add an explicit validated contact relation before broadening masks.
-
-Every excluded pair still has its raw SAT depth reported under
-`declared_contact_pairs`. Declared contact is not a physical guarantee: a gap,
-deep intentional overlap, or unsupported construction needs a separate contact
-region audit. `connected_components` is the declared-edge graph only.
-
-## Scope and required follow-up
-
-The starter audit exposes `scope=starter_static_geometry` and
-`complete_for_release=false`. It has no hand/ergonomics, engine/schema, exact
-intersection volume, texture seam, motion, or foot-skating acceptance.
-
-The CPU regression tests include 1,000 rotated same-orientation flush contacts,
-positive 0.2 overlaps, parallel degeneracy, inflation, hierarchy composition,
-and reflected geometry. They do not satisfy the plan's differentiable gradient
-gate or 20-step PGD claim. Before marking that gate complete:
-
-1. Port this transform contract to PyTorch without detaching tensors.
-2. Check forward parity and finite-difference gradients for nondegenerate cases.
-3. Verify zero gradients at flush contact across relevant precision settings.
-4. Optimize only valid pose variables, preserve integer sizes/contact constraints,
-   and test world-bounds penalties for each backend.
-5. Recompile and rerun exact SAT after two-decimal output quantization.
-6. Report the failed optimization cases rather than weakening acceptance criteria.
+- **Implemented on CPU**: NumPy & PyTorch `SE(3)` + 15-axis SAT parity checks, `P1-02` & `authored` contact audits, Baseline-PGD projector (`pgd_projector.py`), and `run_bounded_repair_policy` (`<= 3` re-audits with monotonic `CostLedger` accounting).
+- **Remaining before release claims**: Hand/grip ergonomics (`@ergonomics`, `P1-04`), live GUI/engine runtime import verification (`P0-02`, `P3-02`), and empirical GPU Gate G2 evaluation on the frozen unseen dense-assembly holdout (`P1-10`).
