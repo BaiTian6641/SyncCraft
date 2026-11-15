@@ -25,7 +25,7 @@
       "owner": null,
       "evidence": [
         "pyproject.toml",
-        "requirements/cpu-starter.txt",
+        "requirements-core.txt",
         "docs/STATUS.md"
       ]
     },
@@ -38,11 +38,11 @@
       ],
       "owner": null,
       "evidence": [
-        "src/synccraft/exporters/bbmodel.py",
-        "src/synccraft/exporters/mc_item_json.py",
-        "src/synccraft/exporters/bedrock_geo.py",
+        "src/synccraft/backends/bbmodel5_exporter.py",
+        "src/synccraft/backends/java_exporter.py",
+        "src/synccraft/backends/bedrock_gecko_exporter.py",
         "src/synccraft/world/artist_loop.py",
-        "tests/test_exporters_and_quantization.py",
+        "tests/test_exporters.py",
         "docs/COMPATIBILITY.md"
       ]
     },
@@ -97,8 +97,7 @@
       ],
       "owner": null,
       "evidence": [
-        "src/synccraft/audit/contact.py",
-        "src/synccraft/audit/scene_audit.py",
+        "src/synccraft/audit/sync_audit.py",
         "tests/test_data_gen_and_contact.py"
       ]
     },
@@ -112,11 +111,12 @@
       ],
       "owner": null,
       "evidence": [
-        "src/synccraft/texture/uv_layout.py",
-        "src/synccraft/texture/procedural_shader.py",
-        "src/synccraft/texture/surface_optics.py",
-        "src/synccraft/texture/labpbr_export.py",
-        "tests/test_physics_surface_and_optics.py"
+        "src/synccraft/shading/uv_packer.py",
+        "src/synccraft/shading/compiler.py",
+        "src/synccraft/surface/contracts.py",
+        "src/synccraft/surface/processes.py",
+        "src/synccraft/backends/labpbr_exporter.py",
+        "tests/test_surface_and_pbr.py"
       ]
     },
     {
@@ -140,10 +140,10 @@
       ],
       "owner": null,
       "evidence": [
-        "src/synccraft/kinematics/torch_se3.py",
-        "src/synccraft/audit/torch_sat.py",
-        "tests/test_kinematics_and_sat.py",
-        "tests/test_modeling_and_refiner.py"
+        "src/synccraft/modeling/pgd_projector.py",
+        "tests/test_kinematics.py",
+        "tests/test_sat.py",
+        "tests/test_budget_and_gate.py"
       ]
     },
     {
@@ -158,7 +158,7 @@
       "evidence": [
         "src/synccraft/modeling/pgd_projector.py",
         "src/synccraft/modeling/repair_loop.py",
-        "tests/test_modeling_and_refiner.py"
+        "tests/test_budget_and_gate.py"
       ]
     },
     {
@@ -261,7 +261,7 @@
       "owner": null,
       "evidence": [
         "src/synccraft/data_gen/ik_motion_templates.py",
-        "src/synccraft/physics/musculoskeletal.py",
+        "src/synccraft/kinematics/musculoskeletal.py",
         "tests/test_musculoskeletal_complex_and_artist_loop.py"
       ]
     },
@@ -275,9 +275,8 @@
       ],
       "owner": null,
       "evidence": [
-        "src/synccraft/exporters/bedrock_geo.py",
-        "src/synccraft/exporters/geckolib.py",
-        "tests/test_bedrock_and_geckolib.py",
+        "src/synccraft/backends/bedrock_gecko_exporter.py",
+        "tests/test_exporters.py",
         "docs/COMPATIBILITY.md"
       ]
     },

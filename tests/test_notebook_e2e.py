@@ -593,7 +593,7 @@ class TestNotebookTier1FeatureCoverage(unittest.TestCase):
     def test_07d_v31_apex_musculoskeletal_and_8192_context_contracts(self):
         """
         Verify ADR 0006 clean-room Apex musculoskeletal integration across Section 3, 4, and 6:
-        - Synthesizes 'apex_complex_v3_1' shard and registers config_name: apex_complex_v3_1 in Dataset Card.
+        - Synthesizes 'apex_complex_v3_2' shard (with v3_1 fallback read) and registers config_name: apex_complex_v3_2 in Dataset Card.
         - Defaults max_sequence_length to 8192 (>= 8192 so ~7.6k-token multi-turn artist-loop rows do not truncate).
         - Mixes Apex and World streams via StreamMixtureSampler with max_aux_repeats <= 3.
         - Probes >=40-box held-out Apex unseen families (APEX_UNSEEN_FAMILIES).
@@ -604,7 +604,7 @@ class TestNotebookTier1FeatureCoverage(unittest.TestCase):
         sec6_code = "\n".join(get_section_code_cells(nb, 6))
 
         self.assertIn("generate_apex_complex_dataset", sec3_code)
-        self.assertIn("config_name: apex_complex_v3_1", sec3_code)
+        self.assertIn("config_name: apex_complex_v3_2", sec3_code)
         self.assertIn('"8192"', sec4_code)
         self.assertNotIn("max_sequence_length: int = 2048", sec4_code)
         self.assertIn("StreamMixtureSampler", sec4_code)
@@ -1350,6 +1350,10 @@ class TestNotebookTier4RealWorldScenarios(unittest.TestCase):
                     self.assertIn("dataset_manifest_sha256", evidence)
                     self.assertIn("evaluation_manifest_sha256", evidence)
                     self.assertIn("all_samples_have_at_least_16_parts", evidence)
+                    self.assertTrue(
+                        evidence["all_samples_have_at_least_16_parts"],
+                        "Unseen holdout benchmark rows all have reference_boxes >= 16; failed syntax samples must not falsely block all_samples_have_at_least_16_parts!",
+                    )
 
                 # Validate sys.path anti-shadowing, P1-02 canary quarantine, and complex multi-bone asset synthesis
                 self.assertNotIn(str(temp_path), sys.path)
@@ -1373,10 +1377,10 @@ class TestNotebookTier4RealWorldScenarios(unittest.TestCase):
                     if row.get("split") == "test_unseen":
                         self.assertGreaterEqual(row["audit_version_and_results"]["boxes"], 16)
 
-                # Validate ADR 0006 Block-DSL v3.1 shard, 8192 sequence length, interleaving, and >=40-box probing
-                apex_manifest_file = temp_path / "datasets" / "apex_complex_v3_1" / "apex_complex_manifest.json"
-                self.assertTrue(apex_manifest_file.is_file(), "apex_complex_v3_1/apex_complex_manifest.json must exist")
-                self.assertIn("apex_complex_v3_1", ds_card_text)
+                # Validate ADR 0006 Block-DSL v3.2 shard, 8192 sequence length, interleaving, and >=40-box probing
+                apex_manifest_file = temp_path / "datasets" / "apex_complex_v3_2" / "apex_complex_manifest.json"
+                self.assertTrue(apex_manifest_file.is_file(), "apex_complex_v3_2/apex_complex_manifest.json must exist")
+                self.assertIn("apex_complex_v3_2", ds_card_text)
                 self.assertGreaterEqual(global_scope["training_cfg"].max_sequence_length, 8192)
                 self.assertGreaterEqual(global_scope.get("apex_interleaved_count", 0), 1)
                 nb_code_all = "\n".join(get_all_code_cells(load_notebook()))
@@ -1386,6 +1390,7 @@ class TestNotebookTier4RealWorldScenarios(unittest.TestCase):
                     if ta_path.is_file():
                         ta_json = json.loads(ta_path.read_text(encoding="utf-8"))
                         self.assertGreaterEqual(ta_json.get("max_sequence_length", 0), 8192)
+                        self.assertGreaterEqual(ta_json.get("apex_v3_2_interleaved_samples", 0), 1)
                         self.assertGreaterEqual(ta_json.get("apex_v3_1_interleaved_samples", 0), 1)
                 apex_probed_fams = {r["family_id"] for r in global_scope.get("apex_probed_completions", [])}
                 self.assertEqual(apex_probed_fams, {"elder_calamity_dragon", "relic_automaton_guardian"})
@@ -1478,6 +1483,36 @@ class TestNotebookPeerReviewOverhaulContracts(unittest.TestCase):
         self.assertEqual(sampler.seen_stream_counts, {"main": 50, "apex": 6, "world": 9})
         self.assertEqual(sum(sampler.seen_family_counts.values()), epoch_len)
         self.assertEqual(sum(sampler.seen_tier_counts.values()), epoch_len)
+
+        # Epoch 1 (2-epoch cumulative check): aux capacity was saturated in Epoch 0, so Epoch 1 visits 50 main rows and 0 extra aux repeats!
+        expected_two_epochs = sampler.estimate_total_items(2)
+        self.assertEqual(expected_two_epochs, 50 * 2 + 6 + 9)
+        drawn_main_epoch1 = []
+        for _ in range(expected_two_epochs - epoch_len):
+            stream_name, row_idx, _ = sampler.next_item()
+            if stream_name == "main":
+                drawn_main_epoch1.append(row_idx)
+        self.assertEqual(len(drawn_main_epoch1), 50)
+        self.assertEqual(set(drawn_main_epoch1), set(range(50)))
+        self.assertEqual(sampler.max_observed_repeats("main"), 2)
+        self.assertLessEqual(sampler.max_observed_repeats("apex"), 3)
+        self.assertLessEqual(sampler.max_observed_repeats("world"), 3)
+
+        # Also test multi-epoch partial spread (target_aux_ratio=0.08 -> 4 draws/epoch across 3 epochs, capped at <=3 per row!)
+        sampler_spread = StreamMixtureSampler(
+            main_rows,
+            apex_rows=apex_rows,
+            world_rows=world_rows,
+            seed=2027,
+            max_aux_repeats=3,
+            target_aux_ratio=0.08,
+        )
+        total_3ep = sampler_spread.estimate_total_items(3)
+        for _ in range(total_3ep):
+            sampler_spread.next_item()
+        self.assertEqual(sampler_spread.max_observed_repeats("main"), 3)
+        self.assertLessEqual(sampler_spread.max_observed_repeats("apex"), 3)
+        self.assertLessEqual(sampler_spread.max_observed_repeats("world"), 3)
 
     def test_h2_periodic_full_state_checkpoint_and_deterministic_resume(self):
         """
@@ -1906,6 +1941,32 @@ class TestNotebookPeerReviewOverhaulContracts(unittest.TestCase):
                 cwd=str(REPO_ROOT),
             )
             self.assertEqual(res.returncode, 0, f"{forbidden_rel} must be ignored by .gitignore!")
+
+    def test_h13_tasks_json_evidence_paths_all_exist(self):
+        """
+        Verify every evidence path listed in TASKS.json resolves to an existing repository path
+        (exempting src/synccraft/modeling/repair_loop.py only when running in a pre-merge worktree).
+        """
+        tasks_path = REPO_ROOT / "TASKS.json"
+        self.assertTrue(tasks_path.is_file(), "TASKS.json must exist at repository root")
+        payload = json.loads(tasks_path.read_text(encoding="utf-8"))
+        self.assertIn("tasks", payload)
+        self.assertGreater(len(payload["tasks"]), 0)
+
+        missing_paths = []
+        for task in payload["tasks"]:
+            tid = task.get("id", "<unknown>")
+            for ev_rel in task.get("evidence", []):
+                if ev_rel == "src/synccraft/modeling/repair_loop.py" and not (REPO_ROOT / ev_rel).exists():
+                    continue
+                if not (REPO_ROOT / ev_rel).exists():
+                    missing_paths.append((tid, ev_rel))
+
+        self.assertEqual(
+            missing_paths,
+            [],
+            f"TASKS.json contains non-existent evidence paths: {missing_paths}",
+        )
 
 
 if __name__ == "__main__":
