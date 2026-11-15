@@ -5,7 +5,7 @@
 **Dataset Hub**: `TassP0lar/synccraft-v3-blockdsl-dataset` (`https://huggingface.co/datasets/TassP0lar/synccraft-v3-blockdsl-dataset`)  
 **Architecture Baseline**: SyncCraft v3.0 Research Plan (`source/synccraft-v3-plan.pdf`) + `ADR 0001`–`0006`  
 **Default Target Backbone**: `LiquidAI/LFM3-VL-2B` (BF16 PEFT LoRA `r=32, alpha=64`, `max_sequence_length=8192`, `max_new_tokens=5120` for Apex holdout probing, zero quantization)  
-**Codebase Scale**: `26,807` LOC across `54` Python files (`44` library modules + `10` package entrypoints in `src/synccraft/`, plus `45`-line `grammar.lark`) + `5,909` LOC across `14` test suites (`tests/`) = **`32,716` Python LOC**  
+**Codebase Scale**: `26,826` LOC across `54` Python files (`44` library modules + `10` package entrypoints in `src/synccraft/`, plus `45`-line `grammar.lark`) + `5,910` LOC across `14` test suites (`tests/`) = **`32,736` Python LOC**  
 **Local Verification Environment**: `Python 3.12.16`, `macOS 27.2.1 (arm64 Darwin 27.2.0)`, `numpy 2.3.5`, `Pillow 13.0.0`, `pyarrow 26.0.1`, `torch 2.15.0` (CPU)
 
 ---
@@ -94,7 +94,7 @@ Most contemporary "3D/texture AI" pipelines treat asset creation as **unconstrai
                  └──────────────────────────────────────────────────────┘
 ```
 
-### Complete Package & File Inventory (`src/synccraft/` — `26,807` Python LOC + `45`-line EBNF)
+### Complete Package & File Inventory (`src/synccraft/` — `26,826` Python LOC + `45`-line EBNF)
 
 | Subsystem | Module | LOC | Responsibility & Status |
 |---|---|---:|---|
