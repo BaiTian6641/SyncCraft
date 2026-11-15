@@ -2282,7 +2282,7 @@ def verify_and_package_candidate(
         effective_seed = base_seed + attempt * 104_729
         try:
             raw_program, meta_info, numeric_seed = generate_candidate_for_family(
-                family_id, split=split, variant_index=gen_variant_idx, base_seed=effective_seed
+                family_id, split=split, variant_index=gen_variant_idx + attempt * 1009, base_seed=effective_seed
             )
             div_rng = random.Random(numeric_seed ^ 0x3C3C_7171)
             program, div_info = diversify_program_ast(

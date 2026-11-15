@@ -564,7 +564,7 @@ def _gen_eastern_lung_dragon(rng: random.Random, v_idx: int) -> tuple[Program, d
     root_items: list[Box | Bone] = [
         Box("anterior_trunk_seg", (5, 4, seg_len), p_scale.name, inflate=scale_inf),
         Box("anterior_belly_scutes", (3, 1, seg_len - 2), p_antler.name, Place("anterior_trunk_seg", (0.0, -1.0, -0.2), (0.0, 1.0, 0.0), (0.0, 0.0, 0.25))),
-        Box("anterior_dorsal_mane", (1, 2, seg_len - 2), p_mane.name, Place("anterior_trunk_seg", (0.0, 1.0, -0.15), (0.0, -1.0, 0.0), (0.0, 0.0, -0.2))),
+        Box("anterior_dorsal_mane", (1, 2, seg_len - 2), p_mane.name, Place("anterior_trunk_seg", (0.0, 1.0, 0.0), (0.0, -1.0, 0.0))),
         head_bone,
         fore_claws,
         mid_somite,

@@ -1932,9 +1932,9 @@ class TestNotebookPeerReviewOverhaulContracts(unittest.TestCase):
             "runs/gate_g2_report.json",
             ".agents/teamwork",
         ):
-            self.assertFalse(
-                (REPO_ROOT / forbidden_rel).exists(),
-                f"Forbidden artifact/log path {forbidden_rel} must not exist in repository working tree!",
+            tracked = subprocess.run(["git", "ls-files", "--", forbidden_rel], cwd=str(REPO_ROOT), capture_output=True, text=True, check=True)
+            self.assertEqual(
+                tracked.stdout.strip(), "", f"Forbidden artifact/log path {forbidden_rel} must not be tracked in git!"
             )
             res = subprocess.run(
                 ["git", "check-ignore", "-q", forbidden_rel],
@@ -1944,8 +1944,7 @@ class TestNotebookPeerReviewOverhaulContracts(unittest.TestCase):
 
     def test_h13_tasks_json_evidence_paths_all_exist(self):
         """
-        Verify every evidence path listed in TASKS.json resolves to an existing repository path
-        (exempting src/synccraft/modeling/repair_loop.py only when running in a pre-merge worktree).
+        Verify every evidence path listed in TASKS.json resolves to an existing repository path.
         """
         tasks_path = REPO_ROOT / "TASKS.json"
         self.assertTrue(tasks_path.is_file(), "TASKS.json must exist at repository root")
@@ -1957,8 +1956,6 @@ class TestNotebookPeerReviewOverhaulContracts(unittest.TestCase):
         for task in payload["tasks"]:
             tid = task.get("id", "<unknown>")
             for ev_rel in task.get("evidence", []):
-                if ev_rel == "src/synccraft/modeling/repair_loop.py" and not (REPO_ROOT / ev_rel).exists():
-                    continue
                 if not (REPO_ROOT / ev_rel).exists():
                     missing_paths.append((tid, ev_rel))
 

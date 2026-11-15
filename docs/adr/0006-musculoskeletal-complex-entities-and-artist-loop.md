@@ -51,4 +51,4 @@ While keeping unimplemented starter placeholders (`extrude`, `@shade`, `@motion`
 ## Consequences
 
 - **Positive**: Unifies multi-bone biomechanical modeling, Zajac/Hill muscle-tendon coupling, closed-loop artist project critique/refinement, exact Bedrock roundtrip conversion, neutral clean-room `Apache-2.0` procedural synthesis, and `NoAI`-respecting `CC-BY-NC` quarantine under one deterministic world model.
-- **Boundaries Preserved**: Explicit `fidelity_label` tags (`exact_physical`, `reduced_order_qualitative`, `empirical_heuristic`) prevent overstating reduced-order solvers; live GUI/engine runtime imports remain tracked under `P0-02` / `P3-02` (`runtime_import_verified=False`); and GPU training/Gate G2 remain tracked under `P1-09` / `P1-10`.
+- **Boundaries Preserved**: Explicit `fidelity_label` tags (`physical_law_validated`, `reduced_order_qualitative`, `stylistic`) prevent overstating reduced-order solvers; live GUI/engine runtime imports remain tracked under `P0-02` / `P3-02` (`runtime_import_verified=False`); and GPU training/Gate G2 remain tracked under `P1-09` / `P1-10`.

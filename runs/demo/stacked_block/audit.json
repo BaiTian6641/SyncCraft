@@ -1,6 +1,7 @@
 {
-  "schema": "synccraft.audit/0.2",
+  "schema": "synccraft.audit/0.3",
   "scope": "starter_static_geometry",
+  "audit_profile": "strict",
   "status": "passed",
   "passed": true,
   "complete_for_release": false,
@@ -10,10 +11,13 @@
   "evaluated_non_exempt_pairs": 1,
   "collision_tolerance": 1e-07,
   "contact_policy": {
-    "version": "p1-02/1.0",
+    "version": "p1-02/1.1",
+    "audit_profile": "strict",
     "enforced": true,
     "max_contact_gap": 0.0001,
     "max_inset_depth": 0.5,
+    "max_hinge_angle_deg": 60.0,
+    "max_hinge_allowance": 2.5,
     "authorized_detached_bones": 0
   },
   "collision_pairs": [],
@@ -45,6 +49,8 @@
       "reason": "place"
     }
   ],
+  "authored_exempt_pairs": [],
+  "z_fighting_pairs": [],
   "contact_violations": [],
   "connected_components": [
     [

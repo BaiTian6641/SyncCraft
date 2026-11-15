@@ -243,7 +243,7 @@ class ExportTests(unittest.TestCase):
         from synccraft.data_gen.complex_entity_and_asset_pack import build_apex_complex_program
         from synccraft.world.inverse_inference import AssetProvenance, ingest_external_asset
 
-        prog = build_apex_complex_program("elemental_pocket_companion", seed=101)
+        prog = build_apex_complex_program("elemental_companion_critter", seed=101)
         compiled = compile_geometry(prog)
         static_bb = export_bbmodel(compiled, name="static_companion")
         self.assertNotIn("animations", static_bb)

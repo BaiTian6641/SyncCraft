@@ -2,7 +2,10 @@
   "meta": {
     "archetype": "weapon_3d",
     "target_profile": "bbmodel_5",
-    "texel_density": 16
+    "texel_density": 16,
+    "dsl_version": "3.2",
+    "size_step": 1.0,
+    "audit_profile": "strict"
   },
   "palettes": [
     {
@@ -59,7 +62,17 @@
         "material": "slate",
         "place": null,
         "inflate": 0.0,
-        "cullface": []
+        "cullface": [],
+        "rotate": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "pivot": null,
+        "plane_normal": null,
+        "uv": null,
+        "uv_faces": [],
+        "texture": null
       },
       {
         "name": "left_wing",
@@ -90,7 +103,8 @@
             0.0,
             0.0
           ],
-          "detached": false
+          "detached": false,
+          "joint_mode": false
         },
         "mirror_name": "right_wing",
         "items": [
@@ -104,7 +118,17 @@
             "material": "copper",
             "place": null,
             "inflate": 0.0,
-            "cullface": []
+            "cullface": [],
+            "rotate": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "pivot": null,
+            "plane_normal": null,
+            "uv": null,
+            "uv_faces": [],
+            "texture": null
           },
           {
             "name": "left_tip",
@@ -133,13 +157,27 @@
               ]
             },
             "inflate": 0.0,
-            "cullface": []
+            "cullface": [],
+            "rotate": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "pivot": null,
+            "plane_normal": null,
+            "uv": null,
+            "uv_faces": [],
+            "texture": null
           }
         ],
-        "joint_limits": null
+        "joint_limits": null,
+        "mirror_axis": "x",
+        "radial": null
       }
     ],
-    "joint_limits": null
+    "joint_limits": null,
+    "mirror_axis": "x",
+    "radial": null
   },
   "shade": [],
   "ergonomics": null,
@@ -147,5 +185,7 @@
   "style": null,
   "muscles": [],
   "kinematics": null,
-  "behavior": null
+  "behavior": null,
+  "textures": [],
+  "controller": null
 }

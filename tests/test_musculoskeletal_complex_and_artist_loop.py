@@ -838,8 +838,9 @@ class TestAdversarialRegressionGuardsV31(unittest.TestCase):
         self.assertAlmostEqual(tr_x.bias_deg, 0.0, places=5)
         self.assertAlmostEqual(tr_x.freq_hz, 0.25, places=4)
         self.assertAlmostEqual(tr_y.freq_hz, 2.0, places=4)
-        self.assertAlmostEqual(tr_y.bias_deg - abs(tr_y.amp_deg), -5.0, places=4)
-        self.assertAlmostEqual(tr_y.bias_deg + abs(tr_y.amp_deg), 12.0, places=4)
+        # Left-handed Bedrock Y range [-5, +12] maps under X-plane reflection (C5) to right-handed [-12, +5]
+        self.assertAlmostEqual(tr_y.bias_deg - abs(tr_y.amp_deg), -12.0, places=4)
+        self.assertAlmostEqual(tr_y.bias_deg + abs(tr_y.amp_deg), 5.0, places=4)
 
         # 2. Multi-root .bbmodel with rotated group & rotated element
         bb_multi = {
@@ -980,24 +981,29 @@ class TestCobblemonRealWorldIdiomsAndClosedLoopRoundtrip(unittest.TestCase):
                 }
             },
         }
-        beh = decompile_bedrock_animation_to_behavior(anim_payload, skel_prog)
+        beh_default = decompile_bedrock_animation_to_behavior(anim_payload, skel_prog)
+        self.assertIsNotNone(beh_default)
+        assert beh_default is not None
+        self.assertTrue(any(kt.bone == "wing_l" for kt in beh_default.clips[0].keyframes))
+
+        beh = decompile_bedrock_animation_to_behavior(anim_payload, skel_prog, prefer_keyframes=False)
         self.assertIsNotNone(beh)
         assert beh is not None
         tracks = {(t.bone, t.axis): t for t in beh.clips[0].tracks}
 
-        # 1. Nested-paren Molang: math.sin((t - 0.25) * 360) * 10 -> freq=1.0Hz, phase=270 deg (-90 mod 360), amp=10
+        # 1. Nested-paren Molang on X (negated under C5 right-handed reflection): amp=-10, freq=1.0Hz, phase=270 deg
         t_tail_x = tracks[("tail_1", "x")]
         self.assertAlmostEqual(t_tail_x.freq_hz, 1.0, places=5)
         self.assertAlmostEqual(t_tail_x.phase_deg, 270.0, places=4)
-        self.assertAlmostEqual(t_tail_x.amp_deg, 10.0, places=5)
+        self.assertAlmostEqual(t_tail_x.amp_deg, -10.0, places=5)
 
-        # 2. Leading 0 - math.sin((t + 0.125) * 360) * 8 -> negated amplitude (-8.0), freq=1.0Hz, phase=45 deg
+        # 2. Leading 0 - math.sin((t + 0.125) * 360) * 8 on Y (negated under C5 right-handed reflection -> +8.0)
         t_tail_y = tracks[("tail_1", "y")]
         self.assertAlmostEqual(t_tail_y.freq_hz, 1.0, places=5)
         self.assertAlmostEqual(t_tail_y.phase_deg, 45.0, places=4)
-        self.assertAlmostEqual(t_tail_y.amp_deg, -8.0, places=5)
+        self.assertAlmostEqual(t_tail_y.amp_deg, 8.0, places=5)
 
-        # 3. Signed outer parens + negative trailing multiplier: -(4 + cos(180*t)*-6) = -4 + 6*cos(180*t)
+        # 3. Signed outer parens + negative trailing multiplier on Z (preserved under X-reflection): -4 + 6*cos(180*t)
         t_tail_z = tracks[("tail_1", "z")]
         self.assertAlmostEqual(t_tail_z.bias_deg, -4.0, places=5)
         self.assertAlmostEqual(t_tail_z.freq_hz, 0.5, places=5)
@@ -1008,16 +1014,16 @@ class TestCobblemonRealWorldIdiomsAndClosedLoopRoundtrip(unittest.TestCase):
         self.assertIn(("wing_l", "z"), tracks)
         self.assertGreater(abs(tracks[("wing_l", "x")].amp_deg), 10.0)
 
-        # 5. Timestamped Molang keyframe dict {"0.0": ["math.sin((q.anim_time - 0.2) * 360) * 12", ...]}
+        # 5. Timestamped Molang keyframe dict {"0.0": ["math.sin((q.anim_time - 0.2) * 360) * 12", ...]} (X negated -> -12.0, Z preserved -> -5.0)
         t_ear_x = tracks[("ear_r", "x")]
         self.assertAlmostEqual(t_ear_x.freq_hz, 1.0, places=5)
-        self.assertAlmostEqual(t_ear_x.amp_deg, 12.0, places=5)
+        self.assertAlmostEqual(t_ear_x.amp_deg, -12.0, places=5)
         t_ear_z = tracks[("ear_r", "z")]
         self.assertAlmostEqual(t_ear_z.amp_deg, -5.0, places=5)
 
-        # 6. GeckoLib {"vector": ...} single keyframe & constant pose vector
+        # 6. GeckoLib {"vector": ...} single keyframe & constant pose vector (Z preserved -> +7.5, X negated -> -12.5)
         self.assertAlmostEqual(tracks[("crest", "z")].bias_deg, 7.5, places=5)
-        self.assertAlmostEqual(tracks[("jaw", "x")].bias_deg, 12.5, places=5)
+        self.assertAlmostEqual(tracks[("jaw", "x")].bias_deg, -12.5, places=5)
 
     def test_planar_zero_thickness_cobblemon_cubes_preserve_box_uv_strips_and_vertex_fidelity(self) -> None:
         import io
@@ -1441,11 +1447,16 @@ class TestCobblemonRealWorldIdiomsAndClosedLoopRoundtrip(unittest.TestCase):
                 }
             },
         }
-        beh_walk = decompile_bedrock_animation_to_behavior(walk_anim, rec.program)
+        beh_walk_kf = decompile_bedrock_animation_to_behavior(walk_anim, rec.program)
+        assert beh_walk_kf is not None
+        self.assertEqual(len(beh_walk_kf.clips[0].keyframes), 2)
+
+        beh_walk = decompile_bedrock_animation_to_behavior(walk_anim, rec.program, prefer_keyframes=False)
+        assert beh_walk is not None
         tr_l = [t for t in beh_walk.clips[0].tracks if t.bone == "wing_left"][0]
         tr_r = [t for t in beh_walk.clips[0].tracks if t.bone == "wing_right"][0]
-        self.assertAlmostEqual(tr_l.amp_deg, 25.0, places=2)
-        self.assertAlmostEqual(tr_r.amp_deg, 25.0, places=2)
+        self.assertAlmostEqual(abs(tr_l.amp_deg), 25.0, places=2)
+        self.assertAlmostEqual(abs(tr_r.amp_deg), 25.0, places=2)
         self.assertAlmostEqual(abs(tr_r.phase_deg - tr_l.phase_deg), 180.0, places=2)
 
 
