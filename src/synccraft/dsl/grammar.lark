@@ -1,44 +1,151 @@
-// Executable-subset reference for Block-DSL v3.1 (ADR 0001 / 0003 / 0006), not an XGrammar tokenizer integration.
-// Runtime parser.py is dependency-free and enforces additional semantic rules.
-start: meta palette rig opt_section*
-opt_section: materials | style | muscles | kinematics | behavior
-meta: "@meta" "{" "archetype" ":" IDENT "," "target_profile" ":" IDENT "," "texel_density" ":" INT "}"
-palette: "@palette" "{" palette_def+ "}"
-palette_def: IDENT ":" "ramp" "(" "base_lch" "=" vec3 "," "steps" "=" INT ("," "hue_shift" "=" vec2)? ("," "emissive" "=" BOOL)? ")"
-rig: "@rig" "{" root_bone "}"
-materials: "@materials" "{" material_def* "}"
-material_def: IDENT ":" "process" "(" "family" "=" IDENT ("," IDENT "=" (NUMBER | INT | IDENT))* ")"
-style: "@style" "{" "target_encoding" ":" IDENT ("," IDENT ":" (BOOL | NUMBER))* "}"
-muscles: "@muscles" "{" muscle_def* "}"
-muscle_def: "muscle" IDENT "{" "origin_bone" ":" IDENT "," "insertion_bone" ":" IDENT "," "action_axis" ":" IDENT "," "moment_arm_deg" ":" NUMBER ("," "tendon_coupling" ":" "[" IDENT "," IDENT "," NUMBER "]")? ("," "belly_box" ":" IDENT)? ("," "bulge_inflate" ":" NUMBER)? "}"
-kinematics: "@kinematics" "{" (ik_chain_def | look_chain_def)+ "}"
-ik_chain_def: "ik_chain" IDENT "{" "upper" ":" IDENT "," "lower" ":" IDENT "," "effector" ":" vec3 ("," "hinge_axis" ":" IDENT)? "}"
-look_chain_def: "look_chain" IDENT "{" "bones" ":" ident_list ("," "weight_decay" ":" NUMBER)? "}"
-behavior: "@behavior" "{" (clip_def | state_def)+ "}"
-clip_def: "clip" IDENT "{" "duration_s" ":" NUMBER ("," "loop" ":" BOOL)? (track_def | muscle_drive_def | ik_drive_def)+ "}"
-track_def: "track" IDENT ":" IDENT "(" "axis" "=" IDENT "," "amp_deg" "=" NUMBER "," "freq_hz" "=" NUMBER ("," "phase_deg" "=" NUMBER)? ("," "bias_deg" "=" NUMBER)? ")"
-muscle_drive_def: "muscle_drive" IDENT ":" "activation" "(" "peak" "=" NUMBER "," "freq_hz" "=" NUMBER ("," "phase_deg" "=" NUMBER)? ("," "baseline" "=" NUMBER)? ")"
-ik_drive_def: "ik_drive" IDENT ":" "foot_cycle" "(" "stride" "=" NUMBER "," "lift" "=" NUMBER ("," "phase_deg" "=" NUMBER)? ")"
+// Canonical EBNF reference grammar for Block-DSL v3.2 (and legacy v3.0 / v3.1).
+// Runtime parser.py is a dependency-free recursive-descent implementation of this
+// exact surface syntax (zero Python eval/exec) plus typed semantic validation.
+// Parity between grammar.lark and parser.py is enforced by tests/test_dsl.py (M1).
+
+start: preamble_decl* meta preamble_decl* textures? preamble_decl* palette preamble_decl* textures? preamble_decl* rig post_item*
+
+?preamble_decl: let_decl | macro_def
+?post_item: preamble_decl | opt_section
+?opt_section: textures | materials | style | muscles | kinematics | behavior | controller
+
+let_decl: "let" IDENT "=" expr ";"?
+
+macro_def: "def" IDENT "(" macro_params? ")" "{" macro_body "}"
+macro_params: macro_param ("," macro_param)*
+macro_param: IDENT ("=" expr)?
+macro_body: let_decl* ("bone" IDENT "{" bone_interior "}" | bone_interior)
+
+meta: "@meta" "{" "archetype" ":" IDENT "," "target_profile" ":" IDENT "," "texel_density" ":" expr ("," meta_opt)* "}"
+meta_opt: "dsl_version" ":" (STRING | NUMBER | IDENT)
+        | "size_step" ":" expr
+        | "audit_profile" ":" (STRING | IDENT)
+
+textures: "@textures" "{" texture_def* "}"
+texture_def: IDENT ":" "image" "(" STRING "," expr "," expr ")" ","?
+
+palette: "@palette" "{" (palette_def | let_decl)+ "}"
+palette_def: IDENT ":" "ramp" "(" "base_lch" "=" vec3 "," "steps" "=" expr ("," "hue_shift" "=" vec2)? ("," "emissive" "=" BOOL)? ")"
+
+rig: "@rig" "{" preamble_decl* "root" root_bone preamble_decl* "}"
+root_bone: "bone" IDENT "{" let_decl* ("pivot_local" ":" vec3)? rig_node* "}"
+child_bone: "bone" IDENT attach_or_joint symmetry_mod* "{" bone_interior "}"
+bone_interior: let_decl* ("rest_euler" ":" vec3)? ("joint_limits" ":" joint_limits_mat)? rig_node*
+
+?rig_node: let_decl | box | plane | locator | child_bone | use_macro | chain_decl
+
+attach_or_joint: attach | joint
+attach: "attach" "(" "parent_box" "=" IDENT "," "anchor" "=" vec3 "," "align" "=" vec3 ("," "offset" "=" vec3)? ("," "detached" "=" BOOL)? ")"
+joint: "joint" "(" "parent" "=" IDENT ("," joint_arg)* ")"
+joint_arg: "at" "=" vec3
+         | "align" "=" vec3
+         | "detached" "=" BOOL
+
+symmetry_mod: mirror_x_mod | mirror_mod | radial_mod
+mirror_x_mod: "mirror_x" "(" IDENT ")"
+mirror_mod: "mirror" "(" mirror_arg ("," mirror_arg)* ")"
+mirror_arg: "axis" "=" IDENT
+          | ("as" | "name") "=" IDENT
+          | IDENT
+radial_mod: "radial" "(" radial_arg ("," radial_arg)* ")"
+radial_arg: "count" "=" expr
+          | "axis" "=" IDENT
+
+use_macro: "use" IDENT "(" macro_call_args? ")" "as" IDENT attach_or_joint symmetry_mod*
+macro_call_args: macro_call_arg ("," macro_call_arg)*
+macro_call_arg: IDENT "=" expr | expr
+
+chain_decl: "chain" IDENT chain_hdr* "{" chain_prop* (let_decl | box | plane | locator)+ "}"
+chain_hdr: attach_or_joint
+         | symmetry_mod
+         | "segments" ("=" | ":")? expr ","?
+         | "taper" ("=" | ":")? expr ","?
+chain_prop: let_decl
+          | "axis" ":" ("+" | "-")? IDENT ","?
+          | "rest_euler" ":" vec3 ","?
+          | "joint_limits" ":" joint_limits_mat ","?
+
+place: "place" "(" ("base_box" "=" IDENT ",")? "anchor" "=" vec3 "," "align" "=" vec3 ("," "offset" "=" vec3)? ")"
+
+box: "box" IDENT place? "{" box_field ("," box_field)* ","? "}"
+plane: "plane" IDENT place? "{" box_field ("," box_field)* ","? "}"
+box_field: "size" ":" (vec2 | vec3)
+         | ("material" | "mat") ":" IDENT
+         | ("normal" | "plane_normal") ":" IDENT
+         | "inflate" ":" expr
+         | "rotate" ":" vec3
+         | "pivot" ":" vec3
+         | "uv" ":" ("box" "(" expr "," expr ")" | vec2)
+         | "uv_faces" ":" "{" uv_face_entry* "}"
+         | "texture" ":" IDENT
+         | "cullface" ":" ident_list
+         | "place" ":" place
+uv_face_entry: IDENT ":" vec4 ","?
+
+locator: "locator" IDENT "{" "offset" ":" vec3 ("," "role" ":" IDENT)? "}"
+
+materials: "@materials" "{" (material_def | let_decl)* "}"
+material_def: IDENT ":" "process" "(" "family" "=" IDENT ("," IDENT "=" (expr | IDENT))* ")"
+
+style: "@style" "{" "target_encoding" ":" IDENT ("," IDENT ":" (BOOL | expr))* "}"
+
+muscles: "@muscles" "{" (muscle_def | let_decl)* "}"
+muscle_def: "muscle" IDENT "{" "origin_bone" ":" IDENT "," "insertion_bone" ":" IDENT "," "action_axis" ":" IDENT "," "moment_arm_deg" ":" expr ("," muscle_opt)* "}"
+muscle_opt: "tendon_coupling" ":" "[" IDENT "," IDENT "," expr "]"
+          | "belly_box" ":" IDENT
+          | "bulge_inflate" ":" expr
+
+kinematics: "@kinematics" "{" (let_decl | ik_chain_def | look_chain_def | spring_def)+ "}"
+ik_chain_def: "ik_chain" IDENT "{" ik_field ("," ik_field)* "}"
+ik_field: "upper" ":" IDENT
+        | "lower" ":" IDENT
+        | "bones" ":" ident_list
+        | "effector" ":" vec3
+        | "hinge_axis" ":" IDENT
+        | "pole" ":" vec3
+look_chain_def: "look_chain" IDENT "{" "bones" ":" ident_list ("," "weight_decay" ":" expr)? "}"
+spring_def: "spring" IDENT "{" spring_field* "}"
+spring_field: ("stiffness" | "damping") ":" expr ","?
+
+behavior: "@behavior" "{" (let_decl | clip_def | state_def | spring_def)+ "}"
+clip_def: "clip" IDENT "{" "duration_s" ":" expr ("," "loop" ":" BOOL)? (track_def | key_def | muscle_drive_def | ik_drive_def)+ "}"
+track_def: "track" IDENT ":" IDENT "(" "axis" "=" IDENT "," "amp_deg" "=" expr "," "freq_hz" "=" expr ("," ("phase_deg" | "bias_deg") "=" expr)* ")"
+key_def: "key" IDENT "." IDENT "{" key_entry+ (IDENT ","?)? "}"
+key_entry: expr ":" vec3 ","?
+muscle_drive_def: "muscle_drive" IDENT ":" "activation" "(" "peak" "=" expr "," "freq_hz" "=" expr ("," ("phase_deg" | "baseline") "=" expr)* ")"
+ik_drive_def: "ik_drive" IDENT ":" "foot_cycle" "(" "stride" "=" expr "," "lift" "=" expr ("," "phase_deg" "=" expr)? ")"
+
 state_def: "state" IDENT "{" (pose_bias_def | muscle_tone_def | material_mod_def)+ "}"
 pose_bias_def: "pose_bias" IDENT ":" vec3
-muscle_tone_def: "muscle_tone" IDENT ":" NUMBER
-material_mod_def: "material_mod" IDENT ":" "{" "emissive" ":" NUMBER "," "moisture" ":" NUMBER "," "wear_delta" ":" NUMBER "}"
-root_bone: "root" "bone" IDENT "{" "pivot_local" ":" vec3 node+ "}"
-child_bone: "bone" IDENT attach mirror? "{" ("rest_euler" ":" vec3)? ("joint_limits" ":" "[" vec2 "," vec2 "," vec2 "]")? node+ "}"
-?node: box | locator | child_bone
-attach: "attach" "(" "parent_box" "=" IDENT "," "anchor" "=" vec3 "," "align" "=" vec3 ("," "offset" "=" vec3)? ("," "detached" "=" BOOL)? ")"
-mirror: "mirror_x" "(" IDENT ")"
-place: "place" "(" ("base_box" "=" IDENT ",")? "anchor" "=" vec3 "," "align" "=" vec3 ("," "offset" "=" vec3)? ")"
-box: "box" IDENT place? "{" "size" ":" vec3i "," "material" ":" IDENT ("," "inflate" ":" NUMBER)? ("," "cullface" ":" ident_list)? "}"
-locator: "locator" IDENT "{" "offset" ":" vec3 ("," "role" ":" IDENT)? "}"
+muscle_tone_def: "muscle_tone" IDENT ":" expr
+material_mod_def: "material_mod" IDENT ":" "{" "emissive" ":" expr "," "moisture" ":" expr "," "wear_delta" ":" expr "}"
+
+controller: "@controller" "{" ("initial" ":" IDENT ","?)? controller_transition+ "}"
+controller_transition: IDENT "->" IDENT "when" IDENT CMP expr (","? "blend" (":" | "=")? expr)? ";"?
+
+joint_limits_mat: "[" vec2 "," vec2 "," vec2 "]"
 ident_list: "[" IDENT ("," IDENT)* "]"
-vec3: "[" NUMBER "," NUMBER "," NUMBER "]"
-vec2: "[" NUMBER "," NUMBER "]"
-vec3i: "[" INT "," INT "," INT "]"
+vec4: "[" expr "," expr "," expr "," expr "]"
+vec3: "[" expr "," expr "," expr "]"
+vec2: "[" expr "," expr "]"
+
+?expr: expr_add
+?expr_add: expr_mul
+         | expr_add ("+" | "-") expr_mul
+?expr_mul: expr_unary
+         | expr_mul ("*" | "/") expr_unary
+?expr_unary: ("+" | "-") expr_unary
+           | expr_atom
+?expr_atom: NUMBER
+          | IDENT
+          | "(" expr ")"
+
 BOOL: "true" | "false"
-INT: /[+-]?[0-9]+/
-NUMBER: /[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?/
+CMP: ">=" | "<=" | "==" | "!=" | ">" | "<"
+STRING: /"(?:[^"\\]|\\.)*"/
+NUMBER: /(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?/
 IDENT: /[A-Za-z_][A-Za-z0-9_]*/
+
 %import common.WS
 %ignore WS
 %ignore /\/\/[^\n]*/
