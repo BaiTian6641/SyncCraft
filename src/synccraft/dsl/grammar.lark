@@ -83,7 +83,7 @@ box_field: "size" ":" (vec2 | vec3)
          | "texture" ":" IDENT
          | "cullface" ":" ident_list
          | "place" ":" place
-uv_face_entry: IDENT ":" vec4 ","?
+uv_face_entry: IDENT ":" (vec4 | vec5) ","?
 
 locator: "locator" IDENT "{" "offset" ":" vec3 ("," "role" ":" IDENT)? "}"
 
@@ -128,6 +128,7 @@ controller_transition: IDENT "->" IDENT "when" IDENT CMP expr (","? "blend" (":"
 
 joint_limits_mat: "[" vec2 "," vec2 "," vec2 "]"
 ident_list: "[" IDENT ("," IDENT)* "]"
+vec5: "[" expr "," expr "," expr "," expr "," expr "]"
 vec4: "[" expr "," expr "," expr "," expr "]"
 vec3: "[" expr "," expr "," expr "]"
 vec2: "[" expr "," expr "]"

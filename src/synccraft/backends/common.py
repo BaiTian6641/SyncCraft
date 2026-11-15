@@ -89,8 +89,15 @@ def validate_scene_for_export(scene: Any) -> None:
             if (size <= 0).any() or not np.allclose(size / size_step, np.rint(size / size_step), atol=1e-7, rtol=0):
                 raise ExportError(f"box {box.name}: size must be positive multiples of size_step={size_step}")
 
-        if not isinstance(box.inflate, (int, float)) or not math.isfinite(box.inflate) or box.inflate < 0:
+        audit_profile = str(getattr(scene.meta, "audit_profile", "strict"))
+        if not isinstance(box.inflate, (int, float)) or not math.isfinite(box.inflate):
             raise ExportError(f"box {box.name}: inflate must be finite and nonnegative")
+        if box.inflate < 0:
+            if audit_profile != "authored":
+                raise ExportError(f"box {box.name}: inflate must be finite and nonnegative")
+            non_planar = [float(size[i]) for i in range(3) if plane_normal is None or i != {"x": 0, "y": 1, "z": 2}[plane_normal]]
+            if any(0.5 * v + float(box.inflate) <= 0.0 for v in non_planar):
+                raise ExportError(f"box {box.name}: negative inflate collapses non-planar extents")
         bone = bones[box.bone_name]
         expected_center = bone.pivot_world + bone.rotation @ vec3(box.local_center)
         if not np.allclose(vec3(box.center), expected_center, atol=1e-8, rtol=0):

@@ -186,7 +186,7 @@ def export_gltf_pbr(
         v_base = 0
 
         for box in b_boxes:
-            half_ext = np.asarray(box.size, dtype=np.float64) / 2.0 + float(box.inflate)
+            half_ext = np.maximum(0.0, np.asarray(box.size, dtype=np.float64) / 2.0 + float(box.inflate))
             loc_ctr = np.asarray(box.local_center, dtype=np.float64)
             r_box_in_bone = np.asarray(bone.rotation, dtype=np.float64).T @ np.asarray(box.rotation, dtype=np.float64)
             wu_map = {f: face_uv_extents_units(box.size, f) for f in FACES}
@@ -194,8 +194,8 @@ def export_gltf_pbr(
             for face in FACES:
                 t_r_raw, t_d_raw, n_out_raw = (np.asarray(vec, dtype=np.float64) for vec in FACE_AXES_BOX[face])
                 wu, hv = wu_map[face]
-                hw = 0.5 * float(wu) + float(box.inflate)
-                hh = 0.5 * float(hv) + float(box.inflate)
+                hw = max(0.0, 0.5 * float(wu) + float(box.inflate))
+                hh = max(0.0, 0.5 * float(hv) + float(box.inflate))
                 n_dist = float(np.abs(n_out_raw) @ half_ext)
                 t_r = r_box_in_bone @ t_r_raw
                 t_d = r_box_in_bone @ t_d_raw

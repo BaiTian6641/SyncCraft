@@ -50,15 +50,28 @@ def export_java(
     validate_atlas(atlas, scene, embedded=False)
     elements = []
     for box in scene.boxes:
-        half = np.asarray(box.size) / 2 + box.inflate
+        half = np.maximum(0.0, np.asarray(box.size) / 2 + box.inflate)
         from_ = np.asarray(box.center) - half
         to = np.asarray(box.center) + half
         all_coordinates = np.concatenate((from_, to, np.asarray(box.corners()).reshape(-1)))
         if not np.isfinite(all_coordinates).all() or (all_coordinates < -16 - 1e-8).any() or (all_coordinates > 32 + 1e-8).any():
             raise ExportError(f"box {box.name} exceeds the starter's [-16,32] model-space bounds")
         faces = {}
+        box_uv_faces = getattr(box, "uv_faces", None) or {}
         for face in FACES:
-            item = {"uv": face_uv(atlas, box.name, face, normalized=True), "texture": "#atlas"}
+            if atlas is None and box_uv_faces and face not in box_uv_faces:
+                continue
+            uv_rot = 0
+            if atlas is None and box_uv_faces and face in box_uv_faces:
+                raw_r = box_uv_faces[face]
+                uv_val = vector(raw_r[:4])
+                if len(raw_r) == 5:
+                    uv_rot = int(raw_r[4])
+            else:
+                uv_val = face_uv(atlas, box.name, face, normalized=True)
+            item: dict[str, Any] = {"uv": uv_val, "texture": "#atlas"}
+            if uv_rot:
+                item["rotation"] = uv_rot
             if face in reflected_cullfaces(box):
                 # Mojang specifies that face names stay unchanged by element rotation.
                 item["cullface"] = face

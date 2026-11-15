@@ -47,11 +47,13 @@ from .taxonomy_catalog import HOLDOUT_EVALUATION_SPLITS
 def extract_animation_spec_from_row(row: dict[str, Any]) -> dict[str, Any] | None:
     """Extract structured animation specification from row metadata or typed `@behavior` AST."""
     prov = row.get("prompt_and_provenance", {})
-    if isinstance(prov.get("animation_plan"), dict):
+    if isinstance(prov.get("animation_plan"), dict) and prov["animation_plan"].get("channels"):
         return prov["animation_plan"]
     if isinstance(prov.get("animation_plan_json"), str) and prov["animation_plan_json"].strip():
         try:
-            return json.loads(prov["animation_plan_json"])
+            parsed_plan = json.loads(prov["animation_plan_json"])
+            if isinstance(parsed_plan, dict) and parsed_plan.get("channels"):
+                return parsed_plan
         except Exception:
             pass
     dsl_text = row.get("canonical_dsl") or prov.get("assistant_completion") or ""
@@ -67,7 +69,7 @@ def extract_animation_spec_from_row(row: dict[str, Any]) -> dict[str, Any] | Non
                     "channels": [
                         {
                             "bone": tr.bone,
-                            "wave": tr.waveform,
+                            "wave": tr.law,
                             "axis": tr.axis,
                             "amp_deg": tr.amp_deg,
                             "freq_hz": tr.freq_hz,
@@ -75,6 +77,15 @@ def extract_animation_spec_from_row(row: dict[str, Any]) -> dict[str, Any] | Non
                             "bias_deg": tr.bias_deg,
                         }
                         for tr in clip.tracks
+                    ],
+                    "keyframe_tracks": [
+                        {
+                            "bone": kf.bone,
+                            "channel": kf.channel,
+                            "interpolation": kf.interpolation,
+                            "keys": [[float(t), list(v)] for t, v in kf.keys],
+                        }
+                        for kf in clip.keyframes
                     ],
                 }
         except Exception:
@@ -139,6 +150,16 @@ def _compile_program_atlas_rgba(
     return atlas_desc, np.asarray(atlas_img, dtype=np.uint8)
 
 
+_OPPOSITE_FACE: dict[str, str] = {
+    "north": "south",
+    "south": "north",
+    "east": "west",
+    "west": "east",
+    "up": "down",
+    "down": "up",
+}
+
+
 def _rasterize_scene_with_atlas(
     scene: Scene,
     atlas_desc: dict[str, Any],
@@ -148,40 +169,45 @@ def _rasterize_scene_with_atlas(
     azimuth_deg: float = 38.0,
     elevation_deg: float = 25.0,
     bg_rgb: tuple[int, int, int] = (24, 28, 38),
+    camera_bounds: tuple[float, float, float, float] | None = None,
+    draw_contours: bool = True,
 ) -> Image.Image:
-    """Per-pixel Z-buffered orthographic 3D OBB rasterizer mapped with compiled RGBA UV islands."""
+    """Per-pixel Z-buffered orthographic 3D OBB rasterizer with alpha cutout, translucency, signed UVs & UV rotation."""
     w_img, h_img = canvas_size
     cam_right, cam_up, cam_fwd = _build_camera_basis(azimuth_deg, elevation_deg)
 
-    # Gather all 8 corners of all boxes to auto-frame the orthographic viewport cleanly
-    all_pts_cam: list[np.ndarray] = []
-    unit_signs = np.array(
-        [
-            [-1, -1, -1],
-            [-1, -1, 1],
-            [-1, 1, -1],
-            [-1, 1, 1],
-            [1, -1, -1],
-            [1, -1, 1],
-            [1, 1, -1],
-            [1, 1, 1],
-        ],
-        dtype=np.float64,
-    )
-    for wb in scene.boxes:
-        local_corners = unit_signs * wb.half_extents[None, :]
-        world_corners = wb.center[None, :] + local_corners @ wb.rotation.T
-        xs = world_corners @ cam_right
-        ys = world_corners @ cam_up
-        zs = world_corners @ cam_fwd
-        all_pts_cam.append(np.stack([xs, ys, zs], axis=-1))
+    if camera_bounds is not None:
+        min_x, max_x, min_y, max_y = camera_bounds
+    else:
+        all_pts_cam: list[np.ndarray] = []
+        unit_signs = np.array(
+            [
+                [-1, -1, -1],
+                [-1, -1, 1],
+                [-1, 1, -1],
+                [-1, 1, 1],
+                [1, -1, -1],
+                [1, -1, 1],
+                [1, 1, -1],
+                [1, 1, 1],
+            ],
+            dtype=np.float64,
+        )
+        for wb in scene.boxes:
+            local_corners = unit_signs * wb.half_extents[None, :]
+            world_corners = wb.center[None, :] + local_corners @ wb.rotation.T
+            xs = world_corners @ cam_right
+            ys = world_corners @ cam_up
+            zs = world_corners @ cam_fwd
+            all_pts_cam.append(np.stack([xs, ys, zs], axis=-1))
 
-    if not all_pts_cam:
-        return Image.new("RGB", canvas_size, bg_rgb)
+        if not all_pts_cam:
+            return Image.new("RGB", canvas_size, bg_rgb)
 
-    pts = np.concatenate(all_pts_cam, axis=0)
-    min_x, max_x = float(pts[:, 0].min()), float(pts[:, 0].max())
-    min_y, max_y = float(pts[:, 1].min()), float(pts[:, 1].max())
+        pts = np.concatenate(all_pts_cam, axis=0)
+        min_x, max_x = float(pts[:, 0].min()), float(pts[:, 0].max())
+        min_y, max_y = float(pts[:, 1].min()), float(pts[:, 1].max())
+
     span_x = max(1e-3, max_x - min_x)
     span_y = max(1e-3, max_y - min_y)
     margin = 0.84
@@ -204,8 +230,11 @@ def _rasterize_scene_with_atlas(
     faces_uv = atlas_desc["faces"]
     at_h, at_w = atlas_rgba.shape[:2]
 
+    translucent_queue: list[tuple[float, int, int, int, int, np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = []
+
     for wb in scene.boxes:
         box_uv = faces_uv.get(wb.name, {})
+        ast_uv_faces = getattr(wb, "uv_faces", None) or {}
         he = wb.half_extents
         rot = wb.rotation
 
@@ -215,16 +244,49 @@ def _rasterize_scene_with_atlas(
             t_d = np.asarray(t_down_b, dtype=np.float64)
             n_o = np.asarray(n_out_b, dtype=np.float64)
 
-            n_world = rot @ n_o
-            ndotv = float(np.dot(n_world, cam_fwd))
-            if ndotv <= 1e-6:
-                continue  # Backface culled
-
             d_n = float(np.abs(n_o) @ he)
             d_u = float(np.abs(t_r) @ he)
             d_v = float(np.abs(t_d) @ he)
             if d_u <= 1e-9 or d_v <= 1e-9:
                 continue
+
+            # Honor explicitly omitted/disabled faces on authored models
+            if ast_uv_faces and face_name not in ast_uv_faces:
+                continue
+            if (wb.name in faces_uv) and (face_name not in box_uv):
+                continue
+
+            n_world = rot @ n_o
+            ndotv = float(np.dot(n_world, cam_fwd))
+            if abs(ndotv) <= 1e-6:
+                continue
+            if ndotv < 0.0:
+                # Only render backfaces when the opposite face is omitted or 100% alpha-transparent
+                # (single-face-painted cutouts like glTF foliage), preserving strict single-sided
+                # culling on two-sided Blockbench/Minecraft planes (e.g. Charizard wing top vs bottom).
+                opp_map = {
+                    "north": "south",
+                    "south": "north",
+                    "east": "west",
+                    "west": "east",
+                    "up": "down",
+                    "down": "up",
+                }
+                opp_fn = opp_map[face_name]
+                opp_has_opaque_art = False
+                if opp_fn in box_uv:
+                    opp_uv = box_uv[opp_fn]
+                    ou0 = int(max(0, min(at_w - 1, math.floor(min(float(opp_uv[0]), float(opp_uv[2]))))))
+                    ou1 = int(max(0, min(at_w, math.ceil(max(float(opp_uv[0]), float(opp_uv[2]))))))
+                    ov0 = int(max(0, min(at_h - 1, math.floor(min(float(opp_uv[1]), float(opp_uv[3]))))))
+                    ov1 = int(max(0, min(at_h, math.ceil(max(float(opp_uv[1]), float(opp_uv[3]))))))
+                    if ou1 > ou0 and ov1 > ov0 and int(atlas_rgba[ov0:ov1, ou0:ou1, 3].max()) > 8:
+                        opp_has_opaque_art = True
+                elif wb.name not in faces_uv and not ast_uv_faces:
+                    opp_has_opaque_art = True
+                if opp_has_opaque_art:
+                    continue
+                ndotv = -ndotv
 
             # Top-left UV origin corner (u=0, v=0) + spanning vectors E_u (u->1), E_v (v->1)
             p00_local = n_o * d_n - t_r * d_u - t_d * d_v
@@ -275,33 +337,76 @@ def _rasterize_scene_with_atlas(
             if not np.any(inside):
                 continue
 
-            z_pix = z0 + u_frac * euz + v_frac * evz
-            sub_z = z_buf[py_min : py_max + 1, px_min : px_max + 1]
-            vis = inside & (z_pix > sub_z)
-            if not np.any(vis):
-                continue
+            u_c = np.clip(u_frac, 0.0, 1.0)
+            v_c = np.clip(v_frac, 0.0, 1.0)
 
-            u0_uv, v0_uv, u1_uv, v1_uv = box_uv.get(face_name, [0, 0, 1, 1])
-            uw = max(1, int(u1_uv - u0_uv))
-            vh = max(1, int(v1_uv - v0_uv))
-            uu = np.clip((np.floor(np.clip(u_frac, 0.0, 0.9999) * uw)).astype(np.int32) + int(u0_uv), 0, at_w - 1)
-            vv = np.clip((np.floor(np.clip(v_frac, 0.0, 0.9999) * vh)).astype(np.int32) + int(v0_uv), 0, at_h - 1)
+            raw_uv = box_uv.get(face_name, [0.0, 0.0, 1.0, 1.0])
+            u0_uv, v0_uv, u1_uv, v1_uv = float(raw_uv[0]), float(raw_uv[1]), float(raw_uv[2]), float(raw_uv[3])
+            uv_rot = int(raw_uv[4]) % 360 if len(raw_uv) >= 5 else 0
+            if uv_rot == 0 and ast_uv_faces and face_name in ast_uv_faces and len(ast_uv_faces[face_name]) >= 5:
+                uv_rot = int(ast_uv_faces[face_name][4]) % 360
 
-            sampled = atlas_rgba[vv, uu, :3].astype(np.float64)
-            # Subtle directional face shading modulation so 3D form reads unmistakably
+            if uv_rot == 90:
+                s_u, s_v = v_c, 1.0 - u_c
+            elif uv_rot == 180:
+                s_u, s_v = 1.0 - u_c, 1.0 - v_c
+            elif uv_rot == 270:
+                s_u, s_v = 1.0 - v_c, u_c
+            else:
+                s_u, s_v = u_c, v_c
+
+            s_u_safe = np.clip(s_u, 1e-5, 1.0 - 1e-5)
+            s_v_safe = np.clip(s_v, 1e-5, 1.0 - 1e-5)
+            uu = np.clip(np.floor(u0_uv + s_u_safe * (u1_uv - u0_uv)).astype(np.int32), 0, at_w - 1)
+            vv = np.clip(np.floor(v0_uv + s_v_safe * (v1_uv - v0_uv)).astype(np.int32), 0, at_h - 1)
+
+            texel_rgba = atlas_rgba[vv, uu]
+            alpha = texel_rgba[:, :, 3]
+            sampled = texel_rgba[:, :, :3].astype(np.float64)
             shade = 0.78 + 0.26 * ndotv
             shaded = np.clip(sampled * shade, 0.0, 255.0).astype(np.uint8)
 
-            # Crisp dark contour along cuboid edges for Blockbench readability
-            edge_px = 0.95
-            u_edge = np.minimum(u_frac, 1.0 - u_frac) * math.hypot(eux, euy)
-            v_edge = np.minimum(v_frac, 1.0 - v_frac) * math.hypot(evx, evy)
-            on_border = (np.minimum(u_edge, v_edge) < edge_px) & vis
-            shaded[on_border] = (shaded[on_border].astype(np.uint16) * 55 // 100).astype(np.uint8)
+            z_pix = z0 + u_frac * euz + v_frac * evz
+            sub_z = z_buf[py_min : py_max + 1, px_min : px_max + 1]
 
-            sub_z[vis] = z_pix[vis]
+            opaque_mask = inside & (alpha >= 200) & (z_pix > sub_z)
+            if np.any(opaque_mask):
+                if draw_contours:
+                    edge_px = 0.95
+                    u_edge = np.minimum(u_frac, 1.0 - u_frac) * math.hypot(eux, euy)
+                    v_edge = np.minimum(v_frac, 1.0 - v_frac) * math.hypot(evx, evy)
+                    on_border = (np.minimum(u_edge, v_edge) < edge_px) & opaque_mask
+                    shaded_op = shaded.copy()
+                    shaded_op[on_border] = (shaded_op[on_border].astype(np.uint16) * 55 // 100).astype(np.uint8)
+                else:
+                    shaded_op = shaded
+                sub_z[opaque_mask] = z_pix[opaque_mask]
+                sub_col = color_buf[py_min : py_max + 1, px_min : px_max + 1]
+                sub_col[opaque_mask] = shaded_op[opaque_mask]
+
+            trans_cand = inside & (alpha >= 20) & (alpha < 200)
+            if np.any(trans_cand):
+                mean_z = float(np.mean(z_pix[trans_cand]))
+                translucent_queue.append(
+                    (mean_z, py_min, py_max, px_min, px_max, trans_cand, z_pix, shaded, alpha)
+                )
+
+    # Back-to-front translucent alpha-blending pass (e.g. display cases, fossil glass, slime, crystals)
+    if translucent_queue:
+        translucent_queue.sort(key=lambda item: item[0])
+        for _, py_min, py_max, px_min, px_max, trans_cand, z_pix, shaded, alpha in translucent_queue:
+            sub_z = z_buf[py_min : py_max + 1, px_min : px_max + 1]
+            vis_t = trans_cand & (z_pix > sub_z)
+            if not np.any(vis_t):
+                continue
             sub_col = color_buf[py_min : py_max + 1, px_min : px_max + 1]
-            sub_col[vis] = shaded[vis]
+            a_f = (alpha[vis_t].astype(np.float64) / 255.0)[:, None]
+            blended = np.clip(
+                shaded[vis_t].astype(np.float64) * a_f + sub_col[vis_t].astype(np.float64) * (1.0 - a_f),
+                0.0,
+                255.0,
+            ).astype(np.uint8)
+            sub_col[vis_t] = blended
 
     return Image.fromarray(color_buf, mode="RGB")
 
@@ -337,12 +442,40 @@ def render_row_visual_triptych(
         elevation_deg=24.0,
     )
 
-    anim_spec = extract_animation_spec_from_row(row)
-    if anim_spec and anim_spec.get("channels"):
-        posed_prog = apply_animation_keyframe(prog, anim_spec, 0.25)
-        posed_scene = compile_geometry(posed_prog)
-    else:
-        posed_scene = rest_scene
+    posed_scene: Scene | None = None
+    if prog.behavior and prog.behavior.clips:
+        try:
+            from synccraft.kinematics.musculoskeletal import evaluate_behavior_clip
+
+            # Pick the clip with the most animated channels/keyframes and sample the most expressive pose frame
+            best_clip = max(
+                prog.behavior.clips,
+                key=lambda c: len(c.tracks) + len(c.keyframes) + len(c.muscle_drives) + len(c.ik_drives),
+            )
+            frames = evaluate_behavior_clip(prog, best_clip.name, num_frames=5)
+            best_disp = -1.0
+            for fr in frames[1:]:
+                disp = float(
+                    sum(
+                        np.linalg.norm(fr.scene.box_by_name[b.name].center - b.center)
+                        + 4.0 * np.linalg.norm(fr.scene.box_by_name[b.name].rotation - b.rotation)
+                        for b in rest_scene.boxes
+                        if b.name in fr.scene.box_by_name
+                    )
+                )
+                if disp > best_disp:
+                    best_disp = disp
+                    posed_scene = fr.scene
+        except Exception:
+            posed_scene = None
+
+    if posed_scene is None:
+        anim_spec = extract_animation_spec_from_row(row)
+        if anim_spec and anim_spec.get("channels"):
+            posed_prog = apply_animation_keyframe(prog, anim_spec, 0.25)
+            posed_scene = compile_geometry(posed_prog)
+        else:
+            posed_scene = rest_scene
 
     posed_3d = _rasterize_scene_with_atlas(
         posed_scene,

@@ -84,6 +84,55 @@ def _stored_cullfaces(cullfaces: tuple[str, ...], sign: np.ndarray, mirrored: bo
     return tuple(out)
 
 
+def _stored_uv_faces(
+    uv_faces: dict[str, Any],
+    sign: np.ndarray,
+) -> dict[str, Any]:
+    """Reflect explicit per-face UV rectangles across X/Y/Z mirror planes."""
+    if not uv_faces:
+        return {}
+    sx, sy, sz = float(sign[0]) < 0.0, float(sign[1]) < 0.0, float(sign[2]) < 0.0
+    if not (sx or sy or sz):
+        return dict(uv_faces)
+    cur = dict(uv_faces)
+    if sx:
+        nxt: dict[str, Any] = {}
+        swap_x = {"east": "west", "west": "east"}
+        for f, r in cur.items():
+            df = swap_x.get(f, f)
+            u0, v0, u1, v1 = float(r[0]), float(r[1]), float(r[2]), float(r[3])
+            rot = int(r[4]) if len(r) == 5 else 0
+            if rot == 0:
+                nxt[df] = (u1, v0, u0, v1)
+            elif rot == 180:
+                nxt[df] = (u1, v0, u0, v1, 180)
+            else:
+                nxt[df] = (u0, v1, u1, v0, 360 - rot)
+        cur = nxt
+    if sy:
+        nxt = {}
+        swap_y = {"up": "down", "down": "up"}
+        for f, r in cur.items():
+            df = swap_y.get(f, f)
+            u0, v0, u1, v1 = float(r[0]), float(r[1]), float(r[2]), float(r[3])
+            rot = int(r[4]) if len(r) == 5 else 0
+            nxt[df] = (u0, v1, u1, v0) if rot == 0 else (u0, v1, u1, v0, (360 - rot) % 360)
+        cur = nxt
+    if sz:
+        nxt = {}
+        swap_z = {"north": "south", "south": "north"}
+        for f, r in cur.items():
+            df = swap_z.get(f, f)
+            u0, v0, u1, v1 = float(r[0]), float(r[1]), float(r[2]), float(r[3])
+            rot = int(r[4]) if len(r) == 5 else 0
+            if f in ("up", "down"):
+                nxt[df] = (u0, v1, u1, v0) if rot == 0 else (u0, v1, u1, v0, (360 - rot) % 360)
+            else:
+                nxt[df] = (u1, v0, u0, v1) if rot == 0 else (u1, v0, u0, v1, (360 - rot) % 360)
+        cur = nxt
+    return cur
+
+
 @dataclass(frozen=True)
 class WorldBox:
     name: str
@@ -101,12 +150,12 @@ class WorldBox:
     unrotated_local_center: np.ndarray | None = None
     plane_normal: str | None = None
     uv: tuple[float, float] | None = None
-    uv_faces: dict[str, tuple[float, float, float, float]] = field(default_factory=dict)
+    uv_faces: dict[str, tuple[float, ...]] = field(default_factory=dict)
     texture: str | None = None
 
     @property
     def half_extents(self) -> np.ndarray:
-        return self.size / 2.0 + self.inflate
+        return np.maximum(0.0, self.size / 2.0 + self.inflate)
 
     def corners(self, *, include_inflate: bool = True) -> np.ndarray:
         extents = self.half_extents if include_inflate else self.size / 2.0
@@ -289,8 +338,6 @@ def _validate_physical_size(
         n_idx = {"x": 0, "y": 1, "z": 2}[plane_normal]
         if abs(float(size[n_idx])) > 1e-12:
             raise ValueError(f"{box_name}: planar box normal axis {plane_normal!r} must have 0 thickness")
-        if float(size[n_idx]) / 2.0 + effective_inflate < 0.0:
-            raise ValueError(f"{box_name}: planar box normal half_extent cannot be negative")
         for idx in range(3):
             if idx == n_idx:
                 continue
@@ -520,7 +567,7 @@ def compile_geometry(
                     unrotated_local_center=unrot_local_center,
                     plane_normal=item.plane_normal,
                     uv=item.uv,
-                    uv_faces=item.uv_faces_dict,
+                    uv_faces=_stored_uv_faces(item.uv_faces_dict, sign),
                     texture=item.texture,
                 )
                 boxes.append(compiled_box)

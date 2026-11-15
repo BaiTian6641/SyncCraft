@@ -1077,7 +1077,8 @@ class TestCobblemonRealWorldIdiomsAndClosedLoopRoundtrip(unittest.TestCase):
         fin_box = sc.boxes[1]
         np.testing.assert_allclose(fin_box.center, np.array([0.0, 13.0, 0.0]), atol=1e-9)
 
-        # Conversely, non-zero fractional cube size [2.4, 6, 8] MUST honestly report ~0.2u quantization error
+        # Under v3.2 decimal size_step=0.1, [2.4, 6, 8] is represented losslessly (< 1e-9 error),
+        # while sub-0.001 off-grid [2.4006, 6, 8] MUST honestly report its 0.0002u quantization error!
         geo_frac = {
             "format_version": "1.12.0",
             "minecraft:geometry": [
@@ -1088,7 +1089,20 @@ class TestCobblemonRealWorldIdiomsAndClosedLoopRoundtrip(unittest.TestCase):
             ],
         }
         rec_frac = ingest_external_asset(geo_frac, "bedrock_geojson", prov, license_policy="research_nc")
-        self.assertAlmostEqual(rec_frac.vertex_reconstruction_error, 0.2, places=5)
+        self.assertAlmostEqual(rec_frac.program.meta.size_step, 0.1, places=6)
+        self.assertLess(rec_frac.vertex_reconstruction_error, 1e-9)
+
+        geo_subgrid = {
+            "format_version": "1.12.0",
+            "minecraft:geometry": [
+                {
+                    "description": {"identifier": "geometry.cobble.subgrid", "texture_width": 32, "texture_height": 32},
+                    "bones": [{"name": "body", "pivot": [0, 6, 0], "cubes": [{"origin": [-1.2003, 3, -4], "size": [2.4006, 6, 8], "uv": [0, 0]}]}],
+                }
+            ],
+        }
+        rec_subgrid = ingest_external_asset(geo_subgrid, "bedrock_geojson", prov, license_policy="research_nc")
+        self.assertAlmostEqual(rec_subgrid.vertex_reconstruction_error, 0.0002, places=6)
 
     def test_build_quarantined_research_nc_dataset_on_cobblemon_entity_and_block_assets(self) -> None:
         creature_geo = {

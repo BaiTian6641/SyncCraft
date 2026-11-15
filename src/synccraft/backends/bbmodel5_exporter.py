@@ -244,11 +244,20 @@ def export_bbmodel(
         faces = {}
         box_uv_faces = getattr(box, "uv_faces", None) or {}
         for face in FACES:
-            if box_uv_faces and face in box_uv_faces and width == 1 and height == 1:
-                uv_rect = list(box_uv_faces[face])
+            uv_rot = 0
+            if box_uv_faces and width == 1 and height == 1:
+                if face not in box_uv_faces:
+                    faces[face] = {"uv": [0.0, 0.0, 0.0, 0.0], "texture": None}
+                    continue
+                raw_rect = box_uv_faces[face]
+                uv_rect = list(raw_rect[:4])
+                if len(raw_rect) == 5:
+                    uv_rot = int(raw_rect[4])
             else:
                 uv_rect = face_uv(atlas, box.name, face, normalized=False)
-            face_data = {"uv": uv_rect, "texture": 0 if atlas is not None else None}
+            face_data: dict[str, Any] = {"uv": uv_rect, "texture": 0 if atlas is not None else None}
+            if uv_rot:
+                face_data["rotation"] = uv_rot
             if face in reflected_cullfaces(box):
                 face_data["cullface"] = face
             faces[face] = face_data

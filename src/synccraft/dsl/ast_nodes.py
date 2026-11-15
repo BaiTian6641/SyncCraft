@@ -21,8 +21,9 @@ from typing import Any, TypeAlias
 Vec3: TypeAlias = tuple[float, float, float]
 Vec3i: TypeAlias = tuple[int, int, int]
 Vec3Size: TypeAlias = tuple[int | float, int | float, int | float]
-UVRect: TypeAlias = tuple[float, float, float, float]
+UVRect: TypeAlias = tuple[float, float, float, float] | tuple[float, float, float, float, int]
 JointLimits: TypeAlias = tuple[tuple[float, float], tuple[float, float], tuple[float, float]]
+UV_ROTATIONS = frozenset({0, 90, 180, 270})
 
 ARCHETYPES = frozenset({"entity", "weapon_3d", "block_multipart", "item_extruded"})
 PROFILES = frozenset({"bedrock_entity", "geckolib", "java_modern", "java_legacy", "bbmodel_5"})
@@ -31,7 +32,7 @@ FACES = frozenset({"north", "south", "east", "west", "up", "down"})
 FACE_ORDER = ("north", "south", "east", "west", "up", "down")
 AXES_3D = frozenset({"x", "y", "z"})
 MIRROR_AXES = frozenset({"x", "z"})
-ALLOWED_SIZE_STEPS = frozenset({1.0, 0.5, 0.25, 0.125})
+ALLOWED_SIZE_STEPS = frozenset({1.0, 0.5, 0.25, 0.125, 0.0625, 0.03125, 0.1, 0.05, 0.01, 0.001})
 AUDIT_PROFILES = frozenset({"strict", "authored"})
 DSL_VERSIONS = frozenset({"3.0", "3.1", "3.2"})
 LOCATOR_ROLES = frozenset({"socket", "ik_effector", "vfx_emitter", "camera_focus", "hitbox", "rider_seat"})
@@ -130,6 +131,21 @@ class Place:
     offset: Vec3 = (0.0, 0.0, 0.0)
 
 
+def _normalize_single_uv_rect(vals: Any) -> UVRect | None:
+    if not isinstance(vals, (tuple, list)) or len(vals) not in (4, 5):
+        return None
+    if len(vals) == 5:
+        rot_v = vals[4]
+        if not _finite_number(rot_v) or float(rot_v) != round(float(rot_v)):
+            return None
+        rot_i = int(round(float(rot_v))) % 360
+        if rot_i not in UV_ROTATIONS:
+            return None
+        if rot_i != 0:
+            return (float(vals[0]), float(vals[1]), float(vals[2]), float(vals[3]), rot_i)
+    return (float(vals[0]), float(vals[1]), float(vals[2]), float(vals[3]))
+
+
 def _normalize_uv_faces(raw: Any) -> Any:
     if raw is None or raw == ():
         return ()
@@ -137,18 +153,21 @@ def _normalize_uv_faces(raw: Any) -> Any:
         items: list[tuple[str, UVRect]] = []
         order_idx = {f: idx for idx, f in enumerate(FACE_ORDER)}
         for k in sorted(raw.keys(), key=lambda key: (order_idx.get(str(key), 99), str(key))):
-            vals = raw[k]
-            if isinstance(vals, (tuple, list)) and len(vals) == 4:
-                items.append((str(k), (float(vals[0]), float(vals[1]), float(vals[2]), float(vals[3]))))
+            norm_r = _normalize_single_uv_rect(raw[k])
+            if norm_r is not None:
+                items.append((str(k), norm_r))
             else:
                 return raw
         return tuple(items)
-    if isinstance(raw, list):
+    if isinstance(raw, (list, tuple)):
         out: list[tuple[str, UVRect]] = []
         for entry in raw:
-            if isinstance(entry, (tuple, list)) and len(entry) == 2 and isinstance(entry[1], (tuple, list)) and len(entry[1]) == 4:
-                v = entry[1]
-                out.append((str(entry[0]), (float(v[0]), float(v[1]), float(v[2]), float(v[3]))))
+            if isinstance(entry, (tuple, list)) and len(entry) == 2:
+                norm_r = _normalize_single_uv_rect(entry[1])
+                if norm_r is not None:
+                    out.append((str(entry[0]), norm_r))
+                else:
+                    return raw
             else:
                 return raw
         return tuple(out)
@@ -801,8 +820,17 @@ def validate_program(program: Program) -> Program:
                         _validate_size_component(comp, size_step, item.name)
             if not isinstance(item.material, str) or item.material not in materials:
                 raise DSLValidationError(f"box {item.name}: undeclared material {item.material}")
-            if not _finite_number(item.inflate) or float(item.inflate) < 0.0:
+            if not _finite_number(item.inflate):
                 raise DSLValidationError("inflate must be a nonnegative finite number in this starter")
+            if float(item.inflate) < 0.0:
+                if meta.audit_profile != "authored":
+                    raise DSLValidationError("inflate must be a nonnegative finite number in this starter")
+                p_idx_inf = {"x": 0, "y": 1, "z": 2}[item.plane_normal] if item.plane_normal is not None else -1
+                for idx_inf, sz_inf in enumerate(item.size):
+                    if idx_inf != p_idx_inf and 0.5 * float(sz_inf) + float(item.inflate) <= 0.0:
+                        raise DSLValidationError(
+                            f"box {item.name}: negative inflate {item.inflate} collapses non-planar size {item.size}"
+                        )
             _vec(item.rotate, f"{item.name}.rotate")
             if item.pivot is not None:
                 _vec(item.pivot, f"{item.name}.pivot")
@@ -818,7 +846,15 @@ def validate_program(program: Program) -> Program:
                 if not isinstance(fname, str) or fname not in FACES or fname in seen_uv_faces:
                     raise DSLValidationError(f"box {item.name}: duplicate or invalid uv_faces face {fname!r}")
                 seen_uv_faces.add(fname)
-                _vec(frect, f"{item.name}.uv_faces.{fname}", 4)
+                if not isinstance(frect, tuple) or len(frect) not in (4, 5):
+                    raise DSLValidationError(f"box {item.name}.uv_faces.{fname}: expected 4 or 5 numbers")
+                _vec(frect[:4], f"{item.name}.uv_faces.{fname}", 4)
+                if len(frect) == 5:
+                    rot_uv = frect[4]
+                    if type(rot_uv) is not int or rot_uv not in UV_ROTATIONS:
+                        raise DSLValidationError(
+                            f"box {item.name}.uv_faces.{fname}: UV rotation must be an integer in {{0, 90, 180, 270}}"
+                        )
             if item.texture is not None:
                 if not _valid_ident(item.texture):
                     raise DSLValidationError(f"box {item.name}: invalid texture identifier {item.texture!r}")

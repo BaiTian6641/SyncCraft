@@ -85,13 +85,15 @@ def allocate_uv_layout(
         sx, sy, sz = map(float, box.size)
         sizes = {"north": (sx, sy), "south": (sx, sy), "east": (sz, sy),
                  "west": (sz, sy), "up": (sx, sz), "down": (sx, sz)}
+        is_authored = getattr(program.meta, "audit_profile", "strict") == "authored"
         for face in ordered_faces:
             u, v = sizes[face]
             u_is_pos_int = math.isclose(u, round(u), abs_tol=1e-9) and u > 0.0
             v_is_pos_int = math.isclose(v, round(v), abs_tol=1e-9) and v > 0.0
             fw, fh = u * density, v * density
-            if (u_is_pos_int and not math.isclose(fw, round(fw), abs_tol=1e-7)) or (
-                v_is_pos_int and not math.isclose(fh, round(fh), abs_tol=1e-7)
+            if not is_authored and (
+                (u_is_pos_int and not math.isclose(fw, round(fw), abs_tol=1e-7))
+                or (v_is_pos_int and not math.isclose(fh, round(fh), abs_tol=1e-7))
             ):
                 raise ValueError("texel_density produces fractional texels; integer atlas required")
             w, h = max(1, int(round(fw))), max(1, int(round(fh)))

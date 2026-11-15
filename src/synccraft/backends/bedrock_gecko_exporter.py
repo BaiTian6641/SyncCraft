@@ -494,7 +494,7 @@ def _export_bedrock_or_gecko_common(
             if has_loc_rot and sync_cpiv is not None and loc_e is not None:
                 cube_entry["pivot"] = vector(sync_point_to_bedrock(sync_cpiv))
                 cube_entry["rotation"] = vector(sync_euler_to_bedrock(loc_e))
-            if float(box.inflate) > 0.0:
+            if abs(float(box.inflate)) > 1e-9:
                 cube_entry["inflate"] = round(float(box.inflate), 6)
             if atlas is not None:
                 uv_faces: dict[str, dict[str, list[float]]] = {}
@@ -506,13 +506,16 @@ def _export_bedrock_or_gecko_common(
                     }
                 cube_entry["uv"] = uv_faces
             elif getattr(box, "uv_faces", None):
-                uv_faces_ast: dict[str, dict[str, list[float]]] = {}
+                uv_faces_ast: dict[str, dict[str, Any]] = {}
                 for face, rect in box.uv_faces.items():
-                    u0, v0, u1, v1 = rect
-                    uv_faces_ast[face] = {
+                    u0, v0, u1, v1 = rect[:4]
+                    f_spec: dict[str, Any] = {
                         "uv": vector([u0, v0]),
                         "uv_size": vector([u1 - u0, v1 - v0]),
                     }
+                    if len(rect) == 5 and int(rect[4]) != 0:
+                        f_spec["uv_rotation"] = int(rect[4])
+                    uv_faces_ast[face] = f_spec
                 cube_entry["uv"] = uv_faces_ast
             elif getattr(box, "uv", None) is not None:
                 bu, bv = box.uv

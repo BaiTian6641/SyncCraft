@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+import io
 import json
 from pathlib import Path
+import struct
 import tempfile
 import unittest
+import zipfile
 
 import numpy as np
+from PIL import Image
 
 from synccraft.backends import export_bbmodel, export_java, export_labpbr_1_3
 from synccraft.data_gen.ik_motion_templates import generate_ik_clip, solve_two_bone_ik
-from synccraft.dsl import Attach, Bone, Box, Locator, Meta, Palette, Place, Program, format_program, parse_program, validate_program
+from synccraft.dsl import Attach, Bone, Box, Locator, Meta, Palette, Place, Program, UnsupportedFeature, format_program, parse_program, validate_program
 from synccraft.kinematics.se3_chain import compile_geometry
 from synccraft.shading import compile_vanilla_atlas
 from synccraft.surface import MaterialProgram, WorldState, build_surface_domain, initialize_surface_state
@@ -32,6 +36,8 @@ from synccraft.world import (
     TwoBoneIKAction,
     action_from_dict,
     analyze_artist_project,
+    assign_multi_slot_materials_to_program,
+    audit_converted_asset_visual_identity,
     build_articulated_mechanism_world,
     build_intervention_trajectory_dataset,
     build_unlabeled_workspace_provenance,
@@ -42,6 +48,7 @@ from synccraft.world import (
     evaluate_world_capability_benchmark,
     ingest_artist_project_record,
     ingest_external_asset,
+    ingest_gltf_archive,
     run_looped_artist_enhancement,
     run_seven_interventions_suite,
     score_world_capability_completion,
@@ -440,6 +447,412 @@ class TestInverseInferenceAndTrajectoryDataset(unittest.TestCase):
             self.assertTrue(
                 all(r["level"] != "level_7_human_transfer" for r in ds["rows"] if r["split"] == "train")
             )
+
+    def test_bbmodel4_inline_outliner_locators_sharealike_and_gltf2_ingestion(self) -> None:
+        # 1. Blockbench 4 inline outliner (no top-level 'groups') + locator element + decimal 0.01 size_step
+        bb4_doc = {
+            "meta": {"format_version": "4.10", "model_format": "free"},
+            "resolution": {"width": 32, "height": 32},
+            "elements": [
+                {
+                    "name": "torso_plate",
+                    "from": [-2.48, 4.0, -1.5],
+                    "to": [2.48, 10.0, 1.5],
+                    "uuid": "el-cube-1",
+                    "type": "cube",
+                },
+                {
+                    "name": "seat_1",
+                    "position": [0.0, 10.5, -0.5],
+                    "uuid": "el-loc-1",
+                    "type": "locator",
+                },
+                {
+                    "name": "stray_zero_line",
+                    "from": [0.0, 0.0, 0.0],
+                    "to": [0.0, 4.0, 0.0],
+                    "uuid": "el-deg-1",
+                    "type": "cube",
+                },
+            ],
+            "outliner": [
+                {
+                    "name": "mount_root",
+                    "origin": [0.0, 4.0, 0.0],
+                    "rotation": [0.0, 0.0, 0.0],
+                    "uuid": "grp-inline-root",
+                    "children": [
+                        "el-cube-1",
+                        "el-loc-1",
+                        "el-deg-1",
+                    ],
+                }
+            ],
+        }
+        prov_sa = AssetProvenance(
+            "bb4_mount_01",
+            "https://example.org/mount",
+            "HumanArtist",
+            "CC-BY-SA-4.0",
+            attribution_notice="Mount by HumanArtist (CC-BY-SA-4.0)",
+        )
+        with self.assertRaises(LicenseGateError):
+            ingest_external_asset(bb4_doc, "bbmodel", prov_sa, license_policy="clean_room_permissive")
+        rec_sa = ingest_external_asset(bb4_doc, "bbmodel", prov_sa, license_policy="sharealike_ccbysa")
+        self.assertEqual(rec_sa.license_track, "sharealike_ccbysa")
+        self.assertFalse(rec_sa.commercial_weights_eligible)
+        self.assertLess(rec_sa.vertex_reconstruction_error, 1e-6)
+        self.assertEqual(rec_sa.program.meta.size_step, 0.01)
+        sc_sa = compile_geometry(parse_program(format_program(rec_sa.program)))
+        self.assertEqual(len(sc_sa.boxes), 1)
+        self.assertEqual(len(sc_sa.locators), 1)
+        self.assertEqual(sc_sa.locators[0].role, "rider_seat")
+
+        # 2. AI-assisted quarantine gate
+        prov_ai = AssetProvenance(
+            "ai_assist_01",
+            "https://example.org/ai_pack",
+            "HybridCreator",
+            "CC0-1.0",
+            ai_assisted=True,
+        )
+        with self.assertRaises(LicenseGateError):
+            ingest_external_asset(bb4_doc, "bbmodel", prov_ai, license_policy="clean_room_permissive")
+        rec_ai = ingest_external_asset(bb4_doc, "bbmodel", prov_ai, license_policy="ai_assisted_quarantine")
+        self.assertEqual(rec_ai.license_track, "ai_assisted_quarantine")
+        self.assertFalse(rec_ai.commercial_weights_eligible)
+
+        # 3. Free-mesh .bbmodel explicitly rejected with UnsupportedFeature
+        mesh_bb = {
+            "elements": [{"name": "sculpt", "type": "mesh", "vertices": {"v0": [0, 0, 0]}}],
+            "outliner": [],
+        }
+        with self.assertRaises(UnsupportedFeature):
+            ingest_external_asset(
+                mesh_bb,
+                "bbmodel",
+                AssetProvenance("m1", "https://example.org/m", "Sculptor", "CC0-1.0"),
+            )
+
+        # 4. Sketchfab glTF 2.0 archive (.zip) cuboid + quaternion animation roundtrip & free-mesh rejection
+        corners_m = np.array(
+            [
+                [-0.125, 0.0, -0.0625],
+                [0.125, 0.0, -0.0625],
+                [0.125, 0.25, -0.0625],
+                [-0.125, 0.25, -0.0625],
+                [-0.125, 0.0, 0.0625],
+                [0.125, 0.0, 0.0625],
+                [0.125, 0.25, 0.0625],
+                [-0.125, 0.25, 0.0625],
+            ],
+            dtype=np.float32,
+        )
+        tris_idx = np.array(
+            [
+                0, 1, 2, 0, 2, 3,
+                4, 6, 5, 4, 7, 6,
+                0, 4, 5, 0, 5, 1,
+                3, 2, 6, 3, 6, 7,
+                1, 5, 6, 1, 6, 2,
+                0, 3, 7, 0, 7, 4,
+            ],
+            dtype=np.uint16,
+        )
+        anim_t = np.array([0.0, 0.5, 1.0], dtype=np.float32)
+        s_ang = float(np.sin(np.deg2rad(15.0)))
+        c_ang = float(np.cos(np.deg2rad(15.0)))
+        anim_q = np.array(
+            [
+                [0.0, 0.0, 0.0, 1.0],
+                [s_ang, 0.0, 0.0, c_ang],
+                [0.0, 0.0, 0.0, 1.0],
+            ],
+            dtype=np.float32,
+        )
+        b0 = corners_m.tobytes()
+        b1 = tris_idx.tobytes() + b"\x00\x00"  # 4-byte align
+        b2 = anim_t.tobytes()
+        b3 = anim_q.tobytes()
+        scene_bin = b0 + b1 + b2 + b3
+
+        png_buf = io.BytesIO()
+        Image.fromarray(np.full((16, 16, 4), (90, 140, 200, 255), dtype=np.uint8)).save(png_buf, format="PNG")
+
+        gltf_doc = {
+            "asset": {"version": "2.0", "generator": "Blockbench glTF exporter"},
+            "scene": 0,
+            "scenes": [{"nodes": [0]}],
+            "nodes": [
+                {"name": "Sketchfab_model", "children": [1], "matrix": [1, 0, 0, 0, 0, 0, -1, 0, 0, 1, 0, 0, 0, 0, 0, 1]},
+                {"name": "GLTF_SceneRootNode", "children": [2], "matrix": [1, 0, 0, 0, 0, 0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1]},
+                {"name": "body", "children": [3, 5]},
+                {"name": "cube_0", "children": [4]},
+                {"name": "Object_0", "mesh": 0},
+                {"name": "arm_l", "translation": [0.1875, 0.25, 0.0], "children": [6]},
+                {"name": "Object_1", "mesh": 0},
+            ],
+            "meshes": [{"primitives": [{"attributes": {"POSITION": 0}, "indices": 1, "material": 0}]}],
+            "materials": [{"pbrMetallicRoughness": {"baseColorTexture": {"index": 0}}}],
+            "textures": [{"source": 0}],
+            "images": [{"uri": "textures/tex.png"}],
+            "buffers": [{"uri": "scene.bin", "byteLength": len(scene_bin)}],
+            "bufferViews": [
+                {"buffer": 0, "byteOffset": 0, "byteLength": len(b0)},
+                {"buffer": 0, "byteOffset": len(b0), "byteLength": len(tris_idx.tobytes())},
+                {"buffer": 0, "byteOffset": len(b0) + len(b1), "byteLength": len(b2)},
+                {"buffer": 0, "byteOffset": len(b0) + len(b1) + len(b2), "byteLength": len(b3)},
+            ],
+            "accessors": [
+                {"bufferView": 0, "componentType": 5126, "count": 8, "type": "VEC3"},
+                {"bufferView": 1, "componentType": 5123, "count": 36, "type": "SCALAR"},
+                {"bufferView": 2, "componentType": 5126, "count": 3, "type": "SCALAR"},
+                {"bufferView": 3, "componentType": 5126, "count": 3, "type": "VEC4"},
+            ],
+            "animations": [
+                {
+                    "name": "swing",
+                    "samplers": [{"input": 2, "output": 3, "interpolation": "LINEAR"}],
+                    "channels": [{"sampler": 0, "target": {"node": 5, "path": "rotation"}}],
+                }
+            ],
+        }
+        zip_mem = io.BytesIO()
+        with zipfile.ZipFile(zip_mem, "w") as zf:
+            zf.writestr("scene.gltf", json.dumps(gltf_doc))
+            zf.writestr("scene.bin", scene_bin)
+            zf.writestr("textures/tex.png", png_buf.getvalue())
+
+        rec_gltf = ingest_gltf_archive(
+            zip_mem.getvalue(),
+            AssetProvenance("sf_mech_01", "https://sketchfab.com/3d-models/mech", "VoxelMaker", "CC-BY-4.0"),
+            license_policy="clean_room_permissive",
+        )
+        self.assertLess(rec_gltf.vertex_reconstruction_error, 1e-6)
+        sc_gltf = compile_geometry(parse_program(format_program(rec_gltf.program)))
+        self.assertEqual(len(sc_gltf.boxes), 2)
+        self.assertEqual(len(sc_gltf.bones), 2)
+        self.assertIsNotNone(rec_gltf.program.behavior)
+        assert rec_gltf.program.behavior is not None
+        self.assertEqual(len(rec_gltf.program.behavior.clips), 1)
+
+        # Free-mesh glTF (pyramid / 5 vertices, 6 triangles) must raise UnsupportedFeature
+        pyr_pts = np.array(
+            [[-1, 0, -1], [1, 0, -1], [1, 0, 1], [-1, 0, 1], [0, 2, 0]],
+            dtype=np.float32,
+        )
+        pyr_idx = np.array([0, 1, 4, 1, 2, 4, 2, 3, 4, 3, 0, 4, 0, 2, 1, 0, 3, 2], dtype=np.uint16)
+        pb0 = pyr_pts.tobytes()
+        pb1 = pyr_idx.tobytes()
+        gltf_pyr = {
+            **gltf_doc,
+            "animations": [],
+            "buffers": [{"uri": "scene.bin", "byteLength": len(pb0) + len(pb1)}],
+            "bufferViews": [
+                {"buffer": 0, "byteOffset": 0, "byteLength": len(pb0)},
+                {"buffer": 0, "byteOffset": len(pb0), "byteLength": len(pb1)},
+            ],
+            "accessors": [
+                {"bufferView": 0, "componentType": 5126, "count": 5, "type": "VEC3"},
+                {"bufferView": 1, "componentType": 5123, "count": 18, "type": "SCALAR"},
+            ],
+        }
+        zip_pyr = io.BytesIO()
+        with zipfile.ZipFile(zip_pyr, "w") as zf:
+            zf.writestr("scene.gltf", json.dumps(gltf_pyr))
+            zf.writestr("scene.bin", pb0 + pb1)
+            zf.writestr("textures/tex.png", png_buf.getvalue())
+        with self.assertRaises(UnsupportedFeature):
+            ingest_gltf_archive(
+                zip_pyr.getvalue(),
+                AssetProvenance("sf_pyr_01", "https://sketchfab.com/3d-models/pyr", "Sculptor", "CC0-1.0"),
+            )
+
+    def test_visual_identity_multi_texture_uv_rotation_visibility_and_multi_slot_materials(self) -> None:
+        import base64
+
+        # 1. Mixed 64x64 + 16x16 multi-texture Blockbench 5.0 with negative inflate,
+        #    swapped from>to, 90/180/270 deg UV rotation, omitted face, and hidden variant group
+        tex0 = np.zeros((64, 64, 4), dtype=np.uint8)
+        tex0[:, :] = (46, 98, 178, 255)  # cobalt metal body
+        tex0[0:16, 0:16] = (230, 74, 58, 255)  # top-left quadrant red
+        tex0[0:16, 16:32] = (62, 198, 112, 255)  # top-right quadrant green
+
+        tex1 = np.zeros((16, 16, 4), dtype=np.uint8)
+        tex1[:, :] = (232, 188, 64, 255)  # warm brass trim
+        tex1[0:8, 0:8] = (250, 240, 180, 255)
+
+        b0_png = io.BytesIO()
+        Image.fromarray(tex0).save(b0_png, format="PNG")
+        b1_png = io.BytesIO()
+        Image.fromarray(tex1).save(b1_png, format="PNG")
+
+        bb5_doc = {
+            "meta": {"format_version": "5.0", "model_format": "free"},
+            "resolution": {"width": 64, "height": 64},
+            "textures": [
+                {
+                    "id": "10",
+                    "name": "cobalt.png",
+                    "width": 64,
+                    "height": 64,
+                    "uv_width": 64,
+                    "uv_height": 64,
+                    "source": "data:image/png;base64," + base64.b64encode(b0_png.getvalue()).decode("ascii"),
+                },
+                {
+                    "id": "22",
+                    "name": "brass.png",
+                    "width": 16,
+                    "height": 16,
+                    "uv_width": 16,
+                    "uv_height": 16,
+                    "source": "data:image/png;base64," + base64.b64encode(b1_png.getvalue()).decode("ascii"),
+                },
+            ],
+            "elements": [
+                {
+                    "name": "hull_box",
+                    "uuid": "u-hull",
+                    "type": "cube",
+                    "from": [4.0, 2.0, -3.0],  # intentionally swapped X: from[0] > to[0]
+                    "to": [-4.0, 10.0, 3.0],
+                    "inflate": -0.25,
+                    "faces": {
+                        "north": {"uv": [0, 0, 32, 16], "texture": 0, "rotation": 90},
+                        "south": {"uv": [0, 0, 32, 16], "texture": 0, "rotation": 180},
+                        "east": {"uv": [0, 0, 16, 16], "texture": 0, "rotation": 270},
+                        "west": {"uv": [16, 0, 32, 16], "texture": 0},
+                        "up": {"uv": [0, 0, 16, 16], "texture": 0},
+                        # "down" intentionally omitted (transparent face)
+                    },
+                },
+                {
+                    "name": "brass_cap",
+                    "uuid": "u-cap",
+                    "type": "cube",
+                    "from": [-2.0, 9.75, -2.0],
+                    "to": [2.0, 12.75, 2.0],
+                    "faces": {
+                        fn: {"uv": [0, 0, 16, 16], "texture": 1}
+                        for fn in ("north", "south", "east", "west", "up", "down")
+                    },
+                },
+                {
+                    "name": "hidden_alt_wing",
+                    "uuid": "u-hidden-el",
+                    "type": "cube",
+                    "visibility": False,
+                    "from": [-12.0, 4.0, -2.0],
+                    "to": [-5.0, 8.0, 2.0],
+                    "faces": {fn: {"uv": [0, 0, 16, 16], "texture": 0} for fn in ("north", "south", "east", "west", "up", "down")},
+                },
+                {
+                    "name": "hidden_group_cube",
+                    "uuid": "u-hidden-grp-el",
+                    "type": "cube",
+                    "from": [5.0, 4.0, -2.0],
+                    "to": [12.0, 8.0, 2.0],
+                    "faces": {fn: {"uv": [0, 0, 16, 16], "texture": 1} for fn in ("north", "south", "east", "west", "up", "down")},
+                },
+            ],
+            "outliner": [
+                {
+                    "name": "main_rig",
+                    "uuid": "g-main",
+                    "origin": [0.0, 2.0, 0.0],
+                    "visibility": True,
+                    "children": ["u-hull", "u-cap", "u-hidden-el"],
+                },
+                {
+                    "name": "alt_variant_rig",
+                    "uuid": "g-hidden",
+                    "origin": [0.0, 2.0, 0.0],
+                    "visibility": False,
+                    "children": ["u-hidden-grp-el"],
+                },
+            ],
+        }
+        prov_bb5 = AssetProvenance("bb5_vis_01", "https://example.org/bb5", "ArtistA", "CC-BY-4.0")
+        rec_bb5 = ingest_external_asset(bb5_doc, "bbmodel", prov_bb5, license_policy="clean_room_permissive")
+        enriched_bb5 = assign_multi_slot_materials_to_program(
+            rec_bb5.program,
+            rec_bb5.resolved_uv_map,
+            rec_bb5.resolved_atlas_rgba,
+            rec_bb5.material_hypotheses[0].spec,
+            has_source_texture=rec_bb5.has_source_texture,
+            domain="industrial",
+            max_slots=4,
+            seed=42,
+        )
+        self.assertGreaterEqual(len(enriched_bb5.palettes), 2)
+        self.assertEqual(len(compile_geometry(enriched_bb5).boxes), 2)  # both hidden cubes excluded!
+        m_bb5, panels_bb5 = audit_converted_asset_visual_identity(
+            bb5_doc,
+            "bbmodel",
+            rec_bb5,
+            enriched_bb5,
+            canvas_size=(160, 160),
+        )
+        self.assertEqual(len(panels_bb5), 4)
+        self.assertGreaterEqual(m_bb5["psnr_db"], 50.0, msg=str(m_bb5))
+        self.assertGreaterEqual(m_bb5["standalone_dsl_psnr_db"], 50.0, msg=str(m_bb5))
+        self.assertGreaterEqual(m_bb5["silhouette_iou"], 0.999, msg=str(m_bb5))
+        self.assertLess(m_bb5["vertex_reconstruction_error"], 1e-5)
+
+        # 2. Multi-texture Java .json with rescale=True 22.5 deg rotation
+        j_side = io.BytesIO()
+        Image.fromarray(np.full((16, 16, 4), (168, 108, 62, 255), dtype=np.uint8)).save(j_side, format="PNG")
+        j_top = io.BytesIO()
+        Image.fromarray(np.full((16, 16, 4), (74, 156, 84, 255), dtype=np.uint8)).save(j_top, format="PNG")
+        java_doc = {
+            "textures": {"side": "custom:block/oak_side", "top": "custom:block/moss_top"},
+            "elements": [
+                {
+                    "name": "angled_beam",
+                    "from": [4.0, 0.0, 4.0],
+                    "to": [12.0, 12.0, 12.0],
+                    "rotation": {"origin": [8.0, 6.0, 8.0], "axis": "y", "angle": 22.5, "rescale": True},
+                    "faces": {
+                        "north": {"uv": [0, 0, 8, 12], "texture": "#side"},
+                        "south": {"uv": [0, 0, 8, 12], "texture": "#side"},
+                        "east": {"uv": [0, 0, 8, 12], "texture": "#side"},
+                        "west": {"uv": [0, 0, 8, 12], "texture": "#side"},
+                        "up": {"uv": [0, 0, 8, 8], "texture": "#top", "rotation": 90},
+                        "down": {"uv": [0, 0, 8, 8], "texture": "#top"},
+                    },
+                }
+            ],
+        }
+        java_tex_map = {"side": j_side.getvalue(), "top": j_top.getvalue()}
+        rec_java = ingest_external_asset(
+            java_doc,
+            "java_json",
+            AssetProvenance("java_vis_01", "https://example.org/java", "ArtistB", "CC0-1.0"),
+            atlas_png=j_side.getvalue(),
+            java_textures_png=java_tex_map,
+            license_policy="clean_room_permissive",
+        )
+        enriched_java = assign_multi_slot_materials_to_program(
+            rec_java.program,
+            rec_java.resolved_uv_map,
+            rec_java.resolved_atlas_rgba,
+            rec_java.material_hypotheses[0].spec,
+            has_source_texture=rec_java.has_source_texture,
+            domain="architecture",
+            seed=7,
+        )
+        m_java, _ = audit_converted_asset_visual_identity(
+            java_doc,
+            "java_json",
+            rec_java,
+            enriched_java,
+            atlas_png=j_side.getvalue(),
+            java_textures_png=java_tex_map,
+            canvas_size=(160, 160),
+        )
+        self.assertGreaterEqual(m_java["psnr_db"], 55.0, msg=str(m_java))
+        self.assertGreaterEqual(m_java["silhouette_iou"], 0.999, msg=str(m_java))
 
 
 if __name__ == "__main__":

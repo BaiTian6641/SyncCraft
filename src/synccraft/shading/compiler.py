@@ -79,14 +79,16 @@ def downsample_optical_fields(
     density = texel_density / 16.0
     out_patches: dict[FaceKey, FaceOpticalPatch] = {}
 
+    is_authored = getattr(domain.rest_scene.meta, "audit_profile", "strict") == "authored"
     for fk, patch in optical_fields.patches.items():
         grid = domain.faces[fk]
         w_is_int = math.isclose(float(grid.width_units), round(float(grid.width_units)), abs_tol=1e-9) and float(grid.width_units) > 0.0
         h_is_int = math.isclose(float(grid.height_units), round(float(grid.height_units)), abs_tol=1e-9) and float(grid.height_units) > 0.0
         fw = float(grid.width_units) * density
         fh = float(grid.height_units) * density
-        if (w_is_int and not math.isclose(fw, round(fw), abs_tol=1e-7)) or (
-            h_is_int and not math.isclose(fh, round(fh), abs_tol=1e-7)
+        if not is_authored and (
+            (w_is_int and not math.isclose(fw, round(fw), abs_tol=1e-7))
+            or (h_is_int and not math.isclose(fh, round(fh), abs_tol=1e-7))
         ):
             raise ValueError(
                 f"texel_density={texel_density} produces fractional texels ({fw}x{fh}) on {fk}; integer atlas required"

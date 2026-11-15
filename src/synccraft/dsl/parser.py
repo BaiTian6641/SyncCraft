@@ -1327,8 +1327,25 @@ class _Parser:
             if fname in entries:
                 self.fail(f"duplicate face {fname!r} in uv_faces")
             self.take(":")
-            rect = self.vector(4)
-            entries[fname] = (float(rect[0]), float(rect[1]), float(rect[2]), float(rect[3]))
+            self.take("[")
+            u0 = float(self.number())
+            self.take(",")
+            v0 = float(self.number())
+            self.take(",")
+            u1 = float(self.number())
+            self.take(",")
+            v1 = float(self.number())
+            if self.maybe_take(","):
+                rot_val = int(self.number(integer=True)) % 360
+                self.take("]")
+                if rot_val not in (0, 90, 180, 270):
+                    raise DSLValidationError(
+                        f"uv_faces.{fname}: UV rotation must be one of 0, 90, 180, 270; got {rot_val}"
+                    )
+                entries[fname] = (u0, v0, u1, v1) if rot_val == 0 else (u0, v0, u1, v1, rot_val)
+            else:
+                self.take("]")
+                entries[fname] = (u0, v0, u1, v1)
             self.maybe_take(",")
         self.take("}")
         order_idx = {f: idx for idx, f in enumerate(FACE_ORDER)}
