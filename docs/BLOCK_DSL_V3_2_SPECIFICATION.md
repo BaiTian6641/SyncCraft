@@ -1379,3 +1379,26 @@ def main(in_path: str, out_path: str) -> None:
 if __name__ == "__main__":
     main(sys.argv[1], sys.argv[2])
 ```
+
+---
+
+## 11. Block-DSL v4.0 Additive Extension: Parametric `@layout`, `@component` & `@assembly` (`ADR 0008`)
+
+Block-DSL v4.0 (`dsl_version: "4.0"`, governed by [ADR 0008](adr/0008-parametric-assemblies-components-and-world-model.md)) introduces a CAD-style constructive assembly layer **above** the shared `Program` / `Scene` engine while keeping **100% of v3.0–v3.2 `@rig` files valid unchanged**.
+
+### 11.1 Four Decoupled Layers
+
+1. **`@layout` (Top-Down Design DAG & Non-Mutating Contracts)**:
+   - Bounded driving parameters (`param hull_width = 14 [10, 22]`), acyclic derived formulas (`let head_width = max(4, round(chest_width * 0.6))`), and non-mutating `budget` (`max_boxes`, `max_bones`, `max_atlas_px`) and `envelope` (`max_span`, `min_ground_y`) assertions checked via `audit_assembly_contracts(program, scene)`.
+2. **`@component <Name>` (Reusable Scoped Submodels & 6-DOF `frame` Sockets)**:
+   - Encapsulates local `box`, `plane`, `locator`, and nested `bone` sub-chains inside an isolated component namespace (`N` instances of `DragonLimb` or `WalkerLeg` never collide in naming).
+   - Declares abstract `material_slots: [hide, talon]`, `uv_policy: unique | shared` (`unique` default; `shared` reuses UV rectangles across unmirrored identical instances while automatically giving `mirror_x` clones independent UVs), and right-handed 6-DOF `frame` sockets (`on_box`, `anchor`, `offset`, `rot`, optional `role` / `export_locator` round-tripping to Bedrock `1.26.40` oriented locators).
+3. **`@assembly <Name>` (Organizational `subassembly`, Smart Lowering & `SourceMap`)**:
+   - Composes `instance <id> : <Component>(...) [mirror_x(<twin>)]` via SE(3) frame connections `${}^{W}T_C = {}^{W}T_P \, {}^{P}T_A \, M(q) \, ({}^{C}T_B)^{-1}` (`mode: align` default, `mode: oppose` optional $180^\circ$ `+Y` flip):
+     - `type: fixed` — rigidly welds child component boxes onto the parent runtime bone (preventing bone bloat on horns, armor plates, and cylinders while keeping distinct `instance_name` tags so sibling `fixed` instances NEVER receive implicit `sculpted_same_bone_miter` collision immunity).
+     - `type: revolute` — creates an articulated child runtime bone at the mated frame pivot with 1-axis angular `limits`.
+     - `type: prismatic` — creates a 1-axis linear slider bone (`limits: [u_min, u_max]`) driven by `@behavior` `slide <bone>: piston|wave|hinge|impulse(...)` and exported to native Bedrock `1.8.0` / Blockbench 5 `position` channels.
+     - Optional `bind <instance> to <bone>` overrides runtime bone assignment, and `Program.source_map` records exact instance/frame/bone/box provenance (plus `export_bedrock_attachable` for `1.10.0` `minecraft:attachable` equipment).
+4. **Adaptive Swept Motion Validation & Modular World-Model Tasks**:
+   - `audit_behavior_clip` performs per-interval adaptive subdivision (`max_step_deg <= 10.0°`, `max_step_units <= 0.5u`), preventing fast `360°` `spin` gears or recoil strokes from tunneling between coarse sample frames.
+   - `synccraft.world.assembly_world_tasks` defines `MODULAR_SCULPTED_DRAGON_V4_DSL`, `MODULAR_ARTILLERY_WALKER_V4_DSL`, honest decompiled subtree recovery (`infer_assembly_from_program` with `assembly_provenance="inferred_subtree"`), and 4 compositional `LFM3-VL-2B` tasks (`plan_layout_and_interfaces`, `synthesize_component_from_contract`, `surgical_component_swap_and_repair` with exact `0.0` non-target vertex drift, and `propagate_layout_and_instance_controls`).

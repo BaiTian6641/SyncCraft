@@ -164,16 +164,37 @@ def build_surface_domain(
         bone = bones_by_name[box.bone_name]
         half_size = np.asarray(box.size, dtype=np.float64) / 2.0
 
-        # Compute bone axial extent along longest local bone axis
-        bone_boxes = [b for b in rest_scene.boxes if b.bone_name == box.bone_name]
-        bone_pts = np.concatenate(
-            [
-                (np.asarray(((-1, -1, -1), (1, 1, 1)), dtype=np.float64) * (np.asarray(bb.size) / 2.0))
-                + np.asarray(bb.local_center)
-                for bb in bone_boxes
-            ],
-            axis=0,
+        # Compute axial extent in component-local rest space (when part of a @component instance)
+        # or bone-local rest space for direct @rig boxes (ADR 0008).
+        use_comp_basis = (
+            getattr(box, "instance_name", None) is not None
+            and getattr(box, "component_rest_pos", None) is not None
+            and getattr(box, "component_rest_rot", None) is not None
         )
+        if use_comp_basis:
+            comp_boxes = [
+                b for b in rest_scene.boxes
+                if getattr(b, "instance_name", None) == box.instance_name
+                and getattr(b, "component_rest_pos", None) is not None
+            ]
+            bone_pts = np.concatenate(
+                [
+                    (np.asarray(((-1, -1, -1), (1, 1, 1)), dtype=np.float64) * (np.asarray(bb.size) / 2.0))
+                    + np.asarray(bb.component_rest_pos)
+                    for bb in comp_boxes
+                ],
+                axis=0,
+            )
+        else:
+            bone_boxes = [b for b in rest_scene.boxes if b.bone_name == box.bone_name]
+            bone_pts = np.concatenate(
+                [
+                    (np.asarray(((-1, -1, -1), (1, 1, 1)), dtype=np.float64) * (np.asarray(bb.size) / 2.0))
+                    + np.asarray(bb.local_center)
+                    for bb in bone_boxes
+                ],
+                axis=0,
+            )
         spans = bone_pts.max(axis=0) - bone_pts.min(axis=0)
         major_axis = int(np.argmax(spans))
         ax_min = float(bone_pts[:, major_axis].min())
@@ -208,7 +229,13 @@ def build_surface_domain(
                 + v_centered[..., None] * t_d
                 + normal_offset * n_out
             )
-            pos_bone = pos_box @ r_box_in_bone.T + np.asarray(box.local_center, dtype=np.float64)
+            if use_comp_basis:
+                pos_bone = (
+                    pos_box @ np.asarray(box.component_rest_rot, dtype=np.float64).T
+                    + np.asarray(box.component_rest_pos, dtype=np.float64)
+                )
+            else:
+                pos_bone = pos_box @ r_box_in_bone.T + np.asarray(box.local_center, dtype=np.float64)
             pos_rest_world = pos_box @ np.asarray(box.rotation, dtype=np.float64).T + np.asarray(box.center, dtype=np.float64)
 
             d_edge = np.minimum(

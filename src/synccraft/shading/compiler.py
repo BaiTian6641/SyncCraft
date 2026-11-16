@@ -76,7 +76,8 @@ def downsample_optical_fields(
     texel_density: int,
 ) -> OpticalFields:
     """Area-integrate solver-resolution OpticalFields to integer pixel resolution."""
-    density = texel_density / 16.0
+    units_per_block = max(1, int(getattr(domain.rest_scene.meta, "units_per_block", 16)))
+    density = texel_density / float(units_per_block)
     out_patches: dict[FaceKey, FaceOpticalPatch] = {}
 
     is_authored = getattr(domain.rest_scene.meta, "audit_profile", "strict") == "authored"

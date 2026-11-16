@@ -2,7 +2,7 @@
 "use strict";
 
 /**
- * Canonical SyncCraft Block-DSL v3.2 language catalog.
+ * Canonical SyncCraft Block-DSL v4.0 language catalog.
  * Kept in 1:1 parity with `src/synccraft/dsl/ast_nodes.py` and `src/synccraft/dsl/grammar.lark`
  * (enforced by `tests/test_vscode_blockdsl_extension.py`).
  */
@@ -10,9 +10,15 @@
 const TOP_SECTIONS = [
   {
     name: "@meta",
-    detail: "Required header: archetype, target_profile, texel_density, size_step, audit_profile",
-    insertText: "@meta { archetype: ${1|entity,block_multipart,weapon_3d|}, target_profile: ${2|bedrock_entity,geckolib,bbmodel_5,java_modern,java_legacy|}, texel_density: ${3|16,32,64|} }",
-    doc: "Declares target format, discrete voxel grid (`size_step`), and collision contract (`strict` vs `sculpted`). Must be the first `@` section."
+    detail: "Required header: archetype, target_profile, texel_density, units_per_block, size_step, audit_profile",
+    insertText: "@meta { archetype: ${1|entity,block_multipart,weapon_3d|}, target_profile: ${2|bedrock_entity,geckolib,bbmodel_5,java_modern,java_legacy|}, texel_density: ${3|16,32,64|}, dsl_version: \"4.0\" }",
+    doc: "Declares target format, discrete voxel grid (`size_step`), block unit scale (`units_per_block`), and collision contract (`strict` vs `sculpted`). Must be the first `@` section."
+  },
+  {
+    name: "@layout",
+    detail: "Optional v4.0 top-down parameter DAG, budgets & spatial envelope contracts",
+    insertText: "@layout {\n  param ${1:hull_width} = ${2:12} [${3:8}, ${4:24}]\n  let ${5:half_width} = ${1:hull_width} * 0.5\n  budget max_boxes = ${6:48}\n  envelope min_ground_y = -0.5\n}",
+    doc: "Top-down CAD design table (`ADR 0008`): bounded `param` drivers, acyclic `let` expressions, and non-mutating `budget`/`envelope` assertions."
   },
   {
     name: "@textures",
@@ -24,11 +30,23 @@ const TOP_SECTIONS = [
     name: "@palette",
     detail: "Required perceptual OKLCh color ramps (>= 1)",
     insertText: "@palette {\n  ${1:primary_mat}: ramp(base_lch=[${2:0.52}, ${3:0.08}, ${4:235}], steps=${5:8}, hue_shift=[${6:-4}, ${7:4}])\n}",
-    doc: "Defines perceptual OKLCh color ramps referenced by every `box` and `plane` `material:` field."
+    doc: "Defines perceptual OKLCh color ramps referenced by every `box`, `plane`, and `@assembly` `materials:` slot binding."
+  },
+  {
+    name: "@component",
+    detail: "v4.0 reusable parametric submodel with local namespace, material_slots & 6-DOF frames",
+    insertText: "@component ${1:PartModule} {\n  param ${2:len} = ${3:8} [4, 16]\n  material_slots: [${4:armor}]\n  box ${5:core} { size: [4, 4, ${2:len}], material: ${4:armor} }\n  frame ${6:mount_base} { on_box: ${5:core}, anchor: [0, 0, -1], rot: [0, 0, 0] }\n}",
+    doc: "Encapsulated parametric submodel (`ADR 0008`) with abstract `material_slots`, `uv_policy: unique | shared`, and oriented 6-DOF `frame` attachment interfaces."
+  },
+  {
+    name: "@assembly",
+    detail: "v4.0 top-down hierarchical assembly (`instance`, `subassembly`, `connect`, `bind`)",
+    insertText: "@assembly ${1:MainAssembly} {\n  root_pivot: [0, ${2:12}, 0]\n  instance ${3:base} : ${4:PartModule}() {\n    id: \"${3:base}_01\"\n    materials: { ${5:armor}: ${6:primary_mat} }\n  }\n}",
+    doc: "Composes `@component` instances via `fixed` (rigidly welded onto parent bone), `revolute` (1-axis hinge), and `prismatic` (1-axis slider) frame connections while recording `SourceMap` provenance."
   },
   {
     name: "@rig",
-    detail: "Required SE(3) skeletal hierarchy (`root bone ...`)",
+    detail: "Direct SE(3) skeletal hierarchy (`root bone ...`, required if `@assembly` is omitted)",
     insertText: "@rig {\n  root bone ${1:root_body} {\n    pivot_local: [0, ${2:8}, 0]\n    box ${3:core_box} { size: [${4:8, 8, 8}], material: ${5:primary_mat} }\n  }\n}",
     doc: "Right-handed Y-up SE(3) bone tree (`+X` East/Right, `+Y` Up, `+Z` South/Front)."
   },
@@ -74,13 +92,17 @@ const ARCHETYPES = ["entity", "weapon_3d", "block_multipart", "item_extruded"];
 const PROFILES = ["bedrock_entity", "geckolib", "java_modern", "java_legacy", "bbmodel_5"];
 const ANIMATED_PROFILES = ["bedrock_entity", "geckolib", "bbmodel_5"];
 const AUDIT_PROFILES = ["strict", "sculpted", "authored"];
-const DSL_VERSIONS = ["\"3.2\"", "\"3.1\"", "\"3.0\""];
+const DSL_VERSIONS = ["\"4.0\"", "\"3.2\"", "\"3.1\"", "\"3.0\""];
 const ALLOWED_SIZE_STEPS = ["1.0", "0.5", "0.25", "0.125", "0.0625", "0.03125", "0.1", "0.05", "0.01", "0.001"];
 const FACES = ["north", "south", "east", "west", "up", "down"];
 const AXES_3D = ["x", "y", "z"];
 const MIRROR_AXES = ["x", "z"];
 const LOCATOR_ROLES = ["socket", "ik_effector", "vfx_emitter", "camera_focus", "hitbox", "rider_seat"];
 const TRACK_LAWS = ["wave", "flap", "hinge", "impulse", "spin"];
+const SLIDE_LAWS = ["piston", "wave", "hinge", "impulse"];
+const CONNECTION_TYPES = ["fixed", "revolute", "prismatic"];
+const CONNECTION_MODES = ["align", "oppose"];
+const UV_POLICIES = ["unique", "shared"];
 const KEYFRAME_CHANNELS = ["rotation", "position", "scale"];
 const KEYFRAME_INTERPOLATIONS = ["linear", "catmullrom"];
 const TARGET_ENCODINGS = ["vanilla", "labpbr_1_3", "gltf_2_0"];
@@ -150,7 +172,14 @@ const HOVER_DOCUMENTATION = {
   "spin": "**`spin(axis=x|y|z, amp_deg=<-1440..1440>, freq_hz=..., phase_deg=0, bias_deg=0)`** (*ADR 0007*)\n\nContinuous linear mechanical rotation `bias_deg + amp_deg * (t * freq_hz + phase_deg / 360)` for `360°` wheels, propellers, windmill rotors, turrets, and meshed multi-ratio gears (e.g. `+360°` wheel + `-720°` `2:-1` pinion). Exports gimbal-safe unwrapped keyframes & native Molang `query.anim_time`.",
   "foot_cycle": "**`foot_cycle(stride=<0..24>, lift=<0..16>, phase_deg=0)`**\n\nWorld-anchored $C^1$ locomotion stance/swing trajectory solved via `ik_chain`, guaranteeing `< 0.02` units horizontal stance foot slip.",
   "inflate": "**`inflate: <delta>`**\n\nExpands physical OBB half-extents `h = 0.5 * size + inflate` without changing discrete UV island texel dimensions (`>= 0.0` in `strict` and `sculpted` modes).",
-  "joint_limits": "**`joint_limits: [[xmin, xmax], [ymin, ymax], [zmin, zmax]]`**\n\nPer-axis angular bounds in degrees. Every axis interval must contain rest pose `0` (`-180 <= min <= 0 <= max <= 180`)."
+  "joint_limits": "**`joint_limits: [[xmin, xmax], [ymin, ymax], [zmin, zmax]]`**\n\nPer-axis angular bounds in degrees. Every axis interval must contain rest pose `0` (`-180 <= min <= 0 <= max <= 180`).",
+  "@layout": "**`@layout`** (*Block-DSL v4.0 / ADR 0008*)\n\nTop-down parametric design DAG: declares bounded `param` drivers (`param w = 12 [8, 24]`), derived `let` formulas (`min`, `max`, `clamp`, `round`), and non-mutating `budget` (`max_boxes`, `max_bones`, `max_atlas_px`) and `envelope` (`max_span`, `min_ground_y`) contracts.",
+  "@component": "**`@component <Name>`** (*Block-DSL v4.0 / ADR 0008*)\n\nEncapsulated reusable submodel with its own local identifier namespace, `param` list, abstract `material_slots: [...]`, `uv_policy: unique | shared`, internal `bone` sub-chains, and public 6-DOF oriented `frame` attachment sockets.",
+  "@assembly": "**`@assembly <Name>`** (*Block-DSL v4.0 / ADR 0008*)\n\nComposes `@component` `instance`s and purely organizational `subassembly` groups via oriented `connect` mates (`fixed`, `revolute`, `prismatic`) while recording exact `SourceMap` provenance.",
+  "frame": "**`frame <name> { on_box: <box>, anchor: [ax, ay, az], offset: [0,0,0], rot: [rx,ry,rz], role: socket }`** (*ADR 0008*)\n\nOriented 6-DOF right-handed attachment interface (`det(R) = +1`). Round-trips to Bedrock `1.26.40` oriented locators when carrying a `role` or `export_locator: true`.",
+  "connect": "**`connect <child_inst>.<frame> to <parent_inst>.<frame> { type: fixed | revolute | prismatic, ... }`** (*ADR 0008*)\n\nSolves exact SE(3) frame mating `${}^{W}T_C = {}^{W}T_P \\, {}^{P}T_A \\, M(q) \\, ({}^{C}T_B)^{-1}` (`mode: align` default, `mode: oppose` optional 180° flip about `+Y`). `fixed` welds rigid geometry onto the parent runtime bone without cross-instance collision immunity; `revolute` and `prismatic` create articulated child bones.",
+  "uv_policy": "**`uv_policy: unique | shared`** (*ADR 0008*)\n\n- `unique` *(default)*: Every instance receives independent atlas UV islands for unique world-space AO and weathering.\n- `shared`: Identical unmirrored instances reuse packed UV islands (`mirror_x` clones automatically receive unshared islands to prevent mirrored shading inversion).",
+  "slide": "**`slide <prismatic_bone>: piston|wave|hinge|impulse(axis=x|y|z, amp_units=..., freq_hz=...)`** (*ADR 0008*)\n\nDrives a `prismatic` joint along its oriented 3D slide axis within `limits: [u_min, u_max]` and exports native Bedrock `1.8.0` / Blockbench 5 `position` keyframes."
 };
 
 module.exports = {
@@ -166,6 +195,10 @@ module.exports = {
   MIRROR_AXES,
   LOCATOR_ROLES,
   TRACK_LAWS,
+  SLIDE_LAWS,
+  CONNECTION_TYPES,
+  CONNECTION_MODES,
+  UV_POLICIES,
   KEYFRAME_CHANNELS,
   KEYFRAME_INTERPOLATIONS,
   TARGET_ENCODINGS,

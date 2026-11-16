@@ -147,6 +147,45 @@ def _serialize_bbmodel_animations(
                 {"name": bname, "type": "bone", "keyframes": []},
             )["keyframes"].extend(rot_kfs)
 
+        # Export non-root prismatic / slide position channels (ADR 0008)
+        for bone in scene.bones:
+            bname = bone.name
+            if bname == root_bone_name or (bname, "position") in explicit_kf_channels:
+                continue
+            if not any(
+                bname in s.pose_position_deltas
+                and any(abs(float(c)) > 1e-5 for c in s.pose_position_deltas[bname])
+                for s in samples
+            ):
+                continue
+            b_uid = stable_uuid("bone", bname, asset_name)
+            x_sign = -1.0 if bone.mirrored else 1.0
+            p_kfs: list[dict[str, Any]] = []
+            for k_i, s in enumerate(samples):
+                dx, dy, dz = s.pose_position_deltas.get(bname, (0.0, 0.0, 0.0))
+                p_kfs.append({
+                    "channel": "position",
+                    "data_points": [{"x": round(x_sign * float(dx), 4), "y": round(float(dy), 4), "z": round(float(dz), 4)}],
+                    "uuid": stable_uuid("kf_pos", f"{clip.name}:{bname}:{k_i}", asset_name),
+                    "time": round(float(s.time_s), 4),
+                    "color": -1,
+                    "interpolation": "linear",
+                })
+            if clip.loop:
+                dx0, dy0, dz0 = samples[0].pose_position_deltas.get(bname, (0.0, 0.0, 0.0))
+                p_kfs.append({
+                    "channel": "position",
+                    "data_points": [{"x": round(x_sign * float(dx0), 4), "y": round(float(dy0), 4), "z": round(float(dz0), 4)}],
+                    "uuid": stable_uuid("kf_pos", f"{clip.name}:{bname}:wrap", asset_name),
+                    "time": round(float(clip.duration_s), 4),
+                    "color": -1,
+                    "interpolation": "linear",
+                })
+            animators.setdefault(
+                b_uid,
+                {"name": bname, "type": "bone", "keyframes": []},
+            )["keyframes"].extend(p_kfs)
+
         animations_out.append({
             "uuid": stable_uuid("animation", clip.name, asset_name),
             "name": clip.name,
@@ -290,4 +329,6 @@ def export_bbmodel(
             asset_name=name,
             num_animation_frames=num_animation_frames,
         )
+    if program is not None and getattr(program, "source_map", None) is not None:
+        doc["synccraft_source_map"] = program.source_map.to_dict()
     return doc

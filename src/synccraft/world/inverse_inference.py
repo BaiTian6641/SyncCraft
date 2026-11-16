@@ -2226,9 +2226,16 @@ def _decompile_bedrock_geojson(
                 explicit_role = lspec.get("role")
                 role = str(explicit_role) if explicit_role in LOCATOR_ROLES else _infer_locator_role(raw_str)
                 pos_bed = np.asarray(lspec.get("offset", lspec.get("position", piv_bed_default)), dtype=np.float64)
+                raw_rot_bed = lspec.get("rotation")
+                loc_rot_sync = (
+                    bedrock_euler_to_sync(raw_rot_bed)
+                    if (isinstance(raw_rot_bed, (list, tuple)) and len(raw_rot_bed) == 3)
+                    else (0.0, 0.0, 0.0)
+                )
             else:
                 role = _infer_locator_role(raw_str)
                 pos_bed = np.asarray(lspec, dtype=np.float64)
+                loc_rot_sync = (0.0, 0.0, 0.0)
             pos_sync = bedrock_point_to_sync(pos_bed)
             loc_local = pos_sync - piv_sync
             out_locs.append(
@@ -2240,6 +2247,11 @@ def _decompile_bedrock_geojson(
                         0.0 if abs(float(loc_local[2])) < 1e-9 else round(float(loc_local[2]), 8),
                     ),
                     role=role,
+                    rot=(
+                        0.0 if abs(float(loc_rot_sync[0])) < 1e-9 else round(float(loc_rot_sync[0]), 6),
+                        0.0 if abs(float(loc_rot_sync[1])) < 1e-9 else round(float(loc_rot_sync[1]), 6),
+                        0.0 if abs(float(loc_rot_sync[2])) < 1e-9 else round(float(loc_rot_sync[2]), 6),
+                    ),
                 )
             )
         return out_locs

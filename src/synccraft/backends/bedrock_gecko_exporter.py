@@ -408,6 +408,29 @@ def _serialize_behavior_animations(
 
             bones_payload.setdefault(bname, {})["rotation"] = rot_kfs
 
+        # Export non-root prismatic / slide position channels (ADR 0008)
+        for bone in scene.bones:
+            bname = bone.name
+            if bname == root_bone_name or (bname, "position") in explicit_kf_channels:
+                continue
+            if not any(
+                bname in s.pose_position_deltas
+                and any(abs(float(c)) > 1e-5 for c in s.pose_position_deltas[bname])
+                for s in samples
+            ):
+                continue
+            pos_kfs_b: dict[str, list[float]] = {}
+            x_sign = -1.0 if bone.mirrored else 1.0
+            for s in samples:
+                dx, dy, dz = s.pose_position_deltas.get(bname, (0.0, 0.0, 0.0))
+                p_bed = sync_point_to_bedrock((x_sign * float(dx), float(dy), float(dz)))
+                pos_kfs_b[_fmt_time_key(s.time_s)] = vector([round(float(x), 4) for x in p_bed])
+            if clip.loop:
+                dx0, dy0, dz0 = samples[0].pose_position_deltas.get(bname, (0.0, 0.0, 0.0))
+                p0_bed = sync_point_to_bedrock((x_sign * float(dx0), float(dy0), float(dz0)))
+                pos_kfs_b[_fmt_time_key(clip.duration_s)] = vector([round(float(x), 4) for x in p0_bed])
+            bones_payload.setdefault(bname, {})["position"] = pos_kfs_b
+
         full_clip_key = clip.name if clip.name.startswith("animation.") else f"animation.{short_asset_id}.{clip.name}"
         animations_dict[full_clip_key] = {
             "loop": bool(clip.loop),
@@ -567,7 +590,15 @@ def _export_bedrock_or_gecko_common(
             used_loc_keys.add(cand_key)
 
             pos_vec = vector(sync_point_to_bedrock(origins[bone.name] + np.asarray(loc.local_offset, dtype=np.float64)))
-            if _infer_locator_role_hint(cand_key) == loc.role:
+            raw_le = getattr(loc, "local_euler", None)
+            has_lrot = raw_le is not None and np.any(np.abs(np.asarray(raw_le, dtype=np.float64)) > 1e-9)
+            if has_lrot:
+                rot_loc_bed = vector(sync_euler_to_bedrock(raw_le))
+                loc_obj: dict[str, Any] = {"offset": pos_vec, "rotation": rot_loc_bed}
+                if _infer_locator_role_hint(cand_key) != loc.role:
+                    loc_obj["role"] = loc.role
+                loc_dict[cand_key] = loc_obj
+            elif _infer_locator_role_hint(cand_key) == loc.role:
                 loc_dict[cand_key] = pos_vec
             else:
                 loc_dict[cand_key] = {"offset": pos_vec, "role": loc.role}
@@ -611,13 +642,16 @@ def _export_bedrock_or_gecko_common(
         animation_mode=animation_mode,
     )
 
-    return {
+    out_bundle: dict[str, Any] = {
         "target_profile": expected_profile,
         "runtime_import_verified": False,
         "serialized_vertex_max_error": round(float(max_err), 12),
         "geometry": geometry_doc,
         "animations": animations_doc,
     }
+    if program is not None and getattr(program, "source_map", None) is not None:
+        out_bundle["source_map"] = program.source_map.to_dict()
+    return out_bundle
 
 
 def export_bedrock(
@@ -664,3 +698,49 @@ def export_geckolib(
         num_animation_frames=num_animation_frames,
         animation_mode=animation_mode,
     )
+
+
+def export_bedrock_attachable(
+    scene: Any,
+    *,
+    program: Any | None = None,
+    atlas: dict[str, Any] | None = None,
+    attachable_identifier: str = "synccraft:custom_attachable",
+    texture_path: str = "textures/entity/attachable",
+    slot: str = "mainhand",
+    num_animation_frames: int = 12,
+) -> dict[str, Any]:
+    """Export a Bedrock 1.10.0 ``minecraft:attachable`` bundle for held/worn submodels (ADR 0008)."""
+    short_name = attachable_identifier.split(":")[-1] or "attachable"
+    geo_id = f"geometry.synccraft.{short_name}"
+    core = _export_bedrock_or_gecko_common(
+        scene,
+        expected_profile="bedrock_entity",
+        program=program,
+        atlas=atlas,
+        identifier=geo_id,
+        profile="bedrock_entity",
+        num_animation_frames=num_animation_frames,
+        animation_mode="keyframes",
+    )
+    anim_keys = list((core.get("animations") or {}).get("animations", {}).keys())
+    anim_map = {k.split(".")[-1]: k for k in anim_keys}
+    attachable_doc: dict[str, Any] = {
+        "format_version": "1.10.0",
+        "minecraft:attachable": {
+            "description": {
+                "identifier": attachable_identifier,
+                "materials": {"default": "entity_alphatest", "enchanted": "entity_alphatest_glint"},
+                "textures": {"default": texture_path, "enchanted": "textures/misc/enchanted_item_glint"},
+                "geometry": {"default": geo_id},
+                "animations": anim_map,
+                "scripts": {"animate": list(anim_map.keys())} if anim_map else {},
+                "render_controllers": ["controller.render.item_default"],
+                "synccraft_slot_hint": slot,
+            }
+        },
+    }
+    return {
+        **core,
+        "attachable": attachable_doc,
+    }

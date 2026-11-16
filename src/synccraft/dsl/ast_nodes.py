@@ -34,9 +34,10 @@ AXES_3D = frozenset({"x", "y", "z"})
 MIRROR_AXES = frozenset({"x", "z"})
 ALLOWED_SIZE_STEPS = frozenset({1.0, 0.5, 0.25, 0.125, 0.0625, 0.03125, 0.1, 0.05, 0.01, 0.001})
 AUDIT_PROFILES = frozenset({"strict", "sculpted", "authored"})
-DSL_VERSIONS = frozenset({"3.0", "3.1", "3.2"})
+DSL_VERSIONS = frozenset({"3.0", "3.1", "3.2", "4.0"})
 LOCATOR_ROLES = frozenset({"socket", "ik_effector", "vfx_emitter", "camera_focus", "hitbox", "rider_seat"})
 TRACK_LAWS = frozenset({"wave", "flap", "hinge", "impulse", "spin"})
+SLIDE_LAWS = frozenset({"piston", "wave", "hinge", "impulse"})
 KEYFRAME_CHANNELS = frozenset({"rotation", "position", "scale"})
 KEYFRAME_INTERPOLATIONS = frozenset({"linear", "catmullrom"})
 CONTROLLER_OPS = frozenset({">", "<", ">=", "<=", "==", "!="})
@@ -74,6 +75,7 @@ class Meta:
     dsl_version: str = "3.2"
     size_step: float = 1.0
     audit_profile: str = "strict"
+    units_per_block: int = 16
 
 
 @dataclass(frozen=True)
@@ -189,12 +191,20 @@ class Box:
     uv_faces: tuple[tuple[str, UVRect], ...] = ()
     texture: str | None = None
     blend_with: tuple[str, ...] = ()
+    uv_share_key: str | None = None
+    component_rest_pos: Vec3 | None = None
+    component_rest_euler: Vec3 | None = None
+    explicit_local_center: Vec3 | None = None
+    explicit_contact_with: tuple[str, ...] = ()
+    instance_name: str | None = None
 
     def __post_init__(self) -> None:
         if isinstance(self.uv_faces, (dict, list)) or self.uv_faces is None:
             object.__setattr__(self, "uv_faces", _normalize_uv_faces(self.uv_faces))
         if isinstance(self.blend_with, list) or self.blend_with is None:
             object.__setattr__(self, "blend_with", tuple(self.blend_with or ()))
+        if isinstance(self.explicit_contact_with, list) or self.explicit_contact_with is None:
+            object.__setattr__(self, "explicit_contact_with", tuple(self.explicit_contact_with or ()))
 
     @property
     def uv_faces_dict(self) -> dict[str, UVRect]:
@@ -251,11 +261,12 @@ def Plane(
 
 @dataclass(frozen=True)
 class Locator:
-    """Named 3D socket / IK-effector / emitter / seat node attached to a Bone frame."""
+    """Named oriented 3D socket / IK-effector / emitter / seat frame attached to a Bone."""
 
     name: str
     offset: Vec3 = (0.0, 0.0, 0.0)
     role: str = "socket"
+    rot: Vec3 = (0.0, 0.0, 0.0)
 
 
 @dataclass(frozen=True)
@@ -396,12 +407,23 @@ class SpringDecl:
 
 
 @dataclass(frozen=True)
+class PrismaticJointDecl:
+    """1-DOF linear slider/piston mechanical constraint on a non-root bone (ADR 0008)."""
+
+    bone: str
+    axis: str = "z"
+    limits: tuple[float, float] = (-4.0, 4.0)
+    axis_vec: Vec3 | None = None
+
+
+@dataclass(frozen=True)
 class KinematicsDecl:
-    """Typed @kinematics section binding IK, look, and secondary spring chains to @rig."""
+    """Typed @kinematics section binding IK, look, secondary spring, and prismatic joints to @rig."""
 
     ik_chains: tuple[IKChainDecl, ...] = ()
     look_chains: tuple[LookChainDecl, ...] = ()
     springs: tuple[SpringDecl, ...] = ()
+    prismatic_joints: tuple[PrismaticJointDecl, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -449,6 +471,19 @@ class IKDriveDecl:
 
 
 @dataclass(frozen=True)
+class SlideDriveDecl:
+    """1-DOF linear translation drive inside a @behavior clip (piston, slider, recoil)."""
+
+    bone: str
+    law: str
+    axis: str
+    amp_units: float
+    freq_hz: float
+    phase_deg: float = 0.0
+    bias_units: float = 0.0
+
+
+@dataclass(frozen=True)
 class ClipDecl:
     """Named multi-channel biomechanical/mechanical/keyframe animation clip in @behavior."""
 
@@ -459,6 +494,7 @@ class ClipDecl:
     muscle_drives: tuple[MuscleDriveDecl, ...] = ()
     ik_drives: tuple[IKDriveDecl, ...] = ()
     keyframes: tuple[KeyframeTrackDecl, ...] = ()
+    slide_drives: tuple[SlideDriveDecl, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -524,6 +560,8 @@ class Program:
     behavior: BehaviorDecl | None = None
     textures: tuple[TextureDecl, ...] = ()
     controller: ControllerDecl | None = None
+    assembly_spec: Any = None
+    source_map: Any = None
 
 
 def _finite_number(value: object) -> bool:
@@ -605,6 +643,12 @@ def validate_program(program: Program) -> Program:
         raise DSLValidationError("unknown archetype or target_profile")
     if type(meta.texel_density) is not int or meta.texel_density <= 0 or not _finite_number(meta.texel_density):
         raise DSLValidationError("texel_density must be a positive integer")
+    if (
+        type(meta.units_per_block) is not int
+        or not (1 <= meta.units_per_block <= 512)
+        or not _finite_number(meta.units_per_block)
+    ):
+        raise DSLValidationError("units_per_block must be a positive integer in [1, 512]")
     if not isinstance(meta.dsl_version, str) or meta.dsl_version not in DSL_VERSIONS:
         raise DSLValidationError(f"unsupported dsl_version {meta.dsl_version!r}; expected one of {sorted(DSL_VERSIONS)}")
     if not _finite_number(meta.size_step) or float(meta.size_step) not in ALLOWED_SIZE_STEPS:
@@ -796,6 +840,7 @@ def validate_program(program: Program) -> Program:
                     raise DSLValidationError("maximum supported declarations is 4096")
                 claim(item.name)
                 _vec(item.offset, f"{item.name}.offset")
+                _vec(item.rot, f"{item.name}.rot")
                 if not isinstance(item.role, str) or item.role not in LOCATOR_ROLES:
                     raise DSLValidationError(f"locator {item.name}: unknown role {item.role!r}")
                 local_locators.add(item.name)
@@ -879,8 +924,14 @@ def validate_program(program: Program) -> Program:
                 or item.name in item.blend_with
             ):
                 raise DSLValidationError(f"box {item.name}: blend_with must contain unique valid partner box identifiers")
+            if item.explicit_local_center is not None:
+                _vec(item.explicit_local_center, f"{item.name}.explicit_local_center")
+            if item.component_rest_pos is not None:
+                _vec(item.component_rest_pos, f"{item.name}.component_rest_pos")
+            if item.component_rest_euler is not None:
+                _vec(item.component_rest_euler, f"{item.name}.component_rest_euler")
             if item.place is None:
-                if local_boxes:
+                if local_boxes and item.explicit_local_center is None:
                     raise DSLValidationError(f"box {item.name}: subsequent same-bone boxes require an explicit place clause")
             else:
                 place = item.place
@@ -1078,8 +1129,29 @@ def validate_program(program: Program) -> Program:
         kdecl = program.kinematics
         if not isinstance(kdecl, KinematicsDecl):
             raise DSLValidationError("kinematics must be a KinematicsDecl or None")
-        if not kdecl.ik_chains and not kdecl.look_chains and not kdecl.springs:
-            raise DSLValidationError("@kinematics must declare at least one ik_chain, look_chain, or spring")
+        if not kdecl.ik_chains and not kdecl.look_chains and not kdecl.springs and not kdecl.prismatic_joints:
+            raise DSLValidationError(
+                "@kinematics must declare at least one ik_chain, look_chain, spring, or prismatic_joint"
+            )
+        for pj in kdecl.prismatic_joints:
+            if not isinstance(pj, PrismaticJointDecl):
+                raise DSLValidationError("prismatic_joints must contain PrismaticJointDecl objects")
+            if pj.bone not in expanded_bone_parent or pj.bone == root_bone_name:
+                raise DSLValidationError(f"prismatic_joint {pj.bone!r}: must reference a non-root bone")
+            if pj.axis not in AXES_3D:
+                raise DSLValidationError(f"prismatic_joint {pj.bone!r}: axis must be x, y, or z")
+            if (
+                not isinstance(pj.limits, tuple)
+                or len(pj.limits) != 2
+                or not _finite_number(pj.limits[0])
+                or not _finite_number(pj.limits[1])
+                or not (-128.0 <= float(pj.limits[0]) <= 0.0 <= float(pj.limits[1]) <= 128.0)
+            ):
+                raise DSLValidationError(
+                    f"prismatic_joint {pj.bone!r}: limits must satisfy -128 <= min <= 0 <= max <= 128"
+                )
+            if pj.axis_vec is not None:
+                _vec(pj.axis_vec, f"prismatic_joint.{pj.bone}.axis_vec")
         for ikc in kdecl.ik_chains:
             if not isinstance(ikc, IKChainDecl):
                 raise DSLValidationError("ik_chains must contain IKChainDecl objects")
@@ -1146,10 +1218,31 @@ def validate_program(program: Program) -> Program:
                 raise DSLValidationError(f"clip {clip.name}: duration_s must lie in [0.05, 60.0]")
             if type(clip.loop) is not bool:
                 raise DSLValidationError(f"clip {clip.name}: loop must be a boolean")
-            if not clip.tracks and not clip.muscle_drives and not clip.ik_drives and not clip.keyframes:
+            if (
+                not clip.tracks
+                and not clip.muscle_drives
+                and not clip.ik_drives
+                and not clip.keyframes
+                and not clip.slide_drives
+            ):
                 raise DSLValidationError(
-                    f"clip {clip.name}: must contain at least one track, key, muscle_drive, or ik_drive"
+                    f"clip {clip.name}: must contain at least one track, slide, key, muscle_drive, or ik_drive"
                 )
+            for sd in clip.slide_drives:
+                if not isinstance(sd, SlideDriveDecl):
+                    raise DSLValidationError("slide_drives must contain SlideDriveDecl objects")
+                if sd.bone not in expanded_bone_parent or sd.bone == root_bone_name:
+                    raise DSLValidationError(f"clip {clip.name}: slide references unknown or root bone {sd.bone!r}")
+                if sd.law not in SLIDE_LAWS:
+                    raise DSLValidationError(f"clip {clip.name}: unknown slide law {sd.law!r}")
+                if sd.axis not in AXES_3D:
+                    raise DSLValidationError(f"clip {clip.name}: slide axis must be x, y, or z")
+                if not _finite_number(sd.amp_units) or abs(float(sd.amp_units)) > 64.0:
+                    raise DSLValidationError(f"clip {clip.name}: slide amp_units must lie in [-64, 64]")
+                if not _finite_number(sd.freq_hz) or not (0.0 < float(sd.freq_hz) <= 20.0):
+                    raise DSLValidationError(f"clip {clip.name}: slide freq_hz must lie in (0, 20]")
+                if not _finite_number(sd.phase_deg) or not _finite_number(sd.bias_units) or abs(float(sd.bias_units)) > 64.0:
+                    raise DSLValidationError(f"clip {clip.name}: invalid slide phase_deg or bias_units")
             for tr in clip.tracks:
                 if not isinstance(tr, TrackDecl):
                     raise DSLValidationError("tracks must contain TrackDecl objects")

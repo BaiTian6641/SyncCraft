@@ -1,8 +1,8 @@
-# SyncCraft v3.2 — Symbolic & Physical 3D Block-Asset World Model
+# SyncCraft v4.0 — Symbolic, Parametric & Physical 3D Block-Asset World Model
 
-**A runnable, CPU-verified compiler, physics/surface world model, clean-room dataset generator, and Colab LoRA training/evaluation suite.**
+**A runnable, CPU-verified CAD-style Block-DSL v4.0 compiler, physics/surface world model, clean-room dataset generator, and Colab LoRA training/evaluation suite.**
 
-The supplied v3.0 research plan (`source/synccraft-v3-plan.pdf`) and `ADR 0001`–`0006` define the system architecture: editable 3D block assets represented as typed `Block-DSL` programs, deterministic multi-target compilers, shared right-handed `SE(3)` kinematics, 15-axis OBB collision & physical contact auditing, stateful surface physics, musculoskeletal IK/locomotion, and measured Repair/PGD baselines.
+The supplied v3.0 research plan (`source/synccraft-v3-plan.pdf`) and `ADR 0001`–`0008` define the system architecture: editable 3D block assets represented as typed `Block-DSL` programs (supporting both monolithic `@rig` skeletons and top-down `@layout` / `@component` / `@assembly` designs), deterministic multi-target compilers, shared right-handed `SE(3)` kinematics, 15-axis OBB collision & physical contact auditing, adaptive swept motion validation, stateful surface physics, musculoskeletal IK/locomotion, and measured Repair/PGD baselines.
 
 Start with [START_HERE.md](START_HERE.md). Engineering governance is in [AGENTS.md](AGENTS.md), task status is in [TASKS.json](TASKS.json) and [docs/STATUS.md](docs/STATUS.md), and the full architectural review is in [docs/REPO_COMPREHENSIVE_REVIEW.md](docs/REPO_COMPREHENSIVE_REVIEW.md).
 
@@ -33,12 +33,12 @@ Each compile writes a `.bbmodel`, canonical DSL, typed AST JSON, world-space sce
 
 | Area | Implemented & CPU-verified scope |
 | --- | --- |
-| Block-DSL v3.2 | Typed AST, bounded zero-`eval` parser, compact canonical formatter, Lark grammar parity; `size_step`, `plane`, per-box `rotate`, `locator` sockets, `joint_limits`, arbitrary-depth nested `mirror_x`, `let`, `def`/`use`, `chain`, `mirror`/`radial`, `spring`, `@controller`, `@textures`, `@materials`, `@style`, `@muscles`, `@kinematics`, `@behavior` |
-| Shared Kinematics & Collision | Shared NumPy & PyTorch `SE(3)` / `O(3)` chains (`det(R) = +1`), 15-axis OBB SAT with degenerate cross-axis masking, `P1-02` physical contact-patch audit & `authored` profile |
-| Biomechanics & Motion | Reduced-order Zajac/Hill active force-length + passive parallel-elastic `@muscles`, biarticular tendon couplings, Box-UV-safe `belly_box` bulge, 2-bone IK + CCD chains, `< 0.02u` stance-slip `foot_cycle` gait, swept-pose SAT |
-| Surface Physics & Pixel-PBR | Rest-space manifold Laplacian, CFL-substepped Gray–Scott reaction–diffusion, Archard wear & oxidation; linear-space Cook–Torrance GGX, Airy thin-film, OKLab/OKLCH ramps; Vanilla, LabPBR 1.3, and glTF 2.0 PBR compilers + CPU 3D ray-OBB renderer |
-| Multi-Backend Exporters & Intake | Blockbench 5 `.bbmodel` (static + animated), Bedrock `1.12.0` `.geo.json` + `1.8.0` `.animation.json` (with exact left-handed X-reflection), GeckoLib, Java modern/legacy `.json`, zero-`eval` decompilers, and 5-pillar closed-loop artist assistant |
-| Clean-Room Dataset & World Benchmark | `55` core procedural families + `10` clean-room Apex musculoskeletal families (`elemental_companion_critter`, `modular_botanical_healing_station`, etc.), zero split-name prompt leakage, 3 holdout splits (`test_unseen_params`, `test_unseen`, `test_compositional`), and 7-Level World Capability Ladder |
+| Block-DSL v4.0 & v3.2 | Additive CAD-style `@layout` DAG (`param`, `let`, `budget`, `envelope`), reusable `@component` modules (`material_slots`, `uv_policy: unique \| shared`, 6-DOF `frame` sockets), `@assembly` / `subassembly` (`fixed`/`revolute`/`prismatic` frame mates, `bind`, `slide` position drives, `SourceMap`), plus full v3.2 `@rig` (`audit_profile: sculpted`, `blend_with`, `spin`, `size_step`, `plane`, `mirror_x`, `radial`, `chain`, `def`/`use`, `@muscles`, `@kinematics`, `@behavior`, `@controller`) |
+| Shared Kinematics & Collision | Shared NumPy & PyTorch `SE(3)` / `O(3)` chains (`det(R) = +1`), 15-axis OBB SAT with degenerate cross-axis masking, `strict` (`P1-02`), `sculpted` (`ADR 0007`), & `authored` profiles, with zero cross-instance `fixed`-weld collision immunity |
+| Biomechanics & Motion | Reduced-order Zajac/Hill `@muscles`, biarticular tendon couplings, Box-UV-safe `belly_box` bulge, 2-bone IK + CCD chains, `< 0.02u` stance-slip `foot_cycle` gait, `prismatic` sliders, and per-interval adaptive swept-pose SAT (`<= 10°` max step) |
+| Surface Physics & Pixel-PBR | Component-local rest 3D material basis + world-space posed AO/weathering; rest-space manifold Laplacian, CFL-substepped Gray–Scott RD, Cook–Torrance GGX, Airy thin-film, OKLab/OKLCH ramps; decoupled `units_per_block` vs `texel_density`; Vanilla, LabPBR 1.3, and glTF 2.0 compilers |
+| Multi-Backend Exporters & Intake | Blockbench 5 `.bbmodel` (static + animated `rotation`/`position` + `SourceMap`), Bedrock `1.12.0`/`1.26.40` `.geo.json` (oriented locators) + `1.8.0` `.animation.json` + `1.10.0` `minecraft:attachable`, GeckoLib, Java modern/legacy `.json`, zero-`eval` decompilers (`assembly_provenance="inferred_subtree"`), and 5-pillar artist assistant |
+| Clean-Room Dataset & World Benchmark | `55` core procedural families + `10` clean-room Apex musculoskeletal families + v4.0 `ModularElderDragon` & `ModularArtilleryWalker` assemblies, 7-Level World Capability Ladder, and 4 modular v4.0 World-Model tasks (`0.0` non-target edit drift) |
 | Repair, Gate G2 & Colab Notebook | Bounded repair loop (`run_bounded_repair_policy`, `<= 3` re-audits with monotonic `CostLedger`), prompt-adherence verifier (`verify_prompt_adherence`), artifact-derived Gate G2 evaluator, and [notebooks/synccraft_end_to_end.ipynb](notebooks/synccraft_end_to_end.ipynb) (`StreamMixtureSampler`, VRAM-safe response loss, 20-min full-state checkpointing & resume, smoke-upload refusal) |
 | VS Code Language Extension | [editors/vscode-blockdsl](editors/vscode-blockdsl): TextMate + Markdown code-fence highlighting, deterministic `mirror_x`/`radial`/`chain`/`def` expanded-symbol auto-completion, hover cards, snippets, go-to-definition, canonical formatting, live SE(3) + 15-axis SAT audit diagnostics, and zero-`npm` `.vsix` packager (`python scripts/package_vscode_extension.py`) |
 
@@ -61,7 +61,7 @@ See [docs/STATUS.md](docs/STATUS.md), [TASKS.json](TASKS.json), [docs/tasks/BACK
 | `examples/` | Original deterministic Block-DSL example assets; no imported game textures |
 | `tests/` | Executable CPU regression, physics, dataset hygiene, adversarial & notebook E2E suites |
 | `configs/` | Candidate models, training config (`max_seq_len: 8192`), Colab G4 budget, Gate G2 & dataset policies |
-| `docs/` | Architecture, ADRs (`0001`–`0006`), geometry/compatibility contracts, status & comprehensive audit |
+| `docs/` | Architecture, ADRs (`0001`–`0008`), geometry/compatibility contracts, status & comprehensive audit |
 | `agent/` | Local-agent prompt and session reporting template |
 | `artifacts/` | Validation summaries and recorded local CPU test evidence |
 | `source/` | Unmodified supplied research plan plus extracted text and provenance |

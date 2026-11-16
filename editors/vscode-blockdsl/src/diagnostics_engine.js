@@ -58,10 +58,13 @@ function runFastDiagnostics(docIndex) {
   // 3. Required sections check (only when file is non-empty)
   if (masked.trim().length > 0) {
     const presentSections = new Set(scopes.filter((s) => s.kind === "section").map((s) => s.name));
-    for (const req of ["@meta", "@palette", "@rig"]) {
+    for (const req of ["@meta", "@palette"]) {
       if (!presentSections.has(req)) {
         pushSpan(0, 1, "error", "missing_required_section", `Missing required Block-DSL section '${req}'.`);
       }
+    }
+    if (!presentSections.has("@rig") && !presentSections.has("@assembly")) {
+      pushSpan(0, 1, "error", "missing_required_section", "Missing required Block-DSL geometry section ('@rig' or '@assembly').");
     }
   }
 

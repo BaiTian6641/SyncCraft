@@ -27,6 +27,10 @@ import unittest
 import zipfile
 
 from synccraft.dsl import ast_nodes
+from synccraft.world.assembly_world_tasks import (
+    MODULAR_ARTILLERY_WALKER_V4_DSL,
+    MODULAR_SCULPTED_DRAGON_V4_DSL,
+)
 from synccraft.world.exemplars import COLOSSAL_WALKING_CITADEL_DSL, SCULPTED_ELDER_WYVERN_DSL
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -85,6 +89,7 @@ class VSCodeBlockDSLExtensionTests(unittest.TestCase):
             ast_nodes.AXES_3D,
             ast_nodes.LOCATOR_ROLES,
             ast_nodes.TRACK_LAWS,
+            ast_nodes.SLIDE_LAWS,
             ast_nodes.KEYFRAME_CHANNELS,
             ast_nodes.KEYFRAME_INTERPOLATIONS,
             ast_nodes.MATERIAL_FAMILIES_DSL,
@@ -95,7 +100,7 @@ class VSCodeBlockDSLExtensionTests(unittest.TestCase):
                 self.assertIn(token, tm_text, f"Missing '{token}' in blockdsl.tmLanguage.json")
                 self.assertIn(token, catalog_text, f"Missing '{token}' in src/catalog.js")
 
-        for sec in ("@meta", "@textures", "@palette", "@rig", "@materials", "@style", "@muscles", "@kinematics", "@behavior", "@controller"):
+        for sec in ("@meta", "@layout", "@textures", "@palette", "@component", "@assembly", "@rig", "@materials", "@style", "@muscles", "@kinematics", "@behavior", "@controller"):
             self.assertIn(sec[1:], tm_text)
             self.assertIn(sec, catalog_text)
 
@@ -139,6 +144,8 @@ class VSCodeBlockDSLExtensionTests(unittest.TestCase):
             harness = Path(tmp) / "run_js_tests.js"
             citadel_json = json.dumps(COLOSSAL_WALKING_CITADEL_DSL)
             wyvern_json = json.dumps(SCULPTED_ELDER_WYVERN_DSL)
+            dragon_v4_json = json.dumps(MODULAR_SCULPTED_DRAGON_V4_DSL)
+            walker_v4_json = json.dumps(MODULAR_ARTILLERY_WALKER_V4_DSL)
             ext_dir_json = json.dumps(str(EXT_DIR))
 
             if kind == "jsc":
@@ -190,6 +197,17 @@ const citIdx = indexDocument(citadelDsl);
 assert(runFastDiagnostics(citIdx).length === 0, "Citadel must have 0 fast lint errors");
 const wyvIdx = indexDocument(wyvernDsl);
 assert(runFastDiagnostics(wyvIdx).length === 0, "Wyvern must have 0 fast lint errors");
+
+// Verify Block-DSL v4.0 assemblies (@layout, @component, @assembly) also index cleanly with 0 fast lint errors!
+const dragonV4Dsl = {dragon_v4_json};
+const walkerV4Dsl = {walker_v4_json};
+const drgV4Idx = indexDocument(dragonV4Dsl);
+assert(runFastDiagnostics(drgV4Idx).length === 0, "Dragon v4.0 must have 0 fast lint errors, got: " + JSON.stringify(runFastDiagnostics(drgV4Idx)));
+const wlkV4Idx = indexDocument(walkerV4Dsl);
+assert(runFastDiagnostics(wlkV4Idx).length === 0, "Walker v4.0 must have 0 fast lint errors, got: " + JSON.stringify(runFastDiagnostics(wlkV4Idx)));
+assert(drgV4Idx.symbols.expandedBones.some((b) => b.name === "foreleg_r.shin"), "Dragon v4.0 must expand mirrored dotted bone foreleg_r.shin");
+const hSkull = provideHover(drgV4Idx, dragonV4Dsl.indexOf("DragonSkull("));
+assert(hSkull && hSkull.markdown.includes("horn_socket_l"), "@component DragonSkull hover must list public frames");
 
 // Check deterministic expansion of mirror_x and radial(count=4)
 const expBoneNames = citIdx.symbols.expandedBones.map((b) => b.name);

@@ -55,8 +55,10 @@ from .ast_nodes import (
     Palette,
     Place,
     Plane,
+    PrismaticJointDecl,
     Program,
     RadialSpec,
+    SlideDriveDecl,
     SpringDecl,
     StyleDecl,
     TendonCoupling,
@@ -66,6 +68,29 @@ from .ast_nodes import (
     UnsupportedFeature,
     Vec3,
     validate_program,
+)
+from .assembly_ir import (
+    AssemblyDecl,
+    AssemblySpec,
+    AttachmentFrameDecl,
+    BindDecl,
+    BudgetSpec,
+    ComponentBoneTemplate,
+    ComponentBoxTemplate,
+    ComponentControlDecl,
+    ComponentDef,
+    ComponentInstanceDecl,
+    ComponentLocatorTemplate,
+    ComponentParamDecl,
+    ConnectionDecl,
+    EnvelopeSpec,
+    LayoutDecl,
+    LayoutLetDecl,
+    LayoutParamDecl,
+    SubassemblyDecl,
+    evaluate_layout_dag,
+    format_assembly_sections,
+    resolve_assembly_program,
 )
 
 
@@ -377,6 +402,107 @@ class _Parser:
         self.take("]")
         return tuple(items)
 
+    def ident_or_dotted(self) -> str:
+        parts = [self.ident()]
+        while self.at("."):
+            self.take(".")
+            parts.append(self.ident())
+        return ".".join(parts)
+
+    def ident_or_dotted_list(self) -> tuple[str, ...]:
+        self.take("[")
+        items = [self.ident_or_dotted()]
+        while self.at(","):
+            self.take(",")
+            items.append(self.ident_or_dotted())
+        self.take("]")
+        return tuple(items)
+
+    def _capture_symbolic_expr(self) -> str:
+        """Consume a balanced arithmetic expression and return its canonical symbolic string."""
+        stmt_starters = {
+            "param",
+            "let",
+            "budget",
+            "envelope",
+            "material_slots",
+            "uv_policy",
+            "box",
+            "plane",
+            "locator",
+            "bone",
+            "frame",
+            "control",
+            "instance",
+            "subassembly",
+            "connect",
+            "bind",
+            "root_pivot",
+            "root_instance",
+        }
+        parts: list[str] = []
+        depth = 0
+        expect_operand = True
+        while self.token.kind != "EOF":
+            tok = self.token
+            if depth == 0:
+                if tok.value in (",", "]", "}", ")", ";", "["):
+                    break
+                if not expect_operand and tok.kind == "IDENT" and tok.value in stmt_starters:
+                    break
+                if not expect_operand and tok.value == "@":
+                    break
+            if tok.value == "(":
+                depth += 1
+                parts.append("(")
+                self.index += 1
+                expect_operand = True
+            elif tok.value == ")":
+                depth -= 1
+                parts.append(")")
+                self.index += 1
+                expect_operand = False
+            elif tok.kind == "PUNCT" and tok.value in ("+", "-", "*", "/"):
+                if expect_operand and tok.value in ("+", "-"):
+                    parts.append(tok.value)
+                else:
+                    parts.append(f" {tok.value} ")
+                self.index += 1
+                expect_operand = True
+            elif depth > 0 and tok.value == ",":
+                parts.append(", ")
+                self.index += 1
+                expect_operand = True
+            elif tok.kind in ("NUMBER", "IDENT"):
+                if not expect_operand:
+                    break
+                parts.append(tok.value)
+                self.index += 1
+                if self.token.value == "(":
+                    continue
+                expect_operand = False
+            else:
+                break
+        expr_s = "".join(parts).strip()
+        if not expr_s:
+            self.fail(f"expected symbolic numeric expression, got {self.token.value!r}")
+        return expr_s
+
+    def _capture_symbolic_vec(self, count: int = 3, allow_2d: bool = False) -> tuple[str, ...]:
+        self.take("[")
+        first = self._capture_symbolic_expr()
+        self.take(",")
+        second = self._capture_symbolic_expr()
+        if allow_2d and self.at("]"):
+            self.take("]")
+            return (first, second)
+        items = [first, second]
+        for _ in range(2, count):
+            self.take(",")
+            items.append(self._capture_symbolic_expr())
+        self.take("]")
+        return tuple(items)
+
     def joint_limits_matrix(self) -> JointLimits:
         self.take("[")
         rx = self.vector(2)
@@ -465,6 +591,7 @@ class _Parser:
         dsl_version = "3.2"
         size_step = 1.0
         audit_profile = "strict"
+        units_per_block = 16
         seen_fields: set[str] = set()
         while not self.at("}"):
             key = self.ident()
@@ -478,6 +605,8 @@ class _Parser:
                 profile = self.ident()
             elif key == "texel_density":
                 density = int(self.number(integer=True))
+            elif key == "units_per_block":
+                units_per_block = int(self.number(integer=True))
             elif key == "dsl_version":
                 if self.token.kind == "STRING":
                     dsl_version = self.string_literal()
@@ -512,6 +641,7 @@ class _Parser:
             dsl_version=dsl_version,
             size_step=size_step,
             audit_profile=audit_profile,
+            units_per_block=units_per_block,
         )
 
     def textures_decl(self) -> list[TextureDecl]:
@@ -533,17 +663,649 @@ class _Parser:
         self.take("}")
         return decls
 
+    def _parse_layout_section(self) -> LayoutDecl:
+        self.take("{")
+        params: list[LayoutParamDecl] = []
+        lets: list[LayoutLetDecl] = []
+        max_boxes: int | None = None
+        max_bones: int | None = None
+        max_atlas_px: int | None = None
+        max_span: Vec3 | None = None
+        min_ground_y: float | None = None
+
+        while not self.at("}"):
+            if self.at("param"):
+                self.take("param")
+                pname = self.ident()
+                self.take("=")
+                d_expr = self._capture_symbolic_expr()
+                lo: float | None = None
+                hi: float | None = None
+                if self.at("["):
+                    self.take("[")
+                    lo = float(self.number())
+                    self.take(",")
+                    hi = float(self.number())
+                    self.take("]")
+                self.maybe_take(";")
+                self.maybe_take(",")
+                params.append(LayoutParamDecl(name=pname, default_expr=d_expr, min_val=lo, max_val=hi))
+            elif self.at("let"):
+                self.take("let")
+                lname = self.ident()
+                self.take("=")
+                l_expr = self._capture_symbolic_expr()
+                self.maybe_take(";")
+                self.maybe_take(",")
+                lets.append(LayoutLetDecl(name=lname, expr=l_expr))
+            elif self.at("budget"):
+                self.take("budget")
+                bkey = self.ident()
+                if self.at("=") or self.at(":"):
+                    self.index += 1
+                else:
+                    self.fail("expected '=' or ':' after budget key")
+                if bkey == "max_boxes":
+                    max_boxes = int(self.number(integer=True))
+                elif bkey == "max_bones":
+                    max_bones = int(self.number(integer=True))
+                elif bkey == "max_atlas_px":
+                    max_atlas_px = int(self.number(integer=True))
+                else:
+                    self.fail(f"unknown @layout budget key {bkey!r}")
+                self.maybe_take(";")
+                self.maybe_take(",")
+            elif self.at("envelope"):
+                self.take("envelope")
+                ekey = self.ident()
+                if self.at("=") or self.at(":"):
+                    self.index += 1
+                else:
+                    self.fail("expected '=' or ':' after envelope key")
+                if ekey == "max_span":
+                    sv = self.vector(3)
+                    max_span = (float(sv[0]), float(sv[1]), float(sv[2]))
+                elif ekey == "min_ground_y":
+                    min_ground_y = float(self.number())
+                else:
+                    self.fail(f"unknown @layout envelope key {ekey!r}")
+                self.maybe_take(";")
+                self.maybe_take(",")
+            else:
+                self.fail("expected param, let, budget, envelope, or '}' in @layout")
+        self.take("}")
+        layout_decl = LayoutDecl(
+            params=tuple(params),
+            lets=tuple(lets),
+            budget=BudgetSpec(max_boxes=max_boxes, max_bones=max_bones, max_atlas_px=max_atlas_px),
+            envelope=EnvelopeSpec(max_span=max_span, min_ground_y=min_ground_y),
+        )
+        # Bind evaluated layout values into `self.env` so @palette/@kinematics/@behavior expressions can read them too!
+        for k, v in evaluate_layout_dag(layout_decl).items():
+            self.env[k] = v
+        return layout_decl
+
+    def _parse_component_box_or_plane(self, is_plane_kw: bool) -> ComponentBoxTemplate:
+        self.take("plane" if is_plane_kw else "box")
+        bname = self.ident()
+        has_place = False
+        p_base: str | None = None
+        p_anc: tuple[str, str, str] = ("0", "0", "0")
+        p_alg: tuple[str, str, str] = ("0", "0", "0")
+        p_off: tuple[str, str, str] = ("0", "0", "0")
+        if self.at("place"):
+            has_place = True
+            self.take("place")
+            self.take("(")
+            while not self.at(")"):
+                pk = self.ident()
+                self.take("=")
+                if pk == "base_box":
+                    p_base = self.ident()
+                elif pk == "anchor":
+                    p_anc = self._capture_symbolic_vec(3)  # type: ignore[assignment]
+                elif pk == "align":
+                    p_alg = self._capture_symbolic_vec(3)  # type: ignore[assignment]
+                elif pk == "offset":
+                    p_off = self._capture_symbolic_vec(3)  # type: ignore[assignment]
+                else:
+                    self.fail(f"unexpected place argument {pk!r}")
+                if not self.maybe_take(","):
+                    break
+            self.take(")")
+        self.take("{")
+        sz_exprs: tuple[str, ...] | None = None
+        mat_slot: str | None = None
+        p_norm: str | None = None
+        inf_expr = "0"
+        rot_e: tuple[str, str, str] = ("0", "0", "0")
+        piv_e: tuple[str, str, str] | None = None
+        cull: tuple[str, ...] = ()
+        blend_w: tuple[str, ...] = ()
+        while not self.at("}"):
+            fk = self.ident()
+            self.take(":")
+            if fk == "size":
+                sz_exprs = self._capture_symbolic_vec(2 if is_plane_kw else 3, allow_2d=is_plane_kw)
+            elif fk in ("material", "mat"):
+                mat_slot = self.ident()
+            elif fk in ("normal", "plane_normal"):
+                p_norm = self.ident()
+            elif fk == "inflate":
+                inf_expr = self._capture_symbolic_expr()
+            elif fk == "rotate":
+                rot_e = self._capture_symbolic_vec(3)  # type: ignore[assignment]
+            elif fk == "pivot":
+                piv_e = self._capture_symbolic_vec(3)  # type: ignore[assignment]
+            elif fk == "cullface":
+                cull = self.ident_list()
+            elif fk == "blend_with":
+                blend_w = self.ident_list()
+            else:
+                self.fail(f"unexpected @component box/plane field {fk!r}")
+            self.maybe_take(",")
+        self.take("}")
+        if sz_exprs is None or mat_slot is None:
+            self.fail(f"@component element {bname!r} requires size and material")
+        return ComponentBoxTemplate(
+            name=bname,
+            is_plane=is_plane_kw,
+            size_exprs=sz_exprs,  # type: ignore[arg-type]
+            material_slot=mat_slot,  # type: ignore[arg-type]
+            place_base=p_base,
+            place_anchor=p_anc,
+            place_align=p_alg,
+            place_offset=p_off,
+            has_place=has_place,
+            inflate_expr=inf_expr,
+            rotate_exprs=rot_e,
+            pivot_exprs=piv_e,
+            cullface=cull,
+            blend_with=blend_w,
+            plane_normal=p_norm,
+        )
+
+    def _parse_component_locator(self) -> ComponentLocatorTemplate:
+        self.take("locator")
+        lname = self.ident()
+        self.take("{")
+        off_e: tuple[str, str, str] = ("0", "0", "0")
+        rot_e: tuple[str, str, str] = ("0", "0", "0")
+        role = "socket"
+        while not self.at("}"):
+            k = self.ident()
+            self.take(":")
+            if k == "offset":
+                off_e = self._capture_symbolic_vec(3)  # type: ignore[assignment]
+            elif k == "rot":
+                rot_e = self._capture_symbolic_vec(3)  # type: ignore[assignment]
+            elif k == "role":
+                role = self.ident()
+            else:
+                self.fail(f"unexpected locator field {k!r}")
+            self.maybe_take(",")
+        self.take("}")
+        return ComponentLocatorTemplate(name=lname, offset_exprs=off_e, rot_exprs=rot_e, role=role)
+
+    def _parse_component_bone(self, depth: int = 0) -> ComponentBoneTemplate:
+        if depth > 32:
+            self.fail("@component bone nesting exceeds 32")
+        self.take("bone")
+        bname = self.ident()
+        j_mode = False
+        a_parent: str | None = None
+        a_anc: tuple[str, str, str] = ("0", "0", "0")
+        a_alg: tuple[str, str, str] = ("0", "0", "0")
+        a_off: tuple[str, str, str] = ("0", "0", "0")
+        a_det = False
+        if self.at("attach"):
+            self.take("attach")
+            self.take("(")
+            while not self.at(")"):
+                ak = self.ident()
+                self.take("=")
+                if ak == "parent_box":
+                    a_parent = self.ident()
+                elif ak == "anchor":
+                    a_anc = self._capture_symbolic_vec(3)  # type: ignore[assignment]
+                elif ak == "align":
+                    a_alg = self._capture_symbolic_vec(3)  # type: ignore[assignment]
+                elif ak == "offset":
+                    a_off = self._capture_symbolic_vec(3)  # type: ignore[assignment]
+                elif ak == "detached":
+                    a_det = self.boolean()
+                else:
+                    self.fail(f"unexpected attach argument {ak!r}")
+                if not self.maybe_take(","):
+                    break
+            self.take(")")
+        elif self.at("joint"):
+            j_mode = True
+            self.take("joint")
+            self.take("(")
+            while not self.at(")"):
+                jk = self.ident()
+                self.take("=")
+                if jk == "parent":
+                    a_parent = self.ident()
+                elif jk == "at":
+                    a_off = self._capture_symbolic_vec(3)  # type: ignore[assignment]
+                elif jk == "align":
+                    a_alg = self._capture_symbolic_vec(3)  # type: ignore[assignment]
+                elif jk == "detached":
+                    a_det = self.boolean()
+                else:
+                    self.fail(f"unexpected joint argument {jk!r}")
+                if not self.maybe_take(","):
+                    break
+            self.take(")")
+        else:
+            self.fail(f"@component bone {bname!r} requires attach(...) or joint(...)")
+        if a_parent is None:
+            self.fail(f"@component bone {bname!r} missing parent box")
+
+        self.take("{")
+        rest_e: tuple[str, str, str] = ("0", "0", "0")
+        j_lims: JointLimits | None = None
+        if self.at("rest_euler"):
+            self.field("rest_euler")
+            rest_e = self._capture_symbolic_vec(3)  # type: ignore[assignment]
+            self.maybe_take(",")
+        if self.at("joint_limits"):
+            self.field("joint_limits")
+            j_lims = self.joint_limits_matrix()
+            self.maybe_take(",")
+
+        boxes: list[ComponentBoxTemplate] = []
+        locs: list[ComponentLocatorTemplate] = []
+        ch_bones: list[ComponentBoneTemplate] = []
+        while not self.at("}"):
+            if self.at("box"):
+                boxes.append(self._parse_component_box_or_plane(False))
+            elif self.at("plane"):
+                boxes.append(self._parse_component_box_or_plane(True))
+            elif self.at("locator"):
+                locs.append(self._parse_component_locator())
+            elif self.at("bone"):
+                ch_bones.append(self._parse_component_bone(depth + 1))
+            else:
+                self.fail(f"unexpected token {self.token.value!r} in @component bone {bname!r}")
+        self.take("}")
+        return ComponentBoneTemplate(
+            name=bname,
+            attach_parent=a_parent,  # type: ignore[arg-type]
+            attach_anchor=a_anc,
+            attach_align=a_alg,
+            attach_offset=a_off,
+            attach_joint_mode=j_mode,
+            attach_detached=a_det,
+            rest_euler_exprs=rest_e,
+            joint_limits=j_lims,
+            boxes=tuple(boxes),
+            locators=tuple(locs),
+            children=tuple(ch_bones),
+        )
+
+    def _parse_component_section(self) -> ComponentDef:
+        cname = self.ident()
+        self.take("{")
+        params: list[ComponentParamDecl] = []
+        mat_slots: list[tuple[str, str | None]] = []
+        uv_policy = "unique"
+        lets: list[LayoutLetDecl] = []
+        r_boxes: list[ComponentBoxTemplate] = []
+        r_locs: list[ComponentLocatorTemplate] = []
+        c_bones: list[ComponentBoneTemplate] = []
+        frames: list[AttachmentFrameDecl] = []
+        controls: list[ComponentControlDecl] = []
+
+        while not self.at("}"):
+            if self.at("param"):
+                self.take("param")
+                pn = self.ident()
+                self.take("=")
+                pe = self._capture_symbolic_expr()
+                lo: float | None = None
+                hi: float | None = None
+                if self.at("["):
+                    self.take("[")
+                    lo = float(self.number())
+                    self.take(",")
+                    hi = float(self.number())
+                    self.take("]")
+                self.maybe_take(";")
+                self.maybe_take(",")
+                params.append(ComponentParamDecl(name=pn, default_expr=pe, min_val=lo, max_val=hi))
+            elif self.at("material_slots"):
+                self.field("material_slots")
+                self.take("[")
+                if not self.at("]"):
+                    while True:
+                        sn = self.ident()
+                        sd: str | None = None
+                        if self.maybe_take("="):
+                            sd = self.ident()
+                        mat_slots.append((sn, sd))
+                        if not self.maybe_take(","):
+                            break
+                self.take("]")
+                self.maybe_take(",")
+            elif self.at("uv_policy"):
+                self.field("uv_policy")
+                uv_policy = self.ident()
+                self.maybe_take(",")
+            elif self.at("let"):
+                self.take("let")
+                ln = self.ident()
+                self.take("=")
+                le = self._capture_symbolic_expr()
+                self.maybe_take(";")
+                self.maybe_take(",")
+                lets.append(LayoutLetDecl(name=ln, expr=le))
+            elif self.at("box"):
+                r_boxes.append(self._parse_component_box_or_plane(False))
+            elif self.at("plane"):
+                r_boxes.append(self._parse_component_box_or_plane(True))
+            elif self.at("locator"):
+                r_locs.append(self._parse_component_locator())
+            elif self.at("bone"):
+                c_bones.append(self._parse_component_bone(0))
+            elif self.at("frame"):
+                self.take("frame")
+                fname = self.ident()
+                self.take("{")
+                f_pos: tuple[str, str, str] = ("0", "0", "0")
+                f_rot: tuple[str, str, str] = ("0", "0", "0")
+                f_box: str | None = None
+                f_anc: tuple[str, str, str] = ("0", "0", "0")
+                f_off: tuple[str, str, str] = ("0", "0", "0")
+                f_role = "socket"
+                f_exp = False
+                while not self.at("}"):
+                    fk = self.ident()
+                    self.take(":")
+                    if fk == "pos":
+                        f_pos = self._capture_symbolic_vec(3)  # type: ignore[assignment]
+                    elif fk == "rot":
+                        f_rot = self._capture_symbolic_vec(3)  # type: ignore[assignment]
+                    elif fk == "on_box":
+                        f_box = self.ident()
+                    elif fk == "anchor":
+                        f_anc = self._capture_symbolic_vec(3)  # type: ignore[assignment]
+                    elif fk == "offset":
+                        f_off = self._capture_symbolic_vec(3)  # type: ignore[assignment]
+                    elif fk == "role":
+                        f_role = self.ident()
+                    elif fk == "export_locator":
+                        f_exp = self.boolean()
+                    else:
+                        self.fail(f"unexpected frame field {fk!r}")
+                    self.maybe_take(",")
+                self.take("}")
+                frames.append(
+                    AttachmentFrameDecl(
+                        name=fname,
+                        pos=f_pos,
+                        rot=f_rot,
+                        on_box=f_box,
+                        anchor=f_anc,
+                        offset=f_off,
+                        role=f_role,
+                        export_locator=f_exp,
+                    )
+                )
+            elif self.at("control"):
+                self.take("control")
+                ct_name = self.ident()
+                self.take("{")
+                ct_tgt: str | None = None
+                ct_ch = "rotation"
+                ct_ax = "x"
+                ct_lim: tuple[float, float] = (-45.0, 45.0)
+                while not self.at("}"):
+                    ck = self.ident()
+                    self.take(":")
+                    if ck == "target":
+                        ct_tgt = self.ident()
+                    elif ck == "channel":
+                        ct_ch = self.ident()
+                    elif ck == "axis":
+                        ct_ax = self.ident()
+                    elif ck == "limits":
+                        lv = self.vector(2)
+                        ct_lim = (float(lv[0]), float(lv[1]))
+                    else:
+                        self.fail(f"unexpected control field {ck!r}")
+                    self.maybe_take(",")
+                self.take("}")
+                if ct_tgt is None:
+                    self.fail(f"control {ct_name!r} requires target field")
+                controls.append(
+                    ComponentControlDecl(
+                        name=ct_name,
+                        target=ct_tgt,  # type: ignore[arg-type]
+                        channel=ct_ch,
+                        axis=ct_ax,
+                        limits=ct_lim,
+                    )
+                )
+            else:
+                self.fail(f"unexpected token {self.token.value!r} in @component {cname!r}")
+        self.take("}")
+        return ComponentDef(
+            name=cname,
+            params=tuple(params),
+            material_slots=tuple(mat_slots),
+            uv_policy=uv_policy,
+            lets=tuple(lets),
+            root_boxes=tuple(r_boxes),
+            root_locators=tuple(r_locs),
+            child_bones=tuple(c_bones),
+            frames=tuple(frames),
+            controls=tuple(controls),
+        )
+
+    def _parse_assembly_items(
+        self,
+    ) -> tuple[
+        list[ComponentInstanceDecl],
+        list[SubassemblyDecl],
+        list[ConnectionDecl],
+        list[BindDecl],
+    ]:
+        insts: list[ComponentInstanceDecl] = []
+        subs: list[SubassemblyDecl] = []
+        conns: list[ConnectionDecl] = []
+        binds: list[BindDecl] = []
+
+        while not self.at("}"):
+            if self.at("instance"):
+                self.take("instance")
+                iname = self.ident()
+                self.take(":")
+                cname = self.ident()
+                p_exprs: list[tuple[str, str]] = []
+                if self.maybe_take("("):
+                    if not self.at(")"):
+                        while True:
+                            pk = self.ident()
+                            self.take("=")
+                            pe = self._capture_symbolic_expr()
+                            p_exprs.append((pk, pe))
+                            if not self.maybe_take(","):
+                                break
+                    self.take(")")
+                m_name, m_axis, _ = self._parse_bone_symmetry_modifiers(iname)
+                sid: str | None = None
+                m_binds: list[tuple[str, str]] = []
+                inst_uv: str | None = None
+                if self.maybe_take("{"):
+                    while not self.at("}"):
+                        ik = self.ident()
+                        self.take(":")
+                        if ik == "id":
+                            sid = self.string_literal() if self.token.kind == "STRING" else self.ident()
+                        elif ik == "materials":
+                            self.take("{")
+                            while not self.at("}"):
+                                mslot = self.ident()
+                                self.take(":")
+                                mpal = self.ident()
+                                m_binds.append((mslot, mpal))
+                                self.maybe_take(",")
+                            self.take("}")
+                        elif ik == "uv_policy":
+                            inst_uv = self.ident()
+                        else:
+                            self.fail(f"unexpected instance field {ik!r}")
+                        self.maybe_take(",")
+                    self.take("}")
+                self.maybe_take(";")
+                insts.append(
+                    ComponentInstanceDecl(
+                        name=iname,
+                        component_name=cname,
+                        stable_id=sid,
+                        param_exprs=tuple(p_exprs),
+                        material_bindings=tuple(m_binds),
+                        uv_policy=inst_uv,
+                        mirror_name=m_name,
+                        mirror_axis=m_axis,
+                    )
+                )
+            elif self.at("subassembly"):
+                self.take("subassembly")
+                sname = self.ident()
+                self.take("{")
+                s_insts, s_subs, s_conns, s_binds = self._parse_assembly_items()
+                self.take("}")
+                subs.append(
+                    SubassemblyDecl(
+                        name=sname,
+                        instances=tuple(s_insts),
+                        subassemblies=tuple(s_subs),
+                        connections=tuple(s_conns),
+                        binds=tuple(s_binds),
+                    )
+                )
+            elif self.at("connect"):
+                self.take("connect")
+                ch_inst = self.ident()
+                self.take(".")
+                ch_frame = self.ident()
+                self.take("to")
+                pa_inst = self.ident()
+                self.take(".")
+                pa_frame = self.ident()
+                ctype = "fixed"
+                caxis = "x"
+                clims: tuple[float, float] | None = None
+                cmode = "align"
+                coff_p: tuple[str, str, str] = ("0", "0", "0")
+                coff_r: tuple[str, str, str] = ("0", "0", "0")
+                c_blend = False
+                c_pres = False
+                if self.maybe_take("{"):
+                    while not self.at("}"):
+                        ck = self.ident()
+                        self.take(":")
+                        if ck == "type":
+                            ctype = self.ident()
+                        elif ck == "axis":
+                            caxis = self.ident()
+                        elif ck in ("limits", "limits_deg", "limits_units"):
+                            lv = self.vector(2)
+                            clims = (float(lv[0]), float(lv[1]))
+                        elif ck == "mode":
+                            cmode = self.ident()
+                        elif ck == "offset_pos":
+                            coff_p = self._capture_symbolic_vec(3)  # type: ignore[assignment]
+                        elif ck == "offset_rot":
+                            coff_r = self._capture_symbolic_vec(3)  # type: ignore[assignment]
+                        elif ck == "sculpted_blend":
+                            c_blend = self.boolean()
+                        elif ck == "preserve_bone":
+                            c_pres = self.boolean()
+                        else:
+                            self.fail(f"unexpected connect field {ck!r}")
+                        self.maybe_take(",")
+                    self.take("}")
+                self.maybe_take(";")
+                conns.append(
+                    ConnectionDecl(
+                        child_instance=ch_inst,
+                        child_frame=ch_frame,
+                        parent_instance=pa_inst,
+                        parent_frame=pa_frame,
+                        conn_type=ctype,
+                        axis=caxis,
+                        limits=clims,
+                        mode=cmode,
+                        offset_pos=coff_p,
+                        offset_rot=coff_r,
+                        sculpted_blend=c_blend,
+                        preserve_bone=c_pres,
+                    )
+                )
+            elif self.at("bind"):
+                self.take("bind")
+                b_inst = self.ident()
+                self.take("to")
+                b_tgt = self.ident_or_dotted()
+                if b_tgt.startswith("rig."):
+                    b_tgt = b_tgt[4:]
+                self.maybe_take(";")
+                binds.append(BindDecl(instance_name=b_inst, target_bone=b_tgt))
+            else:
+                self.fail(f"unexpected token {self.token.value!r} in @assembly")
+        return insts, subs, conns, binds
+
+    def _parse_assembly_section(self) -> AssemblyDecl:
+        aname = self.ident()
+        self.take("{")
+        r_piv: tuple[str, str, str] = ("0", "0", "0")
+        r_inst: str | None = None
+        while self.at("root_pivot") or self.at("root_instance"):
+            if self.at("root_pivot"):
+                self.field("root_pivot")
+                r_piv = self._capture_symbolic_vec(3)  # type: ignore[assignment]
+                self.maybe_take(",")
+            elif self.at("root_instance"):
+                self.field("root_instance")
+                r_inst = self.ident()
+                self.maybe_take(",")
+        insts, subs, conns, binds = self._parse_assembly_items()
+        self.take("}")
+        return AssemblyDecl(
+            name=aname,
+            root_pivot=r_piv,
+            root_instance=r_inst,
+            instances=tuple(insts),
+            subassemblies=tuple(subs),
+            connections=tuple(conns),
+            binds=tuple(binds),
+        )
+
     def program(self) -> Program:
         self._consume_preamble_decls(allow_def=True)
         self.section("meta")
         meta = self._parse_meta_body()
 
         self._consume_preamble_decls(allow_def=True)
+        layout_decl: LayoutDecl | None = None
         textures: list[TextureDecl] | None = None
-        if self.at("@") and self.peek().value == "textures":
+
+        while self.at("@") and self.peek().value in ("textures", "layout"):
             self.take("@")
-            self.take("textures")
-            textures = self.textures_decl()
+            sec_kw = self.ident()
+            if sec_kw == "textures":
+                if textures is not None:
+                    self.fail("duplicate @textures section")
+                textures = self.textures_decl()
+            else:
+                if layout_decl is not None:
+                    self.fail("duplicate @layout section")
+                layout_decl = self._parse_layout_section()
             self._consume_preamble_decls(allow_def=True)
 
         self.section("palette")
@@ -556,20 +1318,41 @@ class _Parser:
         self.take("}")
 
         self._consume_preamble_decls(allow_def=True)
-        if self.at("@") and self.peek().value == "textures":
-            if textures is not None:
-                self.fail("duplicate @textures section")
+        while self.at("@") and self.peek().value in ("textures", "layout"):
             self.take("@")
-            self.take("textures")
-            textures = self.textures_decl()
+            sec_kw = self.ident()
+            if sec_kw == "textures":
+                if textures is not None:
+                    self.fail("duplicate @textures section")
+                textures = self.textures_decl()
+            else:
+                if layout_decl is not None:
+                    self.fail("duplicate @layout section")
+                layout_decl = self._parse_layout_section()
             self._consume_preamble_decls(allow_def=True)
 
-        self.section("rig")
-        self._consume_preamble_decls(allow_def=True)
-        self.take("root")
-        root = self.bone(root=True, depth=0)
-        self._consume_preamble_decls(allow_def=True)
-        self.take("}")
+        root: Bone | None = None
+        components: list[ComponentDef] = []
+        assembly_decl: AssemblyDecl | None = None
+
+        if self.at("@") and self.peek().value == "component":
+            while self.at("@") and self.peek().value == "component":
+                self.take("@")
+                self.take("component")
+                components.append(self._parse_component_section())
+                self._consume_preamble_decls(allow_def=True)
+            if not (self.at("@") and self.peek().value == "assembly"):
+                self.fail("expected @assembly section after @component definitions")
+            self.take("@")
+            self.take("assembly")
+            assembly_decl = self._parse_assembly_section()
+        else:
+            self.section("rig")
+            self._consume_preamble_decls(allow_def=True)
+            self.take("root")
+            root = self.bone(root=True, depth=0)
+            self._consume_preamble_decls(allow_def=True)
+            self.take("}")
 
         materials: list[MaterialDecl] | None = None
         style: StyleDecl | None = None
@@ -636,6 +1419,28 @@ class _Parser:
             else:
                 self.fail(f"unknown section @{feature}")
         self.take("<EOF>")
+
+        if assembly_decl is not None:
+            asm_spec = AssemblySpec(
+                layout=layout_decl,
+                components=tuple(components),
+                assembly=assembly_decl,
+                assembly_provenance="authored",
+            )
+            return resolve_assembly_program(
+                meta=meta,
+                palettes=palettes,
+                assembly_spec=asm_spec,
+                textures=tuple(textures) if textures else (),
+                materials=tuple(materials) if materials else (),
+                style=style,
+                muscles=tuple(muscles) if muscles else (),
+                kinematics=kinematics,
+                behavior=behavior,
+                controller=controller,
+            )
+
+        assert root is not None
         return validate_program(
             Program(
                 meta=meta,
@@ -741,10 +1546,10 @@ class _Parser:
         name = self.ident()
         self.take("{")
         self.field("origin_bone")
-        origin_bone = self.ident()
+        origin_bone = self.ident_or_dotted()
         self.take(",")
         self.field("insertion_bone")
-        insertion_bone = self.ident()
+        insertion_bone = self.ident_or_dotted()
         self.take(",")
         self.field("action_axis")
         action_axis = self.ident()
@@ -764,7 +1569,7 @@ class _Parser:
             self.take(":")
             if key == "tendon_coupling":
                 self.take("[")
-                tc_bone = self.ident()
+                tc_bone = self.ident_or_dotted()
                 self.take(",")
                 tc_axis = self.ident()
                 self.take(",")
@@ -772,7 +1577,7 @@ class _Parser:
                 self.take("]")
                 tendon = TendonCoupling(tc_bone, tc_axis, float(tc_ratio))
             elif key == "belly_box":
-                belly_box = self.ident()
+                belly_box = self.ident_or_dotted()
             elif key == "bulge_inflate":
                 bulge_inflate = float(self.number())
             else:
@@ -791,7 +1596,7 @@ class _Parser:
 
     def spring_decl(self) -> SpringDecl:
         self.take("spring")
-        bone = self.ident()
+        bone = self.ident_or_dotted()
         self.take("{")
         stiffness = 40.0
         damping = 6.0
@@ -820,6 +1625,7 @@ class _Parser:
         ik_chains: list[IKChainDecl] = []
         look_chains: list[LookChainDecl] = []
         springs: list[SpringDecl] = []
+        prismatic_joints: list[PrismaticJointDecl] = []
         while not self.at("}"):
             if self.at("let"):
                 self.let_decl()
@@ -844,11 +1650,11 @@ class _Parser:
                     seen_k.add(k)
                     self.take(":")
                     if k == "upper":
-                        upper = self.ident()
+                        upper = self.ident_or_dotted()
                     elif k == "lower":
-                        lower = self.ident()
+                        lower = self.ident_or_dotted()
                     elif k == "bones":
-                        bones = self.ident_list()
+                        bones = self.ident_or_dotted_list()
                     elif k == "effector":
                         effector = self.vector(3)
                     elif k == "hinge_axis":
@@ -878,7 +1684,7 @@ class _Parser:
                 name = self.ident()
                 self.take("{")
                 self.field("bones")
-                bones = self.ident_list()
+                bones = self.ident_or_dotted_list()
                 weight_decay = 0.75
                 if self.at(","):
                     self.take(",")
@@ -888,10 +1694,34 @@ class _Parser:
                 look_chains.append(LookChainDecl(name=name, bones=bones, weight_decay=weight_decay))
             elif self.at("spring"):
                 springs.append(self.spring_decl())
+            elif self.at("prismatic_joint"):
+                self.take("prismatic_joint")
+                pbone = self.ident_or_dotted()
+                self.take("{")
+                paxis = "z"
+                plims = (-4.0, 4.0)
+                while not self.at("}"):
+                    pk = self.ident()
+                    self.take(":")
+                    if pk == "axis":
+                        paxis = self.ident()
+                    elif pk == "limits":
+                        lv = self.vector(2)
+                        plims = (float(lv[0]), float(lv[1]))
+                    else:
+                        self.fail(f"unexpected prismatic_joint field {pk!r}")
+                    self.maybe_take(",")
+                self.take("}")
+                prismatic_joints.append(PrismaticJointDecl(bone=pbone, axis=paxis, limits=plims))
             else:
-                self.fail("expected ik_chain, look_chain, spring, or closing brace in @kinematics")
+                self.fail("expected ik_chain, look_chain, spring, prismatic_joint, or closing brace in @kinematics")
         self.take("}")
-        return KinematicsDecl(ik_chains=tuple(ik_chains), look_chains=tuple(look_chains), springs=tuple(springs))
+        return KinematicsDecl(
+            ik_chains=tuple(ik_chains),
+            look_chains=tuple(look_chains),
+            springs=tuple(springs),
+            prismatic_joints=tuple(prismatic_joints),
+        )
 
     def behavior_decl(self) -> BehaviorDecl:
         self.take("{")
@@ -915,9 +1745,14 @@ class _Parser:
 
     def keyframe_track_decl(self) -> KeyframeTrackDecl:
         self.take("key")
-        bone = self.ident()
-        self.take(".")
-        channel = self.ident()
+        parts = [self.ident()]
+        while self.at("."):
+            self.take(".")
+            parts.append(self.ident())
+        if len(parts) < 2:
+            self.fail("expected key <bone>.<channel> { ... }")
+        bone = ".".join(parts[:-1])
+        channel = parts[-1]
         self.take("{")
         keys: list[tuple[float, Vec3]] = []
         interp = "linear"
@@ -946,13 +1781,14 @@ class _Parser:
             self.field("loop")
             loop = self.boolean()
         tracks: list[TrackDecl] = []
+        slide_drives: list[SlideDriveDecl] = []
         muscle_drives: list[MuscleDriveDecl] = []
         ik_drives: list[IKDriveDecl] = []
         keyframes: list[KeyframeTrackDecl] = []
         while not self.at("}"):
             if self.at("track"):
                 self.take("track")
-                bone = self.ident()
+                bone = self.ident_or_dotted()
                 self.take(":")
                 law = self.ident()
                 self.take("(")
@@ -990,6 +1826,48 @@ class _Parser:
                         freq_hz=freq_hz,
                         phase_deg=phase_deg,
                         bias_deg=bias_deg,
+                    )
+                )
+            elif self.at("slide"):
+                self.take("slide")
+                sbone = self.ident_or_dotted()
+                self.take(":")
+                slaw = self.ident()
+                self.take("(")
+                self.field("axis", "=")
+                saxis = self.ident()
+                self.take(",")
+                self.field("amp_units", "=")
+                samp = float(self.number())
+                self.take(",")
+                self.field("freq_hz", "=")
+                sfreq = float(self.number())
+                sphase = 0.0
+                sbias = 0.0
+                seen_sk: set[str] = set()
+                while self.at(","):
+                    self.take(",")
+                    sk = self.ident()
+                    if sk in seen_sk:
+                        self.fail(f"duplicate slide parameter {sk!r}")
+                    seen_sk.add(sk)
+                    self.take("=")
+                    if sk == "phase_deg":
+                        sphase = float(self.number())
+                    elif sk == "bias_units":
+                        sbias = float(self.number())
+                    else:
+                        self.fail(f"unexpected slide parameter {sk!r}")
+                self.take(")")
+                slide_drives.append(
+                    SlideDriveDecl(
+                        bone=sbone,
+                        law=slaw,
+                        axis=saxis,
+                        amp_units=samp,
+                        freq_hz=sfreq,
+                        phase_deg=sphase,
+                        bias_units=sbias,
                     )
                 )
             elif self.at("key"):
@@ -1046,7 +1924,7 @@ class _Parser:
                 self.take(")")
                 ik_drives.append(IKDriveDecl(chain=chain, stride=stride, lift=lift, phase_deg=phase_deg))
             else:
-                self.fail("expected track, key, muscle_drive, ik_drive, or closing brace in clip")
+                self.fail("expected track, slide, key, muscle_drive, ik_drive, or closing brace in clip")
         self.take("}")
         return ClipDecl(
             name=name,
@@ -1056,6 +1934,7 @@ class _Parser:
             muscle_drives=tuple(muscle_drives),
             ik_drives=tuple(ik_drives),
             keyframes=tuple(keyframes),
+            slide_drives=tuple(slide_drives),
         )
 
     def behavior_state_decl(self) -> BehaviorStateDecl:
@@ -1068,7 +1947,7 @@ class _Parser:
         while not self.at("}"):
             if self.at("pose_bias"):
                 self.take("pose_bias")
-                bname = self.ident()
+                bname = self.ident_or_dotted()
                 self.take(":")
                 vec = self.vector(3)
                 pose_biases.append((bname, vec))
@@ -1482,12 +2361,26 @@ class _Parser:
         self.field("offset")
         offset = self.vector(3)
         role = "socket"
-        if self.at(","):
+        rot: Vec3 = (0.0, 0.0, 0.0)
+        seen_l: set[str] = set()
+        while self.at(","):
             self.take(",")
-            self.field("role")
-            role = self.ident()
+            if self.at("}"):
+                break
+            lk = self.ident()
+            if lk in seen_l:
+                self.fail(f"duplicate locator field {lk!r}")
+            seen_l.add(lk)
+            self.take(":")
+            if lk == "role":
+                role = self.ident()
+            elif lk == "rot":
+                rv = self.vector(3)
+                rot = (float(rv[0]), float(rv[1]), float(rv[2]))
+            else:
+                self.fail(f"unexpected locator field {lk!r}")
         self.take("}")
-        return Locator(name=name, offset=offset, role=role)
+        return Locator(name=name, offset=offset, role=role, rot=rot)
 
     def use_macro(self, depth: int) -> Bone:
         if self.macro_depth >= 8:
@@ -1890,6 +2783,8 @@ def format_program(program: Program) -> str:
         meta_parts.append(f"size_step: {fmt_num(m.size_step)}")
     if m.audit_profile != "strict":
         meta_parts.append(f"audit_profile: {m.audit_profile}")
+    if int(getattr(m, "units_per_block", 16)) != 16:
+        meta_parts.append(f"units_per_block: {int(m.units_per_block)}")
 
     lines = [
         f"@meta {{ {', '.join(meta_parts)} }}",
@@ -1910,7 +2805,10 @@ def format_program(program: Program) -> str:
             lines.append(f"  {td.name}: image({json.dumps(td.path)}, {td.width}, {td.height})")
         lines.append("}")
 
-    lines.append("@rig {")
+    if program.assembly_spec is not None and isinstance(program.assembly_spec, AssemblySpec):
+        lines.extend(format_assembly_sections(program.assembly_spec))
+    else:
+        lines.append("@rig {")
     int_sizes = float(m.size_step) == 1.0
 
     def write_bone(bone: Bone, indent: int, root: bool = False) -> None:
@@ -1965,8 +2863,9 @@ def format_program(program: Program) -> str:
                 write_bone(item, indent + 2)
                 continue
             if isinstance(item, Locator):
+                rot_part = f", rot: {vector(item.rot)}" if not is_zero_vec(item.rot) else ""
                 role_part = f", role: {item.role}" if item.role != "socket" else ""
-                lines.append(f"{pad}  locator {item.name} {{ offset: {vector(item.offset)}{role_part} }}")
+                lines.append(f"{pad}  locator {item.name} {{ offset: {vector(item.offset)}{rot_part}{role_part} }}")
                 continue
 
             kw = "plane" if item.plane_normal is not None else "box"
@@ -2011,8 +2910,9 @@ def format_program(program: Program) -> str:
             lines.append(f"{b_start} {{ {', '.join(b_fields)} }}")
         lines.append(pad + "}")
 
-    write_bone(program.root, 2, True)
-    lines.append("}")
+    if not (program.assembly_spec is not None and isinstance(program.assembly_spec, AssemblySpec)):
+        write_bone(program.root, 2, True)
+        lines.append("}")
 
     if program.materials:
         lines.append("@materials {")
@@ -2059,51 +2959,89 @@ def format_program(program: Program) -> str:
             s_parts.append(f"view_deg: {fmt_num(sd.view_deg)}")
         lines.append(f"@style {{ {', '.join(s_parts)} }}")
 
+    inv_bone_fmt: dict[str, str] = {}
+    inv_box_fmt: dict[str, str] = {}
+    if program.assembly_spec is not None and program.source_map is not None:
+        for dot_k, exp_v in getattr(program.source_map, "dotted_bone_map", ()):
+            if "." in dot_k and dot_k.replace(".", "__") == exp_v:
+                inv_bone_fmt[exp_v] = dot_k
+        for dot_k, exp_v in getattr(program.source_map, "dotted_box_map", ()):
+            inv_box_fmt[exp_v] = dot_k
+
+    def _fb(bname: str) -> str:
+        return inv_bone_fmt.get(bname, bname)
+
+    def _fx(xname: str) -> str:
+        return inv_box_fmt.get(xname, xname)
+
     if program.muscles:
         lines.append("@muscles {")
         for mus in program.muscles:
             parts = [
-                f"origin_bone: {mus.origin_bone}",
-                f"insertion_bone: {mus.insertion_bone}",
+                f"origin_bone: {_fb(mus.origin_bone)}",
+                f"insertion_bone: {_fb(mus.insertion_bone)}",
                 f"action_axis: {mus.action_axis}",
                 f"moment_arm_deg: {fmt_num(mus.moment_arm_deg)}",
             ]
             if mus.tendon_coupling is not None:
                 tc = mus.tendon_coupling
-                parts.append(f"tendon_coupling: [{tc.bone}, {tc.axis}, {fmt_num(tc.ratio)}]")
+                parts.append(f"tendon_coupling: [{_fb(tc.bone)}, {tc.axis}, {fmt_num(tc.ratio)}]")
             if mus.belly_box is not None:
-                parts.append(f"belly_box: {mus.belly_box}")
+                parts.append(f"belly_box: {_fx(mus.belly_box)}")
                 if float(mus.bulge_inflate) != 0.0:
                     parts.append(f"bulge_inflate: {fmt_num(mus.bulge_inflate)}")
             lines.append(f"  muscle {mus.name} {{ {', '.join(parts)} }}")
         lines.append("}")
 
     if program.kinematics is not None:
-        lines.append("@kinematics {")
-        for ikc in program.kinematics.ik_chains:
-            if len(ikc.bones) == 2 and ikc.pole is None:
-                ik_parts = [
-                    f"upper: {ikc.upper}",
-                    f"lower: {ikc.lower}",
-                    f"effector: {vector(ikc.effector)}",
-                ]
-            else:
-                b_str = "[" + ", ".join(ikc.bones) + "]"
-                ik_parts = [f"bones: {b_str}", f"effector: {vector(ikc.effector)}"]
-            if ikc.hinge_axis != "x":
-                ik_parts.append(f"hinge_axis: {ikc.hinge_axis}")
-            if ikc.pole is not None:
-                ik_parts.append(f"pole: {vector(ikc.pole)}")
-            lines.append(f"  ik_chain {ikc.name} {{ {', '.join(ik_parts)} }}")
-        for lkc in program.kinematics.look_chains:
-            b_list = "[" + ", ".join(lkc.bones) + "]"
-            wd_part = f", weight_decay: {fmt_num(lkc.weight_decay)}" if float(lkc.weight_decay) != 0.75 else ""
-            lines.append(f"  look_chain {lkc.name} {{ bones: {b_list}{wd_part} }}")
-        for sp in program.kinematics.springs:
-            lines.append(
-                f"  spring {sp.bone} {{ stiffness: {fmt_num(sp.stiffness)}, damping: {fmt_num(sp.damping)} }}"
-            )
-        lines.append("}")
+        auto_asm_pjs: set[str] = set()
+        if program.assembly_spec is not None and isinstance(program.assembly_spec, AssemblySpec) and program.assembly_spec.assembly is not None:
+            from .assembly_ir import _flatten_assembly_tree
+
+            raw_insts, raw_conns, _ = _flatten_assembly_tree(program.assembly_spec.assembly)
+            auto_asm_pjs = {c.child_instance for c in raw_conns if c.conn_type == "prismatic"}
+            for ri in raw_insts:
+                if ri.mirror_name and ri.name in auto_asm_pjs:
+                    auto_asm_pjs.add(ri.mirror_name)
+        explicit_pjs = [
+            pj for pj in getattr(program.kinematics, "prismatic_joints", ())
+            if pj.bone not in auto_asm_pjs
+        ]
+        if (
+            program.kinematics.ik_chains
+            or program.kinematics.look_chains
+            or program.kinematics.springs
+            or explicit_pjs
+        ):
+            lines.append("@kinematics {")
+            for ikc in program.kinematics.ik_chains:
+                if len(ikc.bones) == 2 and ikc.pole is None:
+                    ik_parts = [
+                        f"upper: {_fb(ikc.upper)}",
+                        f"lower: {_fb(ikc.lower)}",
+                        f"effector: {vector(ikc.effector)}",
+                    ]
+                else:
+                    b_str = "[" + ", ".join(_fb(b) for b in ikc.bones) + "]"
+                    ik_parts = [f"bones: {b_str}", f"effector: {vector(ikc.effector)}"]
+                if ikc.hinge_axis != "x":
+                    ik_parts.append(f"hinge_axis: {ikc.hinge_axis}")
+                if ikc.pole is not None:
+                    ik_parts.append(f"pole: {vector(ikc.pole)}")
+                lines.append(f"  ik_chain {ikc.name} {{ {', '.join(ik_parts)} }}")
+            for lkc in program.kinematics.look_chains:
+                b_list = "[" + ", ".join(_fb(b) for b in lkc.bones) + "]"
+                wd_part = f", weight_decay: {fmt_num(lkc.weight_decay)}" if float(lkc.weight_decay) != 0.75 else ""
+                lines.append(f"  look_chain {lkc.name} {{ bones: {b_list}{wd_part} }}")
+            for sp in program.kinematics.springs:
+                lines.append(
+                    f"  spring {_fb(sp.bone)} {{ stiffness: {fmt_num(sp.stiffness)}, damping: {fmt_num(sp.damping)} }}"
+                )
+            for pj in explicit_pjs:
+                lines.append(
+                    f"  prismatic_joint {_fb(pj.bone)} {{ axis: {pj.axis}, limits: [{fmt_num(pj.limits[0])}, {fmt_num(pj.limits[1])}] }}"
+                )
+            lines.append("}")
 
     if program.behavior is not None:
         lines.append("@behavior {")
@@ -2121,12 +3059,23 @@ def format_program(program: Program) -> str:
                     tr_args.append(f"phase_deg={fmt_num(tr.phase_deg)}")
                 if float(tr.bias_deg) != 0.0:
                     tr_args.append(f"bias_deg={fmt_num(tr.bias_deg)}")
-                lines.append(f"    track {tr.bone}: {tr.law}({', '.join(tr_args)})")
+                lines.append(f"    track {_fb(tr.bone)}: {tr.law}({', '.join(tr_args)})")
+            for sd in getattr(clip, "slide_drives", ()):
+                sd_args = [
+                    f"axis={sd.axis}",
+                    f"amp_units={fmt_num(sd.amp_units)}",
+                    f"freq_hz={fmt_num(sd.freq_hz)}",
+                ]
+                if float(sd.phase_deg) != 0.0:
+                    sd_args.append(f"phase_deg={fmt_num(sd.phase_deg)}")
+                if float(sd.bias_units) != 0.0:
+                    sd_args.append(f"bias_units={fmt_num(sd.bias_units)}")
+                lines.append(f"    slide {_fb(sd.bone)}: {sd.law}({', '.join(sd_args)})")
             for kf in clip.keyframes:
                 kf_entries = [f"{fmt_num(t_k)}: {vector(v_k)}" for t_k, v_k in kf.keys]
                 if kf.interpolation != "linear":
                     kf_entries.append(kf.interpolation)
-                lines.append(f"    key {kf.bone}.{kf.channel} {{ {', '.join(kf_entries)} }}")
+                lines.append(f"    key {_fb(kf.bone)}.{kf.channel} {{ {', '.join(kf_entries)} }}")
             for md_drive in clip.muscle_drives:
                 md_args = [f"peak={fmt_num(md_drive.peak)}", f"freq_hz={fmt_num(md_drive.freq_hz)}"]
                 if float(md_drive.phase_deg) != 0.0:
@@ -2142,12 +3091,12 @@ def format_program(program: Program) -> str:
             lines.append("  }")
         for sp in program.behavior.springs:
             lines.append(
-                f"  spring {sp.bone} {{ stiffness: {fmt_num(sp.stiffness)}, damping: {fmt_num(sp.damping)} }}"
+                f"  spring {_fb(sp.bone)} {{ stiffness: {fmt_num(sp.stiffness)}, damping: {fmt_num(sp.damping)} }}"
             )
         for st in program.behavior.states:
             lines.append(f"  state {st.name} {{")
             for bname, pb in st.pose_biases:
-                lines.append(f"    pose_bias {bname}: {vector(pb)}")
+                lines.append(f"    pose_bias {_fb(bname)}: {vector(pb)}")
             for mname, tone in st.muscle_tones:
                 lines.append(f"    muscle_tone {mname}: {fmt_num(tone)}")
             for mm in st.material_mods:

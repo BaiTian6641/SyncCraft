@@ -153,6 +153,10 @@ class WorldBox:
     uv_faces: dict[str, tuple[float, ...]] = field(default_factory=dict)
     texture: str | None = None
     blend_with: tuple[str, ...] = ()
+    uv_share_key: str | None = None
+    component_rest_pos: np.ndarray | None = None
+    component_rest_rot: np.ndarray | None = None
+    instance_name: str | None = None
 
     @property
     def half_extents(self) -> np.ndarray:
@@ -190,6 +194,10 @@ class WorldBox:
             payload["texture"] = self.texture
         if self.blend_with:
             payload["blend_with"] = list(self.blend_with)
+        if self.uv_share_key is not None:
+            payload["uv_share_key"] = self.uv_share_key
+        if self.instance_name is not None:
+            payload["instance_name"] = self.instance_name
         return payload
 
 
@@ -224,9 +232,10 @@ class WorldLocator:
     rotation: np.ndarray
     local_offset: np.ndarray
     mirrored: bool = False
+    local_euler: np.ndarray = field(default_factory=lambda: np.zeros(3, dtype=np.float64))
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "name": self.name,
             "bone_name": self.bone_name,
             "role": self.role,
@@ -235,6 +244,9 @@ class WorldLocator:
             "local_offset": self.local_offset.tolist(),
             "mirrored": self.mirrored,
         }
+        if np.any(np.abs(self.local_euler) > 1e-12):
+            payload["local_euler"] = self.local_euler.tolist()
+        return payload
 
 
 @dataclass(frozen=True)
@@ -394,6 +406,7 @@ def compile_geometry(
     locators: list[WorldLocator] = []
     adjacency: dict[tuple[str, str], str] = {}
     pending_blends: list[tuple[str | None, int, tuple[str, ...]]] = []
+    pending_contacts: list[tuple[str | None, int, tuple[str, ...]]] = []
     names: set[str] = set()
     root_delta_vec = _vec(root_translation_delta) if root_translation_delta is not None else np.zeros(3)
 
@@ -514,7 +527,9 @@ def compile_geometry(
                 _validate_physical_size(raw_size, size_step, item.plane_normal, effective_inflate, item.name)
                 size = raw_size * cumulative_scale
 
-                if item.place is None:
+                if item.explicit_local_center is not None:
+                    unrot_local_center = _vec(item.explicit_local_center) * sign * cumulative_scale
+                elif item.place is None:
                     if primary is not None:
                         raise ValueError(f"{item.name}: subsequent boxes require place(...)")
                     unrot_local_center = -0.5 * size * align
@@ -558,6 +573,21 @@ def compile_geometry(
 
                 box_world_center = world_pivot + world_rotation @ local_center
                 box_world_rot = world_rotation @ r_box_local
+                comp_rest_pos = (
+                    _vec(item.component_rest_pos) * sign
+                    if item.component_rest_pos is not None
+                    else None
+                )
+                comp_rest_rot = (
+                    euler_xyz_matrix(_vec(item.component_rest_euler) * angle_sign)
+                    if item.component_rest_euler is not None
+                    else None
+                )
+                eff_uv_share = (
+                    None
+                    if (mirrored and item.uv_share_key is not None)
+                    else item.uv_share_key
+                )
                 compiled_box = WorldBox(
                     box_name,
                     name,
@@ -576,11 +606,17 @@ def compile_geometry(
                     uv=item.uv,
                     uv_faces=_stored_uv_faces(item.uv_faces_dict, sign),
                     texture=item.texture,
+                    uv_share_key=eff_uv_share,
+                    component_rest_pos=comp_rest_pos,
+                    component_rest_rot=comp_rest_rot,
+                    instance_name=f"{prefix}__{item.instance_name}" if (prefix and item.instance_name) else item.instance_name,
                 )
                 box_idx = len(boxes)
                 boxes.append(compiled_box)
                 if item.blend_with:
                     pending_blends.append((prefix, box_idx, item.blend_with))
+                if item.explicit_contact_with:
+                    pending_contacts.append((prefix, box_idx, item.explicit_contact_with))
                 local_boxes[item.name] = compiled_box
                 if primary is None:
                     primary = compiled_box
@@ -593,14 +629,17 @@ def compile_geometry(
                 loc_name = f"{prefix}__{item.name}" if prefix else item.name
                 reserve(loc_name)
                 local_offset = _vec(item.offset) * sign * cumulative_scale
+                loc_euler = _vec(item.rot) * angle_sign
+                r_loc_local = euler_xyz_matrix(loc_euler)
                 compiled_loc = WorldLocator(
                     name=loc_name,
                     bone_name=name,
                     role=item.role,
                     position_world=world_pivot + world_rotation @ local_offset,
-                    rotation=world_rotation.copy(),
+                    rotation=world_rotation @ r_loc_local,
                     local_offset=local_offset,
                     mirrored=mirrored,
+                    local_euler=loc_euler,
                 )
                 locators.append(compiled_loc)
                 local_locators[item.name] = compiled_loc
@@ -733,6 +772,14 @@ def compile_geometry(
                     blend_pairs.add((src_box.name, cand) if src_box.name <= cand else (cand, src_box.name))
             if resolved_targets:
                 object.__setattr__(src_box, "blend_with", tuple(resolved_targets))
+    if pending_contacts:
+        box_names_set = {b.name for b in boxes}
+        for pref, b_idx, raw_contacts in pending_contacts:
+            src_box = boxes[b_idx]
+            for tgt in raw_contacts:
+                cand = f"{pref}__{tgt}" if (pref and f"{pref}__{tgt}" in box_names_set) else tgt
+                if cand in box_names_set and cand != src_box.name:
+                    edge(src_box.name, cand, "connect")
     return Scene(
         tuple(boxes),
         tuple(bones),

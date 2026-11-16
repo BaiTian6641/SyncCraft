@@ -791,6 +791,7 @@ def evaluate_behavior_clip(
     *,
     num_frames: int = 12,
     active_state: str | None = None,
+    sample_phases: Sequence[float] | None = None,
 ) -> list[BehaviorFrameSample]:
     """Synthesize exact posed, muscle-inflated, keyframe, spring, and IK-locked frames for a @behavior clip."""
     if program.behavior is None:
@@ -812,6 +813,10 @@ def evaluate_behavior_clip(
 
     rest_scene = compile_geometry(program)
     limits_map = _collect_expanded_joint_limits(program)
+    prismatic_map: dict[str, tuple[str, tuple[float, float], Vec3 | None]] = {}
+    if program.kinematics is not None:
+        for pj in getattr(program.kinematics, "prismatic_joints", ()):
+            prismatic_map[pj.bone] = (pj.axis, (float(pj.limits[0]), float(pj.limits[1])), pj.axis_vec)
     ik_chain_map: dict[str, IKChainDecl] = (
         {c.name: c for c in program.kinematics.ik_chains} if program.kinematics is not None else {}
     )
@@ -837,8 +842,12 @@ def evaluate_behavior_clip(
     mean_stride_vec = np.array([0.0, 0.0, mean_stride_z], dtype=np.float64)
     duty_factor = 0.60
 
-    n_f = max(2, int(num_frames))
-    phases = np.linspace(0.0, 1.0, n_f, endpoint=not clip.loop, dtype=np.float64)
+    if sample_phases is not None:
+        phases = np.asarray(list(sample_phases), dtype=np.float64)
+        n_f = len(phases)
+    else:
+        n_f = max(2, int(num_frames))
+        phases = np.linspace(0.0, 1.0, n_f, endpoint=not clip.loop, dtype=np.float64)
     axis_idx = {"x": 0, "y": 1, "z": 2}
 
     times_list: list[float] = []
@@ -906,6 +915,31 @@ def evaluate_behavior_clip(
             elif kf.channel == "scale":
                 prev_s = frame_scale_factors.get(kf.bone, (1.0, 1.0, 1.0))
                 frame_scale_factors[kf.bone] = (prev_s[0] * kv[0], prev_s[1] * kv[1], prev_s[2] * kv[2])
+
+        for sd in getattr(clip, "slide_drives", ()):
+            u_sd = (t_s * float(sd.freq_hz) + float(sd.phase_deg) / 360.0) % 1.0
+            if sd.law in ("piston", "wave"):
+                disp = float(sd.bias_units) + float(sd.amp_units) * math.sin(2.0 * math.pi * u_sd)
+            elif sd.law == "hinge":
+                disp = float(sd.bias_units) + float(sd.amp_units) * (0.5 - 0.5 * math.cos(2.0 * math.pi * u_sd))
+            elif sd.law == "impulse":
+                disp = float(sd.bias_units) + float(sd.amp_units) * (math.sin(math.pi * u_sd) ** 4)
+            else:
+                raise ValueError(f"Unsupported slide law {sd.law!r}")
+            p_arr = list(frame_pos_deltas.get(sd.bone, (0.0, 0.0, 0.0)))
+            if sd.bone in prismatic_map:
+                p_axis, (lo_u, hi_u), p_vec = prismatic_map[sd.bone]
+                if p_axis == sd.axis:
+                    disp = float(np.clip(disp, lo_u, hi_u))
+                if p_vec is not None and p_axis == sd.axis:
+                    p_arr[0] += disp * float(p_vec[0])
+                    p_arr[1] += disp * float(p_vec[1])
+                    p_arr[2] += disp * float(p_vec[2])
+                else:
+                    p_arr[axis_idx[sd.axis]] += disp
+            else:
+                p_arr[axis_idx[sd.axis]] += disp
+            frame_pos_deltas[sd.bone] = (float(p_arr[0]), float(p_arr[1]), float(p_arr[2]))
 
         pos_deltas_list.append(frame_pos_deltas)
         scale_factors_list.append(frame_scale_factors)
@@ -1054,6 +1088,76 @@ def evaluate_behavior_clip(
     return samples
 
 
+def _measure_max_interframe_steps(frames: list[BehaviorFrameSample], loop: bool) -> tuple[float, float]:
+    """Return ``(max_step_deg, max_step_units)`` across consecutive sampled clip frames."""
+    max_deg = 0.0
+    max_units = 0.0
+    for idx in range(1, len(frames)):
+        prev_f = frames[idx - 1]
+        cur_f = frames[idx]
+        for bname in set(prev_f.pose_euler_deltas) | set(cur_f.pose_euler_deltas):
+            v0 = np.asarray(prev_f.pose_euler_deltas.get(bname, (0.0, 0.0, 0.0)), dtype=np.float64)
+            v1 = np.asarray(cur_f.pose_euler_deltas.get(bname, (0.0, 0.0, 0.0)), dtype=np.float64)
+            max_deg = max(max_deg, float(np.max(np.abs(v1 - v0))))
+        r0 = np.asarray(prev_f.root_translation_delta, dtype=np.float64)
+        r1 = np.asarray(cur_f.root_translation_delta, dtype=np.float64)
+        max_units = max(max_units, float(np.linalg.norm(r1 - r0)))
+        for bname in set(prev_f.pose_position_deltas) | set(cur_f.pose_position_deltas):
+            p0 = np.asarray(prev_f.pose_position_deltas.get(bname, (0.0, 0.0, 0.0)), dtype=np.float64)
+            p1 = np.asarray(cur_f.pose_position_deltas.get(bname, (0.0, 0.0, 0.0)), dtype=np.float64)
+            max_units = max(max_units, float(np.linalg.norm(p1 - p0)))
+    return max_deg, max_units
+
+
+def _subdivide_clip_phases(
+    frames: list[BehaviorFrameSample],
+    *,
+    max_step_deg: float,
+    max_step_units: float,
+    max_frames: int,
+) -> list[float]:
+    """Locally subdivide only intervals whose angular or linear step exceeds ``max_step_deg`` / ``max_step_units``."""
+    budget_left = max(0, int(max_frames) - len(frames))
+    if budget_left == 0 or len(frames) < 2:
+        return [f.phase for f in frames]
+
+    interval_needs: list[int] = []
+    for idx in range(1, len(frames)):
+        prev_f = frames[idx - 1]
+        cur_f = frames[idx]
+        step_deg = 0.0
+        for bname in set(prev_f.pose_euler_deltas) | set(cur_f.pose_euler_deltas):
+            v0 = np.asarray(prev_f.pose_euler_deltas.get(bname, (0.0, 0.0, 0.0)), dtype=np.float64)
+            v1 = np.asarray(cur_f.pose_euler_deltas.get(bname, (0.0, 0.0, 0.0)), dtype=np.float64)
+            step_deg = max(step_deg, float(np.max(np.abs(v1 - v0))))
+        r0 = np.asarray(prev_f.root_translation_delta, dtype=np.float64)
+        r1 = np.asarray(cur_f.root_translation_delta, dtype=np.float64)
+        step_u = float(np.linalg.norm(r1 - r0))
+        for bname in set(prev_f.pose_position_deltas) | set(cur_f.pose_position_deltas):
+            p0 = np.asarray(prev_f.pose_position_deltas.get(bname, (0.0, 0.0, 0.0)), dtype=np.float64)
+            p1 = np.asarray(cur_f.pose_position_deltas.get(bname, (0.0, 0.0, 0.0)), dtype=np.float64)
+            step_u = max(step_u, float(np.linalg.norm(p1 - p0)))
+        sub_k = max(1, int(math.ceil(max(step_deg / max(1e-6, max_step_deg), step_u / max(1e-6, max_step_units)))))
+        interval_needs.append(sub_k - 1)
+
+    total_extra = sum(interval_needs)
+    if total_extra == 0:
+        return [f.phase for f in frames]
+
+    scale = min(1.0, budget_left / float(total_extra))
+    new_phases: list[float] = [frames[0].phase]
+    for idx, extra_raw in enumerate(interval_needs):
+        p0 = frames[idx].phase
+        p1 = frames[idx + 1].phase
+        extra = int(math.floor(extra_raw * scale))
+        if extra_raw > 0 and extra == 0 and len(new_phases) + (len(frames) - idx) <= max_frames:
+            extra = 1
+        sub_k = extra + 1
+        for k in range(1, sub_k + 1):
+            new_phases.append(p0 + (p1 - p0) * (k / float(sub_k)))
+    return new_phases
+
+
 def audit_behavior_clip(
     program: Program,
     clip_name: str,
@@ -1062,9 +1166,31 @@ def audit_behavior_clip(
     active_state: str | None = None,
     max_allowed_stance_slip: float = 0.02,
     collision_tolerance: float = 1e-7,
+    adaptive_subdivision: bool | None = None,
+    max_step_deg: float = 10.0,
+    max_step_units: float = 0.5,
+    max_frames: int = 72,
 ) -> dict[str, Any]:
-    """Run multi-phase swept 15-axis OBB SAT + stance foot-skating audit on a @behavior clip."""
+    """Run adaptive discrete-step swept 15-axis OBB SAT + stance foot-skating audit on a @behavior clip."""
     from synccraft.audit.sync_audit import audit_scene
+
+    clip_obj = next((c for c in (program.behavior.clips if program.behavior else ()) if c.name == clip_name), None)
+    duration_s = float(clip_obj.duration_s) if clip_obj is not None else 0.0
+    is_loop = bool(clip_obj.loop) if clip_obj is not None else True
+    use_adaptive = (
+        bool(adaptive_subdivision)
+        if adaptive_subdivision is not None
+        else (
+            getattr(program.meta, "dsl_version", "3.0") == "4.0"
+            or (
+                clip_obj is not None
+                and (
+                    any(t.law == "spin" for t in clip_obj.tracks)
+                    or bool(getattr(clip_obj, "slides", ()))
+                )
+            )
+        )
+    )
 
     frames = evaluate_behavior_clip(
         program,
@@ -1072,6 +1198,26 @@ def audit_behavior_clip(
         num_frames=num_frames,
         active_state=active_state,
     )
+    measured_max_deg, measured_max_units = _measure_max_interframe_steps(frames, is_loop)
+    if use_adaptive:
+        for _ in range(2):
+            if len(frames) >= max_frames or (measured_max_deg <= max_step_deg and measured_max_units <= max_step_units):
+                break
+            refined_phases = _subdivide_clip_phases(
+                frames,
+                max_step_deg=max_step_deg,
+                max_step_units=max_step_units,
+                max_frames=max_frames,
+            )
+            if len(refined_phases) <= len(frames):
+                break
+            frames = evaluate_behavior_clip(
+                program,
+                clip_name,
+                active_state=active_state,
+                sample_phases=refined_phases,
+            )
+            measured_max_deg, measured_max_units = _measure_max_interframe_steps(frames, is_loop)
     colliding_frames: list[dict[str, Any]] = []
     total_collision_events = 0
 
@@ -1121,9 +1267,14 @@ def audit_behavior_clip(
     return {
         "clip_name": clip_name,
         "active_state": active_state,
+        "motion_audit_method": "adaptive_discrete_step" if use_adaptive else "fixed_uniform_sampling",
+        "time_range_s": [0.0, round(duration_s, 4)],
         "num_frames": len(frames),
+        "measured_max_step_deg": round(measured_max_deg, 4),
+        "measured_max_step_units": round(measured_max_units, 5),
         "passed": passed,
         "swept_collision_free": len(colliding_frames) == 0,
+        "swept_collision_frame_count": len(colliding_frames),
         "total_collision_events": total_collision_events,
         "colliding_frames": colliding_frames,
         "stance_slip_passed": stance_ok,

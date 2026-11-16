@@ -58,7 +58,8 @@ def allocate_uv_layout(
     if type(padding) is not int or padding < 1:
         raise ValueError("padding must be an integer >= 1")
     try:
-        density = program.meta.texel_density / 16
+        units_per_block = max(1, int(getattr(program.meta, "units_per_block", 16)))
+        density = program.meta.texel_density / units_per_block
     except OverflowError as exc:
         raise ValueError("texel_density exceeds the atlas numeric range") from exc
 
@@ -85,10 +86,12 @@ def allocate_uv_layout(
     measured_islands = []
     widest_needed = 8
     total_padded_area = 0
+    seen_share_area: set[tuple[str, str, int, int, str]] = set()
     for box in ordered_boxes:
         sx, sy, sz = map(float, box.size)
         sizes = {"north": (sx, sy), "south": (sx, sy), "east": (sz, sy),
                  "west": (sz, sy), "up": (sx, sz), "down": (sx, sz)}
+        share_key = getattr(box, "uv_share_key", None)
         for face in ordered_faces:
             u, v = sizes[face]
             u_is_pos_int = math.isclose(u, round(u), abs_tol=1e-9) and u > 0.0
@@ -100,8 +103,13 @@ def allocate_uv_layout(
             ):
                 raise ValueError("texel_density produces fractional texels; integer atlas required")
             w, h = max(1, int(round(fw))), max(1, int(round(fh)))
-            measured_islands.append((box.name, face, w, h, box.material))
+            measured_islands.append((box.name, face, w, h, box.material, share_key))
             widest_needed = max(widest_needed, w + 2 * padding)
+            if share_key is not None:
+                sig = (share_key, face, w, h, box.material)
+                if sig in seen_share_area:
+                    continue
+                seen_share_area.add(sig)
             total_padded_area += (w + 2 * padding) * (h + 2 * padding)
 
     if not measured_islands:
@@ -121,14 +129,25 @@ def allocate_uv_layout(
     occupied_width = 1
     placements = []
     faces = {b.name: {} for b in scene.boxes}
-    for bname, face, w, h, mat in measured_islands:
+    shared_rects: dict[tuple[str, str, int, int, str], list[int]] = {}
+    shared_uv_face_count = 0
+    for bname, face, w, h, mat, share_key in measured_islands:
         if min(w, h) < 1 or w + 2 * padding > effective_max_width:
             raise ValueError("face cannot fit atlas width at the requested density")
+        if share_key is not None:
+            sig = (share_key, face, w, h, mat)
+            if sig in shared_rects:
+                faces[bname][face] = list(shared_rects[sig])
+                shared_uv_face_count += 1
+                continue
         if x + w + padding > effective_max_width:
             x = padding
             y += row_height + 2 * padding
             row_height = 0
-        faces[bname][face] = [x, y, x + w, y + h]
+        rect = [x, y, x + w, y + h]
+        faces[bname][face] = rect
+        if share_key is not None:
+            shared_rects[(share_key, face, w, h, mat)] = list(rect)
         placements.append((bname, face, x, y, w, h, mat))
         row_height = max(row_height, h)
         occupied_width = max(occupied_width, x + w + padding)
@@ -137,13 +156,16 @@ def allocate_uv_layout(
     width, height = pow2(occupied_width), pow2(y + row_height + padding)
     if max(width, height) > 8192:
         raise ValueError("diagnostic atlas exceeds 8192-pixel limit; use production packer")
-    return {
+    payload = {
         "width": width,
         "height": height,
         "padding": padding,
         "faces": faces,
         "placements": placements,
     }
+    if shared_uv_face_count > 0:
+        payload["shared_uv_face_count"] = shared_uv_face_count
+    return payload
 
 
 def build_atlas(program, scene, *, max_width=None, padding=1):

@@ -48,7 +48,7 @@ function provideCompletions(docIndex, offset) {
   if (ctx.valueTarget) {
     const vt = ctx.valueTarget;
     if (vt.kind === "drive_subject") {
-      if (vt.keyword === "track" || vt.keyword === "pose_bias" || vt.keyword === "spring") {
+      if (vt.keyword === "track" || vt.keyword === "slide" || vt.keyword === "pose_bias" || vt.keyword === "spring" || vt.keyword === "prismatic_joint") {
         for (const b of symbols.expandedBones) {
           if (b.isRoot) continue;
           add(b.name, "Struct", b.expanded ? `Expanded bone (${b.origin})` : "Declared child bone", {
@@ -99,7 +99,7 @@ function provideCompletions(docIndex, offset) {
 
     // Track / drive law completions right after `track <bone>: <cursor>`
     if (vt.kind === "prop" && ctx.section === "@behavior" && ctx.containerKind === "clip") {
-      if (/\btrack\s+[A-Za-z_][A-Za-z0-9_]*\s*:\s*[A-Za-z_]*$/.test(ctx.linePrefix)) {
+      if (/\btrack\s+[A-Za-z_][A-Za-z0-9_.]*\s*:\s*[A-Za-z_]*$/.test(ctx.linePrefix)) {
         for (const law of catalog.TRACK_LAWS) {
           const defaultAmp = law === "spin" ? "360" : "20";
           add(
@@ -115,6 +115,17 @@ function provideCompletions(docIndex, offset) {
               sortText: `0_${law}`
             }
           );
+        }
+        return dedupeItems(items);
+      }
+      if (/\bslide\s+[A-Za-z_][A-Za-z0-9_.]*\s*:\s*[A-Za-z_]*$/.test(ctx.linePrefix)) {
+        for (const law of catalog.SLIDE_LAWS) {
+          add(law, "Function", `${law} prismatic translation drive (exports position channel)`, {
+            insertText: `${law}(axis=\${1|x,y,z|}, amp_units=\${2:1.5}, freq_hz=\${3:0.5})`,
+            isSnippet: true,
+            doc: catalog.HOVER_DOCUMENTATION.slide || "",
+            sortText: `0_${law}`
+          });
         }
         return dedupeItems(items);
       }
@@ -168,8 +179,36 @@ function provideCompletions(docIndex, offset) {
       return dedupeItems(items);
     }
     if (keyName === "material" || keyName === "mat") {
+      if (ctx.section === "@component" && ctx.componentName) {
+        const cDef = symbols.components.get(ctx.componentName);
+        if (cDef) {
+          for (const sl of cDef.materialSlots || []) {
+            add(sl, "Color", `Declared material_slot in @component '${cDef.name}'`, { sortText: `0_0_${sl}` });
+          }
+        }
+      }
       for (const p of symbols.palettes) {
-        add(p.name, "Color", "Declared @palette color ramp", { sortText: `0_${p.name}` });
+        add(p.name, "Color", "Declared @palette color ramp", { sortText: `0_1_${p.name}` });
+      }
+      return dedupeItems(items);
+    }
+    if (keyName === "uv_policy") {
+      catalog.UV_POLICIES.forEach((p, idx) => add(p, "EnumMember", "@component UV packing policy", { doc: catalog.HOVER_DOCUMENTATION.uv_policy, sortText: `0_${idx}_${p}` }));
+      return dedupeItems(items);
+    }
+    if (keyName === "type") {
+      catalog.CONNECTION_TYPES.forEach((t, idx) => add(t, "EnumMember", "v4.0 frame connection kinematics", { doc: catalog.HOVER_DOCUMENTATION.connect, sortText: `0_${idx}_${t}` }));
+      return dedupeItems(items);
+    }
+    if (keyName === "mode") {
+      catalog.CONNECTION_MODES.forEach((m, idx) => add(m, "EnumMember", "v4.0 frame mating convention", { doc: catalog.HOVER_DOCUMENTATION.connect, sortText: `0_${idx}_${m}` }));
+      return dedupeItems(items);
+    }
+    if (keyName === "on_box") {
+      if (ctx.enclosingBone) {
+        for (const bx of ctx.enclosingBone.boxes || []) {
+          add(bx.name, "Field", `Box in '${ctx.enclosingBone.name}'`, { sortText: `0_${bx.name}` });
+        }
       }
       return dedupeItems(items);
     }
@@ -392,8 +431,59 @@ function provideCompletions(docIndex, offset) {
     add("target_profile", "Property", "bedrock_entity | geckolib | bbmodel_5 | java_modern | java_legacy", { insertText: "target_profile: ${1|bedrock_entity,geckolib,bbmodel_5,java_modern,java_legacy|}", isSnippet: true, sortText: "0_2" });
     add("texel_density", "Property", "Pixels per block (16, 32, 64)", { insertText: "texel_density: ${1|16,32,64|}", isSnippet: true, sortText: "0_3" });
     add("size_step", "Property", "Sub-unit grid quantum (1.0, 0.5, 0.25)", { insertText: "size_step: ${1|1.0,0.5,0.25,0.125|}", isSnippet: true, sortText: "0_4" });
+    add("units_per_block", "Property", "Model units per 1m block (default 16)", { insertText: "units_per_block: ${1:16}", isSnippet: true, sortText: "0_4b" });
     add("audit_profile", "Property", "strict (default) | sculpted (ADR 0007)", { insertText: "audit_profile: ${1|strict,sculpted|}", isSnippet: true, doc: catalog.HOVER_DOCUMENTATION.audit_profile, sortText: "0_5" });
-    add("dsl_version", "Property", "Block-DSL version string", { insertText: "dsl_version: \"3.2\"", sortText: "0_6" });
+    add("dsl_version", "Property", "Block-DSL version string", { insertText: "dsl_version: \"4.0\"", sortText: "0_6" });
+    return dedupeItems(items);
+  }
+
+  if (ctx.section === "@layout") {
+    add("param", "Keyword", "Bounded top-down design parameter", { insertText: "param ${1:hull_width} = ${2:12} [${3:8}, ${4:24}]", isSnippet: true, sortText: "0_1" });
+    add("let", "Keyword", "Derived topological formula", { insertText: "let ${1:derived_dim} = max(4, round(${2:hull_width} * 0.5))", isSnippet: true, sortText: "0_2" });
+    add("budget", "Keyword", "Non-mutating complexity ceiling", { insertText: "budget ${1|max_boxes,max_bones,max_atlas_px|} = ${2:48}", isSnippet: true, sortText: "0_3" });
+    add("envelope", "Keyword", "Non-mutating spatial envelope contract", { insertText: "envelope ${1|max_span,min_ground_y|} = ${2:[48, 36, 48]}", isSnippet: true, sortText: "0_4" });
+    return dedupeItems(items);
+  }
+
+  if (ctx.section === "@assembly") {
+    if (ctx.containerKind === "connect") {
+      add("type", "Property", "fixed | revolute | prismatic", { insertText: "type: ${1|fixed,revolute,prismatic|}", isSnippet: true, sortText: "0_1" });
+      add("axis", "Property", "Revolute/prismatic DOF axis (x, y, z)", { insertText: "axis: ${1|x,y,z|}", isSnippet: true, sortText: "0_2" });
+      add("limits", "Property", "DOF bounds [min, max] containing 0", { insertText: "limits: [${1:-35, 35}]", isSnippet: true, sortText: "0_3" });
+      add("mode", "Property", "align (default) | oppose (180° +Y flip)", { insertText: "mode: ${1|align,oppose|}", isSnippet: true, sortText: "0_4" });
+      add("sculpted_blend", "Property", "Authorize sculpted seam miter blend", { insertText: "sculpted_blend: ${1|true,false|}", isSnippet: true, sortText: "0_5" });
+      return dedupeItems(items);
+    }
+    if (ctx.containerKind === "instance") {
+      add("id", "Property", "Stable instance provenance ID", { insertText: "id: \"${1:part_01}\"", isSnippet: true, sortText: "0_1" });
+      add("materials", "Property", "Bind component material_slots to @palette ramps", { insertText: "materials: { ${1:slot}: ${2:palette_id} }", isSnippet: true, sortText: "0_2" });
+      return dedupeItems(items);
+    }
+    add("root_pivot", "Property", "World-space root assembly pivot [x, y, z]", { insertText: "root_pivot: [0, ${1:14}, 0]", isSnippet: true, sortText: "0_0_pivot" });
+    for (const [cName, cDef] of symbols.components.entries()) {
+      const slotMap = (cDef.materialSlots || []).map((s, idx) => `${s}: \${${idx + 2}:palette_id}`).join(", ");
+      add(`instance : ${cName}`, "Class", `Instantiate @component '${cName}'`, {
+        insertText: `instance \${1:${cName.toLowerCase()}} : ${cName}() {\n  id: "\${1:${cName.toLowerCase()}}_01"\n  materials: { ${slotMap} }\n}`,
+        isSnippet: true,
+        sortText: `0_1_inst_${cName}`
+      });
+    }
+    add("subassembly", "Keyword", "Purely organizational component group", {
+      insertText: "subassembly ${1:module_group} {\n  $0\n}",
+      isSnippet: true,
+      sortText: "0_2_sub"
+    });
+    add("connect", "Keyword", "Mate child.frame to parent.frame", {
+      insertText: "connect ${1:child}.${2:mount} to ${3:parent}.${4:socket} { type: ${5|fixed,revolute,prismatic|}, axis: ${6|x,y,z|}, limits: [${7:-45, 45}] }",
+      isSnippet: true,
+      doc: catalog.HOVER_DOCUMENTATION.connect,
+      sortText: "0_3_connect"
+    });
+    add("bind", "Keyword", "Explicit runtime bone target override", {
+      insertText: "bind ${1:instance_id} to ${2:target_bone}",
+      isSnippet: true,
+      sortText: "0_4_bind"
+    });
     return dedupeItems(items);
   }
 
@@ -442,7 +532,27 @@ function provideCompletions(docIndex, offset) {
     return dedupeItems(items);
   }
 
-  if (ctx.section === "@rig") {
+  if (ctx.section === "@rig" || ctx.section === "@component") {
+    if (ctx.containerKind === "frame") {
+      add("on_box", "Property", "Anchor frame onto a local component box", { insertText: "on_box: ", sortText: "0_1" });
+      add("anchor", "Property", "Normalized surface point [-1..1]^3", { insertText: "anchor: [${1:0, 1, 0}]", isSnippet: true, sortText: "0_2" });
+      add("rot", "Property", "Local frame orientation [rx, ry, rz] deg", { insertText: "rot: [${1:0, 0, 0}]", isSnippet: true, sortText: "0_3" });
+      add("offset", "Property", "Fine frame translation offset [dx, dy, dz]", { insertText: "offset: [${1:0, 0, 0}]", isSnippet: true, sortText: "0_4" });
+      add("pos", "Property", "Explicit component-local frame position [x, y, z]", { insertText: "pos: [${1:0, 0, 0}]", isSnippet: true, sortText: "0_5" });
+      add("role", "Property", "Export as oriented Bedrock 1.26.40 locator", { insertText: "role: ${1|socket,ik_effector,vfx_emitter,camera_focus,hitbox,rider_seat|}", isSnippet: true, sortText: "0_6" });
+      return dedupeItems(items);
+    }
+    if (ctx.section === "@component" && ctx.containerKind === "component") {
+      add("param", "Keyword", "Bounded component parameter", { insertText: "param ${1:len} = ${2:8} [${3:4}, ${4:16}]", isSnippet: true, sortText: "0_0_param" });
+      add("material_slots", "Property", "Abstract material slot names", { insertText: "material_slots: [${1:armor, trim}]", isSnippet: true, sortText: "0_0_slots" });
+      add("uv_policy", "Property", "unique (default) | shared", { insertText: "uv_policy: ${1|unique,shared|}", isSnippet: true, doc: catalog.HOVER_DOCUMENTATION.uv_policy, sortText: "0_0_uv" });
+      add("frame", "Keyword", "Public 6-DOF oriented attachment interface", {
+        insertText: "frame ${1:mount_socket} { on_box: ${2:primary_box}, anchor: [${3:0, 0, -1}], rot: [0, 0, 0] }",
+        isSnippet: true,
+        doc: catalog.HOVER_DOCUMENTATION.frame,
+        sortText: "0_3_frame"
+      });
+    }
     if (ctx.containerKind === "box" || ctx.containerKind === "plane") {
       const defaultMat = symbols.palettes.length > 0 ? symbols.palettes[0].name : "mat_id";
       if (ctx.containerKind === "plane") {
@@ -623,6 +733,12 @@ function provideCompletions(docIndex, offset) {
         insertText: "track ${1:bone_id}: ${2|wave,flap,hinge,impulse,spin|}(axis=${3|x,y,z|}, amp_deg=${4:20}, freq_hz=${5:0.5})",
         isSnippet: true,
         sortText: "0_3_track"
+      });
+      add("slide", "Keyword", "v4.0 prismatic joint translation drive (position channel)", {
+        insertText: "slide ${1:slider_bone}: ${2|piston,hinge,wave,impulse|}(axis=${3|z,y,x|}, amp_units=${4:1.5}, freq_hz=${5:0.5})",
+        isSnippet: true,
+        doc: catalog.HOVER_DOCUMENTATION.slide,
+        sortText: "0_3b_slide"
       });
       add("ik_drive", "Keyword", "World-anchored foot_cycle IK drive (< 0.02u slip)", {
         insertText: "ik_drive ${1:ik_chain_id}: foot_cycle(stride=${2:4.5}, lift=${3:1.8}, phase_deg=${4:0})",

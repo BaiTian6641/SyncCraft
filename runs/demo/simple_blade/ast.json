@@ -5,7 +5,8 @@
     "texel_density": 16,
     "dsl_version": "3.2",
     "size_step": 1.0,
-    "audit_profile": "strict"
+    "audit_profile": "strict",
+    "units_per_block": 16
   },
   "palettes": [
     {
@@ -87,7 +88,13 @@
         "uv": null,
         "uv_faces": [],
         "texture": null,
-        "blend_with": []
+        "blend_with": [],
+        "uv_share_key": null,
+        "component_rest_pos": null,
+        "component_rest_euler": null,
+        "explicit_local_center": null,
+        "explicit_contact_with": [],
+        "instance_name": null
       },
       {
         "name": "pommel",
@@ -127,7 +134,13 @@
         "uv": null,
         "uv_faces": [],
         "texture": null,
-        "blend_with": []
+        "blend_with": [],
+        "uv_share_key": null,
+        "component_rest_pos": null,
+        "component_rest_euler": null,
+        "explicit_local_center": null,
+        "explicit_contact_with": [],
+        "instance_name": null
       },
       {
         "name": "guard",
@@ -184,7 +197,13 @@
             "uv": null,
             "uv_faces": [],
             "texture": null,
-            "blend_with": []
+            "blend_with": [],
+            "uv_share_key": null,
+            "component_rest_pos": null,
+            "component_rest_euler": null,
+            "explicit_local_center": null,
+            "explicit_contact_with": [],
+            "instance_name": null
           },
           {
             "name": "blade",
@@ -241,7 +260,13 @@
                 "uv": null,
                 "uv_faces": [],
                 "texture": null,
-                "blend_with": []
+                "blend_with": [],
+                "uv_share_key": null,
+                "component_rest_pos": null,
+                "component_rest_euler": null,
+                "explicit_local_center": null,
+                "explicit_contact_with": [],
+                "instance_name": null
               }
             ],
             "joint_limits": null,
@@ -266,5 +291,7 @@
   "kinematics": null,
   "behavior": null,
   "textures": [],
-  "controller": null
+  "controller": null,
+  "assembly_spec": null,
+  "source_map": null
 }

@@ -340,13 +340,18 @@ def _sculpted_exemption_reason(
     is_blend_pair: bool,
     bone_parent_map: dict[str, str | None],
     effective_box_parent_map: dict[str, str | None] | None = None,
+    *,
+    left_instance: str | None = None,
+    right_instance: str | None = None,
 ) -> str | None:
-    """Return explicit ADR 0007 sculpted-overlap contract category, or None (never sibling immunity)."""
+    """Return explicit ADR 0007/0008 sculpted-overlap contract category, or None (never sibling/instance immunity)."""
     if is_blend_pair:
         return "declared_blend"
     if left_bone not in bone_parent_map or right_bone not in bone_parent_map:
         return None
     if left_bone == right_bone:
+        if left_instance is not None and right_instance is not None and left_instance != right_instance:
+            return None
         return "sculpted_same_bone_miter"
     parent_l = bone_parent_map[left_bone]
     parent_r = bone_parent_map[right_bone]
@@ -706,6 +711,8 @@ def audit_scene(
                             is_blend_pair,
                             bone_parent_map,
                             effective_box_parent_map,
+                            left_instance=getattr(left, "instance_name", None),
+                            right_instance=getattr(right, "instance_name", None),
                         )
                         if sc_reason is not None and z_fight is None:
                             sc_viol, sc_tel = _evaluate_sculpted_overlap(

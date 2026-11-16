@@ -92,6 +92,16 @@ function provideHover(docIndex, offset) {
     };
   }
 
+  if (symbols.components && symbols.components.has(token)) {
+    const comp = symbols.components.get(token);
+    const frameList = (comp.frames || []).map((f) => `\`${f.name}\``).join(", ") || "none";
+    const slotList = (comp.materialSlots || []).map((s) => `\`${s}\``).join(", ") || "none";
+    return {
+      word: token,
+      markdown: `**\`${comp.name}\`** — Declared \`@component\` (line ${comp.position.line + 1})\n\n- **Material Slots**: ${slotList}\n- **Public Frames**: ${frameList}\n- **Boxes**: \`${(comp.boxes || []).length}\``
+    };
+  }
+
   return null;
 }
 

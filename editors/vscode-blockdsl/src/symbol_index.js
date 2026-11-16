@@ -249,7 +249,7 @@ function indexDocument(text) {
       const seg = masked.slice(headerStart, i).trim();
       if (
         seg &&
-        /^(?:let\b|use\b|track\b|muscle_drive\b|ik_drive\b|pose_bias\b|muscle_tone\b|initial\b|[A-Za-z_][A-Za-z0-9_]*\s*:\s*(?:ramp|image|process)\b|[A-Za-z_][A-Za-z0-9_]*\s*->)/.test(seg) &&
+        /^(?:param\b|let\b|budget\b|envelope\b|material_slots\b|uv_policy\b|use\b|bind\b|track\b|slide\b|muscle_drive\b|ik_drive\b|pose_bias\b|muscle_tone\b|initial\b|[A-Za-z_][A-Za-z0-9_]*\s*:\s*(?:ramp|image|process)\b|[A-Za-z_][A-Za-z0-9_]*\s*->)/.test(seg) &&
         !seg.includes("{")
       ) {
         // Only reset if parentheses are balanced (multi-line call stays intact)
@@ -274,6 +274,8 @@ function indexDocument(text) {
     metaFields: {},
     lets: [],
     macros: new Map(),
+    components: new Map(),
+    instances: [],
     textures: [],
     palettes: [],
     materials: [],
@@ -297,15 +299,15 @@ function indexDocument(text) {
   const metaScope = scopes.find((s) => s.kind === "section" && s.name === "@meta");
   if (metaScope) {
     const metaBody = text.slice(metaScope.bodyStart, metaScope.bodyEnd);
-    const kvRe = /\b(archetype|target_profile|texel_density|dsl_version|size_step|audit_profile)\s*:\s*("[^"]*"|[A-Za-z0-9_.\-]+)/g;
+    const kvRe = /\b(archetype|target_profile|texel_density|units_per_block|dsl_version|size_step|audit_profile)\s*:\s*("[^"]*"|[A-Za-z0-9_.\-]+)/g;
     let m;
     while ((m = kvRe.exec(metaBody)) !== null) {
       symbols.metaFields[m[1]] = m[2].replace(/^"|"$/g, "");
     }
   }
 
-  // Extract `let` bindings
-  const letRe = /\blet\s+([A-Za-z_][A-Za-z0-9_]*)\s*=/g;
+  // Extract `let` and `param` bindings
+  const letRe = /\b(?:let|param)\s+([A-Za-z_][A-Za-z0-9_]*)\s*=/g;
   let m;
   while ((m = letRe.exec(masked)) !== null) {
     const nameOffset = m.index + m[0].indexOf(m[1]);
@@ -363,6 +365,42 @@ function indexDocument(text) {
         children: [],
         scope: sc
       });
+    } else if (sc.kind === "component") {
+      const compBody = masked.slice(sc.bodyStart, sc.bodyEnd);
+      const msMatch = /\bmaterial_slots\s*:\s*\[([^\]]*)\]/.exec(compBody);
+      const slots = msMatch
+        ? msMatch[1].split(",").map((s) => s.trim().split("=")[0].trim()).filter(Boolean)
+        : [];
+      const cDef = {
+        name: sc.name,
+        kind: "component",
+        offset: sc.nameOffset,
+        position: offsetToPosition(lineStarts, sc.nameOffset),
+        boxes: [],
+        locators: [],
+        frames: [],
+        materialSlots: slots,
+        children: [],
+        scope: sc
+      };
+      symbols.components.set(sc.name, cDef);
+      symbols.globalDeclarations.push({
+        name: sc.name,
+        kind: "component",
+        offset: sc.nameOffset,
+        position: offsetToPosition(lineStarts, sc.nameOffset)
+      });
+    } else if (sc.kind === "instance") {
+      const instRec = {
+        name: sc.name,
+        kind: "instance",
+        componentName: sc.meta.componentName || "",
+        symmetryMods: sc.meta.symmetryMods || [],
+        offset: sc.nameOffset,
+        position: offsetToPosition(lineStarts, sc.nameOffset)
+      };
+      symbols.instances.push(instRec);
+      symbols.globalDeclarations.push(instRec);
     } else if (sc.kind === "bone" || sc.kind === "root_bone") {
       const bNode = {
         name: sc.name,
@@ -398,11 +436,11 @@ function indexDocument(text) {
     }
   }
 
-  // Pass 1: Attach boxes, planes, locators, and non-rig domain symbols so `chain` & `macro`
-  // templates already contain their elements before Pass 2 expands `chain` and `use`!
+  // Pass 1: Attach boxes, planes, locators, frames, and non-rig domain symbols so `chain`, `macro`, & `component`
+  // templates already contain their elements before Pass 2 expands `chain`, `use`, and `@assembly` instances!
   for (const sc of scopes) {
-    if (sc.kind === "box" || sc.kind === "plane" || sc.kind === "locator") {
-      const owner = findEnclosingOwner(sc, scopes, boneMap, symbols.macros);
+    if (sc.kind === "box" || sc.kind === "plane" || sc.kind === "locator" || sc.kind === "frame") {
+      const owner = findEnclosingOwner(sc, scopes, boneMap, symbols.macros, symbols.components);
       const item = {
         name: sc.name,
         kind: sc.kind,
@@ -411,13 +449,15 @@ function indexDocument(text) {
         boneName: owner ? owner.name : null
       };
       if (owner) {
-        if (sc.kind === "locator") {
+        if (sc.kind === "frame") {
+          if (owner.frames) owner.frames.push(item);
+        } else if (sc.kind === "locator") {
           owner.locators.push(item);
         } else {
           owner.boxes.push(item);
         }
       }
-      if (!sc.inMacro && (!owner || owner.kind !== "chain")) {
+      if (!sc.inMacro && sc.kind !== "frame" && (!owner || owner.kind !== "chain")) {
         if (sc.kind === "box") symbols.boxes.push(item);
         else if (sc.kind === "plane") symbols.planes.push(item);
         else symbols.locators.push(item);
@@ -452,8 +492,8 @@ function indexDocument(text) {
   for (const sc of scopes) {
     if (sc.kind === "bone" || sc.kind === "root_bone") {
       const bNode = boneMap.get(sc);
-      const owner = findEnclosingOwner(sc, scopes, boneMap, symbols.macros);
-      if (owner && (owner.kind === "bone" || owner.kind === "root_bone" || owner.kind === "macro")) {
+      const owner = findEnclosingOwner(sc, scopes, boneMap, symbols.macros, symbols.components);
+      if (owner && (owner.kind === "bone" || owner.kind === "root_bone" || owner.kind === "macro" || owner.kind === "component")) {
         bNode.parentBoneName = owner.name;
         owner.children.push(bNode);
       } else if (!sc.inMacro) {
@@ -461,7 +501,7 @@ function indexDocument(text) {
       }
     } else if (sc.kind === "chain") {
       const cNode = boneMap.get(sc);
-      const owner = findEnclosingOwner(sc, scopes, boneMap, symbols.macros);
+      const owner = findEnclosingOwner(sc, scopes, boneMap, symbols.macros, symbols.components);
       if (owner && owner.children) {
         let firstSeg = null;
         let prevSeg = null;
@@ -592,6 +632,83 @@ function indexDocument(text) {
   }
   collectExpanded(expandedRoots, null);
 
+  // Expand v4.0 `@assembly` component instances (including `mirror_x(twin)` clones & dotted refs)
+  for (let iIdx = 0; iIdx < symbols.instances.length; iIdx += 1) {
+    const inst = symbols.instances[iIdx];
+    const compDef = symbols.components.get(inst.componentName);
+    const variantNames = [{ name: inst.name, expanded: false, origin: `instance ${inst.name} : ${inst.componentName}` }];
+    for (const mod of inst.symmetryMods || []) {
+      if ((mod.kind === "mirror_x" || mod.kind === "mirror") && mod.twinName) {
+        variantNames.push({
+          name: mod.twinName,
+          expanded: true,
+          origin: `${mod.kind} of instance ${inst.name}`
+        });
+        symbols.globalDeclarations.push({
+          name: mod.twinName,
+          kind: "expanded_instance",
+          offset: inst.offset,
+          position: inst.position,
+          origin: `${mod.kind} of ${inst.name}`
+        });
+      }
+    }
+    for (const v of variantNames) {
+      const instBoxes = compDef
+        ? compDef.boxes.map((bx) => ({
+            ...bx,
+            name: `${v.name}__${bx.name}`,
+            dottedName: `${v.name}.${bx.name}`,
+            expanded: true,
+            origin: v.origin
+          }))
+        : [];
+      symbols.expandedBones.push({
+        name: v.name,
+        isRoot: iIdx === 0 && !v.expanded,
+        parentBoneName: iIdx === 0 && !v.expanded ? null : "assembly",
+        expanded: v.expanded,
+        origin: v.origin,
+        offset: inst.offset,
+        position: inst.position,
+        boxes: instBoxes,
+        locators: []
+      });
+      for (const bx of instBoxes) {
+        symbols.expandedBoxes.push({ ...bx, boneName: v.name });
+        symbols.expandedBoxes.push({ ...bx, name: bx.dottedName, boneName: v.name });
+      }
+      if (compDef) {
+        for (const ch of compDef.children || []) {
+          const chFull = `${v.name}__${ch.name}`;
+          const chDot = `${v.name}.${ch.name}`;
+          symbols.expandedBones.push({
+            name: chDot,
+            isRoot: false,
+            parentBoneName: v.name,
+            expanded: true,
+            origin: `${v.origin} child bone`,
+            offset: ch.offset,
+            position: ch.position,
+            boxes: [],
+            locators: []
+          });
+          symbols.expandedBones.push({
+            name: chFull,
+            isRoot: false,
+            parentBoneName: v.name,
+            expanded: true,
+            origin: `${v.origin} child bone`,
+            offset: ch.offset,
+            position: ch.position,
+            boxes: [],
+            locators: []
+          });
+        }
+      }
+    }
+  }
+
   return {
     text,
     masked,
@@ -606,7 +723,7 @@ function indexDocument(text) {
  * Classify a `{` block header into its semantic AST container kind.
  */
 function classifyBlockHeader(rawHeader, headerStart, braceOffset, parentScope, masked) {
-  const inMacro = !!(parentScope && (parentScope.kind === "macro" || parentScope.inMacro));
+  const inMacro = !!(parentScope && (parentScope.kind === "macro" || parentScope.kind === "component" || parentScope.inMacro));
   // Take the last statement segment if multiple statements preceded `{`
   const tailIdx = Math.max(rawHeader.lastIndexOf(";"), rawHeader.lastIndexOf("}"));
   const clean = (tailIdx >= 0 ? rawHeader.slice(tailIdx + 1) : rawHeader).trim();
@@ -614,8 +731,41 @@ function classifyBlockHeader(rawHeader, headerStart, braceOffset, parentScope, m
   const baseOff = cleanOffsetInMasked >= 0 ? cleanOffsetInMasked : headerStart;
 
   let m;
+  if ((m = /^@component\s+([A-Za-z_][A-Za-z0-9_]*)\b/.exec(clean)) !== null) {
+    const nOff = baseOff + m.index + m[0].indexOf(m[1]);
+    return { kind: "component", name: m[1], start: baseOff, nameOffset: nOff, bodyStart: braceOffset + 1, bodyEnd: braceOffset + 1, end: braceOffset + 1, inMacro: true, meta: {} };
+  }
+  if ((m = /^@assembly\s+([A-Za-z_][A-Za-z0-9_]*)\b/.exec(clean)) !== null) {
+    const nOff = baseOff + m.index + m[0].indexOf(m[1]);
+    return { kind: "section", name: "@assembly", start: baseOff, nameOffset: nOff, bodyStart: braceOffset + 1, bodyEnd: braceOffset + 1, end: braceOffset + 1, inMacro: false, meta: { assemblyName: m[1] } };
+  }
   if ((m = /^(@[A-Za-z_][A-Za-z0-9_]*)\b/.exec(clean)) !== null) {
     return { kind: "section", name: m[1], start: baseOff, nameOffset: baseOff, bodyStart: braceOffset + 1, bodyEnd: braceOffset + 1, end: braceOffset + 1, inMacro: false, meta: {} };
+  }
+  if ((m = /\bsubassembly\s+([A-Za-z_][A-Za-z0-9_]*)\b/.exec(clean)) !== null) {
+    const nOff = baseOff + m.index + m[0].indexOf(m[1]);
+    return { kind: "subassembly", name: m[1], start: baseOff, nameOffset: nOff, bodyStart: braceOffset + 1, bodyEnd: braceOffset + 1, end: braceOffset + 1, inMacro: false, meta: {} };
+  }
+  if ((m = /\binstance\s+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*([A-Za-z_][A-Za-z0-9_]*)([\s\S]*)$/.exec(clean)) !== null) {
+    const nOff = baseOff + m.index + m[0].indexOf(m[1]);
+    return {
+      kind: "instance",
+      name: m[1],
+      start: baseOff,
+      nameOffset: nOff,
+      bodyStart: braceOffset + 1,
+      bodyEnd: braceOffset + 1,
+      end: braceOffset + 1,
+      inMacro: false,
+      meta: { componentName: m[2], symmetryMods: parseSymmetryModifiers(m[3] || "", m[1]) }
+    };
+  }
+  if ((m = /\bconnect\s+([A-Za-z_][A-Za-z0-9_.]*)\s+to\s+([A-Za-z_][A-Za-z0-9_.]*)/.exec(clean)) !== null) {
+    return { kind: "connect", name: `${m[1]}->${m[2]}`, start: baseOff, nameOffset: baseOff, bodyStart: braceOffset + 1, bodyEnd: braceOffset + 1, end: braceOffset + 1, inMacro: false, meta: { childRef: m[1], parentRef: m[2] } };
+  }
+  if ((m = /\b(frame|control)\s+([A-Za-z_][A-Za-z0-9_]*)\b/.exec(clean)) !== null) {
+    const nOff = baseOff + m.index + m[0].indexOf(m[2]);
+    return { kind: m[1], name: m[2], start: baseOff, nameOffset: nOff, bodyStart: braceOffset + 1, bodyEnd: braceOffset + 1, end: braceOffset + 1, inMacro, meta: {} };
   }
   if ((m = /\bdef\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/.exec(clean)) !== null) {
     const nOff = baseOff + m.index + m[0].indexOf(m[1]);
@@ -689,12 +839,12 @@ function findInnermostScopeAt(scopes, offset, allowedKinds) {
   return best;
 }
 
-function findEnclosingOwner(childScope, scopes, boneMap, macroMap) {
+function findEnclosingOwner(childScope, scopes, boneMap, macroMap, componentMap) {
   let best = null;
   for (const sc of scopes) {
     if (sc === childScope) continue;
     if (childScope.start >= sc.bodyStart && childScope.start <= sc.bodyEnd) {
-      if (sc.kind === "bone" || sc.kind === "root_bone" || sc.kind === "chain" || sc.kind === "macro") {
+      if (sc.kind === "bone" || sc.kind === "root_bone" || sc.kind === "chain" || sc.kind === "macro" || sc.kind === "component") {
         if (!best || sc.bodyStart >= best.bodyStart) {
           best = sc;
         }
@@ -703,6 +853,7 @@ function findEnclosingOwner(childScope, scopes, boneMap, macroMap) {
   }
   if (!best) return null;
   if (best.kind === "macro") return macroMap.get(best.name) || null;
+  if (best.kind === "component") return (componentMap && componentMap.get(best.name)) || null;
   return boneMap.get(best) || null;
 }
 
@@ -712,11 +863,12 @@ function findEnclosingOwner(childScope, scopes, boneMap, macroMap) {
  * @param {number} offset
  */
 function getCursorContext(docIndex, offset) {
-  const { text, masked, scopes, boneMap } = docIndex;
+  const { text, masked, scopes, boneMap, symbols } = docIndex;
   const sectionScope = findInnermostScopeAt(scopes, offset, ["section"]);
+  const compScope = findInnermostScopeAt(scopes, offset, ["component"]);
   const containerScope = findInnermostScopeAt(scopes, offset, null);
   const boneScope = findInnermostScopeAt(scopes, offset, ["bone", "root_bone", "chain"]);
-  const enclosingBone = boneScope ? boneMap.get(boneScope) : null;
+  const enclosingBone = boneScope ? boneMap.get(boneScope) : (compScope ? symbols.components.get(compScope.name) : null);
 
   // Find parent bone of `boneScope` if cursor is in a child bone header (between `bone X` and `{`)
   let headerBoneParent = null;
@@ -756,8 +908,8 @@ function getCursorContext(docIndex, offset) {
   const assignMatch = /\b([A-Za-z_][A-Za-z0-9_]*)\s*=\s*[A-Za-z0-9_."\-]*$/.exec(linePrefix);
   const colonMatch = /\b([A-Za-z_][A-Za-z0-9_]*)\s*:\s*[A-Za-z0-9_."\-]*$/.exec(linePrefix);
   const listMatch = /\b([A-Za-z_][A-Za-z0-9_]*)\s*:\s*\[[^\]]*$/.exec(maskedPrefix);
-  const driveTargetMatch = /\b(track|muscle_drive|ik_drive|pose_bias|muscle_tone|material_mod|spring)\s+[A-Za-z0-9_]*$/.exec(linePrefix);
-  const keyTargetMatch = /\bkey\s+([A-Za-z0-9_]*)(\.)?([A-Za-z0-9_]*)$/.exec(linePrefix);
+  const driveTargetMatch = /\b(track|slide|muscle_drive|ik_drive|pose_bias|muscle_tone|material_mod|spring|prismatic_joint)\s+[A-Za-z0-9_.]*$/.exec(linePrefix);
+  const keyTargetMatch = /\bkey\s+([A-Za-z0-9_.]*)(\.)?([A-Za-z0-9_]*)$/.exec(linePrefix);
 
   if (assignMatch) {
     valueTarget = { kind: "arg", name: assignMatch[1] };
@@ -777,7 +929,8 @@ function getCursorContext(docIndex, offset) {
   return {
     offset,
     linePrefix,
-    section: sectionScope ? sectionScope.name : null,
+    section: sectionScope ? sectionScope.name : (compScope ? "@component" : null),
+    componentName: compScope ? compScope.name : null,
     containerKind: containerScope ? containerScope.kind : null,
     containerName: containerScope ? containerScope.name : null,
     enclosingBone,
