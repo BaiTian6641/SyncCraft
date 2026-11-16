@@ -1,0 +1,209 @@
+{
+  "Block-DSL Strict Entity Scaffold": {
+    "prefix": ["scaffold-entity", "entity-strict"],
+    "description": "Complete Block-DSL v3.2 animated entity scaffold (@meta, @palette, @rig, @materials, @style, @kinematics, @behavior, @controller)",
+    "body": [
+      "@meta { archetype: entity, target_profile: ${1|bedrock_entity,geckolib,bbmodel_5|}, texel_density: ${2|16,32|} }",
+      "",
+      "@palette {",
+      "  ${3:primary_hide}: ramp(base_lch=[0.42, 0.08, 245], steps=8, hue_shift=[-5, 4])",
+      "  ${4:accent_trim}: ramp(base_lch=[0.74, 0.12, 80], steps=6)",
+      "}",
+      "",
+      "@rig {",
+      "  root bone ${5:pelvis} {",
+      "    pivot_local: [0, ${6:12}, 0]",
+      "    box ${7:body_core} { size: [6, 5, 8], material: ${3:primary_hide} }",
+      "",
+      "    bone ${8:leg_l} attach(parent_box=${7:body_core}, anchor=[-1, -0.5, 0], align=[1, 0.8, 0]) mirror_x(${9:leg_r}) {",
+      "      joint_limits: [[-55, 55], [-20, 20], [-20, 20]]",
+      "      box ${10:femur_l} { size: [2, 6, 3], material: ${3:primary_hide} }",
+      "      bone ${11:shin_l} attach(parent_box=${10:femur_l}, anchor=[0, -1, 0], align=[0, 1, 0]) {",
+      "        joint_limits: [[-65, 45], [-15, 15], [-15, 15]]",
+      "        box ${12:tibia_l} { size: [2, 6, 2], material: ${4:accent_trim} }",
+      "      }",
+      "    }",
+      "  }",
+      "}",
+      "",
+      "@materials {",
+      "  ${3:primary_hide}: process(family=${13|keratin_scales,patterned_skin,brushed_metal,painted_metal,weathered_stone|}, roughness=0.38, wear=0.25, weld_group=main_body)",
+      "  ${4:accent_trim}: process(family=brushed_metal, roughness=0.26, metalness=0.9)",
+      "}",
+      "",
+      "@style { target_encoding: ${14|vanilla,gltf_2_0,labpbr_1_3|}, bevel_highlight: 0.09 }",
+      "",
+      "@kinematics {",
+      "  ik_chain gait_l { bones: [${8:leg_l}, ${11:shin_l}], effector: [0, -6, 0.5], hinge_axis: x }",
+      "  ik_chain gait_r { bones: [${9:leg_r}, ${9:leg_r}__${11:shin_l}], effector: [0, -6, 0.5], hinge_axis: x }",
+      "}",
+      "",
+      "@behavior {",
+      "  clip walk_cycle {",
+      "    duration_s: 1.6",
+      "    ik_drive gait_l: foot_cycle(stride=4.5, lift=1.8, phase_deg=0)",
+      "    ik_drive gait_r: foot_cycle(stride=4.5, lift=1.8, phase_deg=180)",
+      "  }",
+      "}"
+    ]
+  },
+  "Block-DSL Sculpted Complex Entity / Vehicle Scaffold": {
+    "prefix": ["scaffold-sculpted", "entity-sculpted"],
+    "description": "Block-DSL v3.2 sculpted entity/vehicle scaffold with audit_profile: sculpted and blend_with miter seam",
+    "body": [
+      "@meta { archetype: entity, target_profile: ${1|bedrock_entity,geckolib,bbmodel_5|}, texel_density: ${2|16,32,64|}, audit_profile: sculpted }",
+      "",
+      "@palette {",
+      "  ${3:hull_armor}: ramp(base_lch=[0.40, 0.07, 250], steps=8, hue_shift=[-4, 4])",
+      "  ${4:brass_gear}: ramp(base_lch=[0.74, 0.12, 82], steps=6)",
+      "}",
+      "",
+      "@rig {",
+      "  root bone ${5:chassis} {",
+      "    pivot_local: [0, ${6:16}, 0]",
+      "    box ${7:main_hull} { size: [12, 6, 16], material: ${3:hull_armor} }",
+      "",
+      "    bone ${8:prow_l} attach(parent_box=${7:main_hull}, anchor=[-0.55, 0, 1], align=[0, 0, -0.5]) mirror_x(${9:prow_r}) {",
+      "      rest_euler: [0, 24, 0]",
+      "      joint_limits: [[-5, 5], [-5, 5], [-5, 5]]",
+      "      box ${10:prow_plate_l} { size: [6, 5, 5], material: ${3:hull_armor}, blend_with: [${9:prow_r}__${10:prow_plate_l}] }",
+      "    }",
+      "",
+      "    bone ${11:flywheel_l} attach(parent_box=${7:main_hull}, anchor=[-1, 0, 0], align=[1, 0, 0]) mirror_x(${12:flywheel_r}) {",
+      "      joint_limits: [[-180, 180], [-5, 5], [-5, 5]]",
+      "      box ${13:wheel_l} { size: [2, 6, 6], material: ${4:brass_gear} }",
+      "    }",
+      "  }",
+      "}",
+      "",
+      "@materials {",
+      "  ${3:hull_armor}: process(family=painted_metal, roughness=0.36, coating=0.5, wear=0.55, weld_group=hull)",
+      "  ${4:brass_gear}: process(family=brushed_metal, roughness=0.24, metalness=0.92)",
+      "}",
+      "",
+      "@style { target_encoding: vanilla, quantize_ramp: false, bevel_highlight: 0.1 }",
+      "",
+      "@behavior {",
+      "  clip drive_loop {",
+      "    duration_s: 2.0",
+      "    track ${11:flywheel_l}: spin(axis=x, amp_deg=360, freq_hz=0.5)",
+      "    track ${12:flywheel_r}: spin(axis=x, amp_deg=360, freq_hz=0.5)",
+      "  }",
+      "}"
+    ]
+  },
+  "Block-DSL Static Block Multipart Scaffold": {
+    "prefix": ["scaffold-block", "block-multipart"],
+    "description": "Static Java / Blockbench multipart prop scaffold centered at [8, y, 8]",
+    "body": [
+      "@meta { archetype: block_multipart, target_profile: ${1|java_modern,bbmodel_5,java_legacy|}, texel_density: 16 }",
+      "",
+      "@palette {",
+      "  ${2:stone_base}: ramp(base_lch=[0.50, 0.03, 75], steps=6)",
+      "  ${3:timber_frame}: ramp(base_lch=[0.46, 0.09, 58], steps=6)",
+      "}",
+      "",
+      "@rig {",
+      "  root bone ${4:station_root} {",
+      "    pivot_local: [8, ${5:2}, 8]",
+      "    box ${6:plinth} { size: [12, 4, 12], material: ${2:stone_base}, cullface: [down] }",
+      "    box ${7:column} place(base_box=${6:plinth}, anchor=[0, 1, 0], align=[0, -1, 0]) {",
+      "      size: [8, 8, 8], material: ${3:timber_frame}",
+      "    }",
+      "  }",
+      "}",
+      "",
+      "@materials {",
+      "  ${2:stone_base}: process(family=weathered_stone, roughness=0.86, porosity=0.45)",
+      "  ${3:timber_frame}: process(family=solid_wood, roughness=0.66, anisotropy=2.0)",
+      "}",
+      "",
+      "@style { target_encoding: vanilla, bevel_highlight: 0.09 }"
+    ]
+  },
+  "Meta Section": {
+    "prefix": ["@meta", "meta"],
+    "description": "@meta section header",
+    "body": [
+      "@meta { archetype: ${1|entity,block_multipart,weapon_3d|}, target_profile: ${2|bedrock_entity,geckolib,bbmodel_5,java_modern,java_legacy|}, texel_density: ${3|16,32,64|} }"
+    ]
+  },
+  "Palette Ramp Entry": {
+    "prefix": ["ramp", "palette-ramp"],
+    "description": "OKLCh perceptual color ramp entry in @palette",
+    "body": [
+      "${1:material_id}: ramp(base_lch=[${2:0.55}, ${3:0.08}, ${4:220}], steps=${5:8}, hue_shift=[${6:-4}, ${7:4}])"
+    ]
+  },
+  "Mirrored Child Bone": {
+    "prefix": ["bone-mirror", "bmirror"],
+    "description": "Child bone with attach(...) and bilateral mirror_x(twin)",
+    "body": [
+      "bone ${1:limb_l} attach(parent_box=${2:torso_box}, anchor=[${3:-1, 0, 0}], align=[${4:1, 0, 0}]) mirror_x(${5:limb_r}) {",
+      "  joint_limits: [[${6:-45, 45}], [${7:-25, 25}], [${8:-25, 25}]]",
+      "  box ${9:seg_l} { size: [${10:3, 6, 3}], material: ${11:primary_mat} }",
+      "}"
+    ]
+  },
+  "Radial Bone Array": {
+    "prefix": ["bone-radial", "bradial"],
+    "description": "Child bone with joint(...) and radial(count=K, axis=...)",
+    "body": [
+      "bone ${1:spoke} joint(parent=${2:hub_box}, at=[${3:0, 2, 0}], align=[${4:0, -1, 0}]) radial(count=${5:4}, axis=${6|z,y,x|}) {",
+      "  joint_limits: [[-5, 5], [-5, 5], [-5, 5]]",
+      "  box ${7:vane_blade} { size: [${8:2, 5, 1}], material: ${9:brass_mat} }",
+      "}"
+    ]
+  },
+  "Flush Placed Box": {
+    "prefix": ["box-place", "bplace"],
+    "description": "Same-bone flush-stacked box (align = -anchor)",
+    "body": [
+      "box ${1:part_box} place(base_box=${2:base_box}, anchor=[${3:0, 1, 0}], align=[${4:0, -1, 0}]) {",
+      "  size: [${5:4, 4, 4}], material: ${6:mat_id}",
+      "}"
+    ]
+  },
+  "Zero-Thickness Plane": {
+    "prefix": ["plane", "wing-plane"],
+    "description": "Zero-thickness 2D quad plane extending from an edge",
+    "body": [
+      "plane ${1:membrane_fin} place(base_box=${2:spar_box}, anchor=[${3:0, 0, -1}], align=[${4:0, 0, 1}]) {",
+      "  size: [${5:6, 8}], normal: ${6|y,x,z|}, material: ${7:membrane_mat}",
+      "}"
+    ]
+  },
+  "Serial Tapered Chain": {
+    "prefix": ["chain", "tail-chain"],
+    "description": "Multi-segment tapered serial chain (spine, tail, tentacle, flue)",
+    "body": [
+      "chain ${1:tail_spine} attach(parent_box=${2:pelvis_box}, anchor=[0, 0, -1], align=[0, 0, 1]) segments=${3:4} taper=${4:0.82} {",
+      "  axis: ${5|-z,+y,+z|},",
+      "  joint_limits: [[-22, 22], [-28, 28], [-15, 15]]",
+      "  box ${6:caudal_seg} { size: [${7:4, 3, 5}], material: ${8:scale_mat} }",
+      "}"
+    ]
+  },
+  "Zajac/Hill Muscle Unit": {
+    "prefix": ["muscle", "hill-muscle"],
+    "description": "Biomechanical muscle-tendon unit with optional tendon_coupling and belly_box bulge_inflate",
+    "body": [
+      "muscle ${1:pectoralis_l} {",
+      "  origin_bone: ${2:chest}, insertion_bone: ${3:wing_humerus_l}, action_axis: ${4|z,x,y|}, moment_arm_deg: ${5:-40},",
+      "  tendon_coupling: [${6:wing_forearm_l}, ${4|z,x,y|}, ${7:-0.45}], belly_box: ${8:pectoral_keel}, bulge_inflate: ${9:0.15}",
+      "}"
+    ]
+  },
+  "Behavior Clip with Spin & Foot-Cycle IK": {
+    "prefix": ["clip", "behavior-clip"],
+    "description": "@behavior clip combining foot_cycle IK and continuous spin / wave tracks",
+    "body": [
+      "clip ${1:locomotion_loop} {",
+      "  duration_s: ${2:2.0}",
+      "  ik_drive ${3:leg_ik_l}: foot_cycle(stride=${4:4.5}, lift=${5:1.8}, phase_deg=0)",
+      "  ik_drive ${6:leg_ik_r}: foot_cycle(stride=${4:4.5}, lift=${5:1.8}, phase_deg=180)",
+      "  track ${7:rotor_bone}: ${8|wave,flap,hinge,impulse,spin|}(axis=${9|x,y,z|}, amp_deg=${10:25}, freq_hz=${11:0.5})",
+      "}"
+    ]
+  }
+}

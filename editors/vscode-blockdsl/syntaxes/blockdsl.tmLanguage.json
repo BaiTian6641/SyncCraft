@@ -1,0 +1,353 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "SyncCraft Block-DSL",
+  "scopeName": "source.blockdsl",
+  "fileTypes": [
+    "blockdsl",
+    "bdsl"
+  ],
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#unsupported_features" },
+    { "include": "#section_headers" },
+    { "include": "#metaprogramming" },
+    { "include": "#rig_declarations" },
+    { "include": "#domain_declarations" },
+    { "include": "#controller_transitions" },
+    { "include": "#function_constructors" },
+    { "include": "#named_arguments" },
+    { "include": "#property_keys" },
+    { "include": "#enum_constants" },
+    { "include": "#literals" },
+    { "include": "#operators_and_punctuation" },
+    { "include": "#identifiers" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.blockdsl",
+          "match": "//.*$"
+        },
+        {
+          "name": "comment.line.number-sign.blockdsl",
+          "match": "#.*$"
+        }
+      ]
+    },
+    "unsupported_features": {
+      "patterns": [
+        {
+          "name": "invalid.illegal.unsupported-section.blockdsl",
+          "match": "@(?:shade|motion|ergonomics)\\b"
+        },
+        {
+          "name": "invalid.illegal.unsupported-keyword.blockdsl",
+          "match": "\\b(?:extrude)\\b"
+        },
+        {
+          "name": "invalid.illegal.boolean-case.blockdsl",
+          "match": "\\b(?:True|False)\\b"
+        }
+      ]
+    },
+    "section_headers": {
+      "patterns": [
+        {
+          "name": "keyword.control.directive.section.blockdsl",
+          "match": "@(?:meta|textures|palette|rig|materials|style|muscles|kinematics|behavior|controller)\\b"
+        },
+        {
+          "name": "invalid.illegal.unknown-section.blockdsl",
+          "match": "@[A-Za-z_][A-Za-z0-9_]*\\b"
+        }
+      ]
+    },
+    "metaprogramming": {
+      "patterns": [
+        {
+          "match": "\\b(let)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(=)",
+          "captures": {
+            "1": { "name": "keyword.declaration.let.blockdsl" },
+            "2": { "name": "variable.other.constant.blockdsl" },
+            "3": { "name": "keyword.operator.assignment.blockdsl" }
+          }
+        },
+        {
+          "match": "\\b(def)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(?=\\()",
+          "captures": {
+            "1": { "name": "keyword.declaration.macro.blockdsl" },
+            "2": { "name": "entity.name.function.macro.blockdsl" }
+          }
+        },
+        {
+          "match": "\\b(use)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
+          "captures": {
+            "1": { "name": "keyword.control.use.blockdsl" },
+            "2": { "name": "entity.name.function.macro.blockdsl" }
+          }
+        },
+        {
+          "match": "\\b(as)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
+          "captures": {
+            "1": { "name": "keyword.control.as.blockdsl" },
+            "2": { "name": "entity.name.type.bone.blockdsl" }
+          }
+        },
+        {
+          "match": "\\b(chain)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
+          "captures": {
+            "1": { "name": "keyword.declaration.chain.blockdsl" },
+            "2": { "name": "entity.name.type.bone.blockdsl" }
+          }
+        }
+      ]
+    },
+    "rig_declarations": {
+      "patterns": [
+        {
+          "match": "\\b(root)\\s+(bone)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
+          "captures": {
+            "1": { "name": "storage.modifier.root.blockdsl" },
+            "2": { "name": "keyword.declaration.bone.blockdsl" },
+            "3": { "name": "entity.name.type.bone.root.blockdsl" }
+          }
+        },
+        {
+          "match": "\\b(bone)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
+          "captures": {
+            "1": { "name": "keyword.declaration.bone.blockdsl" },
+            "2": { "name": "entity.name.type.bone.blockdsl" }
+          }
+        },
+        {
+          "match": "\\b(box|plane)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
+          "captures": {
+            "1": { "name": "keyword.declaration.element.blockdsl" },
+            "2": { "name": "entity.name.tag.element.blockdsl" }
+          }
+        },
+        {
+          "match": "\\b(locator)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
+          "captures": {
+            "1": { "name": "keyword.declaration.locator.blockdsl" },
+            "2": { "name": "entity.name.tag.locator.blockdsl" }
+          }
+        }
+      ]
+    },
+    "domain_declarations": {
+      "patterns": [
+        {
+          "match": "\\b(muscle|ik_chain|look_chain|spring)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
+          "captures": {
+            "1": { "name": "keyword.declaration.kinematics.blockdsl" },
+            "2": { "name": "entity.name.function.kinematics.blockdsl" }
+          }
+        },
+        {
+          "match": "\\b(clip|state)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
+          "captures": {
+            "1": { "name": "keyword.declaration.behavior.blockdsl" },
+            "2": { "name": "entity.name.function.behavior.blockdsl" }
+          }
+        },
+        {
+          "match": "\\b(track|muscle_drive|ik_drive|pose_bias|muscle_tone|material_mod)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(:)",
+          "captures": {
+            "1": { "name": "keyword.control.drive.blockdsl" },
+            "2": { "name": "variable.other.target.blockdsl" },
+            "3": { "name": "punctuation.separator.key-value.blockdsl" }
+          }
+        },
+        {
+          "match": "\\b(key)\\s+([A-Za-z_][A-Za-z0-9_]*)(\\.)(rotation|position|scale)\\b",
+          "captures": {
+            "1": { "name": "keyword.control.keyframe.blockdsl" },
+            "2": { "name": "variable.other.target.blockdsl" },
+            "3": { "name": "punctuation.accessor.blockdsl" },
+            "4": { "name": "support.constant.channel.blockdsl" }
+          }
+        },
+        {
+          "match": "^\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*(:)\\s*(?=(?:ramp|image|process)\\s*\\()",
+          "captures": {
+            "1": { "name": "entity.name.type.material.blockdsl" },
+            "2": { "name": "punctuation.separator.key-value.blockdsl" }
+          }
+        }
+      ]
+    },
+    "controller_transitions": {
+      "patterns": [
+        {
+          "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(->)\\s*([A-Za-z_][A-Za-z0-9_]*)\\s+(when)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
+          "captures": {
+            "1": { "name": "entity.name.function.behavior.blockdsl" },
+            "2": { "name": "keyword.operator.arrow.blockdsl" },
+            "3": { "name": "entity.name.function.behavior.blockdsl" },
+            "4": { "name": "keyword.control.conditional.when.blockdsl" },
+            "5": { "name": "variable.parameter.sensor.blockdsl" }
+          }
+        },
+        {
+          "name": "keyword.control.blend.blockdsl",
+          "match": "\\bblend\\b"
+        }
+      ]
+    },
+    "function_constructors": {
+      "patterns": [
+        {
+          "name": "support.function.spatial.blockdsl",
+          "match": "\\b(?:attach|joint|place)\\s*(?=\\()"
+        },
+        {
+          "name": "support.function.symmetry.blockdsl",
+          "match": "\\b(?:mirror_x|mirror|radial)\\s*(?=\\()"
+        },
+        {
+          "name": "support.function.surface.blockdsl",
+          "match": "\\b(?:ramp|image|process|box)\\s*(?=\\()"
+        },
+        {
+          "name": "support.function.motion-law.blockdsl",
+          "match": "\\b(?:wave|flap|hinge|impulse|spin|activation|foot_cycle)\\s*(?=\\()"
+        }
+      ]
+    },
+    "named_arguments": {
+      "patterns": [
+        {
+          "match": "\\b(base_lch|steps|hue_shift|emissive|parent_box|parent|at|anchor|align|offset|detached|base_box|axis|as|name|count|segments|taper|family|roughness|metalness|coating|ior|scale|seed|anisotropy|subsurface|porosity|rd_feed|rd_kill|film_nm|wear|oxidation|biofilm|weld_group|amp_deg|freq_hz|phase_deg|bias_deg|peak|baseline|stride|lift)\\s*(=)",
+          "captures": {
+            "1": { "name": "variable.parameter.argument.blockdsl" },
+            "2": { "name": "keyword.operator.assignment.blockdsl" }
+          }
+        }
+      ]
+    },
+    "property_keys": {
+      "patterns": [
+        {
+          "match": "\\b(archetype|target_profile|texel_density|dsl_version|size_step|audit_profile|pivot_local|rest_euler|joint_limits|size|material|mat|inflate|rotate|pivot|cullface|blend_with|normal|plane_normal|uv|uv_faces|texture|offset|role|target_encoding|quantize_ramp|bevel_highlight|view_deg|origin_bone|insertion_bone|action_axis|moment_arm_deg|tendon_coupling|belly_box|bulge_inflate|upper|lower|bones|effector|hinge_axis|pole|weight_decay|stiffness|damping|duration_s|loop|emissive|moisture|wear_delta|initial|axis|segments|taper|north|south|east|west|up|down)\\s*(:)",
+          "captures": {
+            "1": { "name": "support.type.property-name.blockdsl" },
+            "2": { "name": "punctuation.separator.key-value.blockdsl" }
+          }
+        }
+      ]
+    },
+    "enum_constants": {
+      "patterns": [
+        {
+          "name": "support.constant.archetype.blockdsl",
+          "match": "\\b(?:entity|weapon_3d|block_multipart|item_extruded)\\b"
+        },
+        {
+          "name": "support.constant.profile.blockdsl",
+          "match": "\\b(?:bedrock_entity|geckolib|bbmodel_5|java_modern|java_legacy)\\b"
+        },
+        {
+          "name": "support.constant.audit-profile.blockdsl",
+          "match": "\\b(?:strict|sculpted|authored)\\b"
+        },
+        {
+          "name": "support.constant.material-family.blockdsl",
+          "match": "\\b(?:painted_metal|brushed_metal|polymer_dielectric|woven_fabric|solid_wood|weathered_stone|keratin_scales|patterned_skin|lichen_biofilm|thin_film_iridescence)\\b"
+        },
+        {
+          "name": "support.constant.encoding.blockdsl",
+          "match": "\\b(?:vanilla|labpbr_1_3|gltf_2_0)\\b"
+        },
+        {
+          "name": "support.constant.locator-role.blockdsl",
+          "match": "\\b(?:socket|ik_effector|vfx_emitter|camera_focus|hitbox|rider_seat)\\b"
+        },
+        {
+          "name": "support.constant.interpolation.blockdsl",
+          "match": "\\b(?:linear|catmullrom)\\b"
+        },
+        {
+          "name": "support.constant.direction.blockdsl",
+          "match": "\\b(?:north|south|east|west|up|down)\\b"
+        },
+        {
+          "name": "constant.language.axis.blockdsl",
+          "match": "\\b(?:x|y|z)\\b"
+        }
+      ]
+    },
+    "literals": {
+      "patterns": [
+        {
+          "name": "constant.language.boolean.blockdsl",
+          "match": "\\b(?:true|false)\\b"
+        },
+        {
+          "name": "string.quoted.double.blockdsl",
+          "begin": "\"",
+          "end": "\"|$",
+          "patterns": [
+            {
+              "name": "constant.character.escape.blockdsl",
+              "match": "\\\\."
+            }
+          ]
+        },
+        {
+          "name": "constant.numeric.blockdsl",
+          "match": "(?<![A-Za-z0-9_])(?:[0-9]+\\.?[0-9]*|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?\\b"
+        }
+      ]
+    },
+    "operators_and_punctuation": {
+      "patterns": [
+        {
+          "name": "keyword.operator.arrow.blockdsl",
+          "match": "->"
+        },
+        {
+          "name": "keyword.operator.comparison.blockdsl",
+          "match": ">=|<=|==|!=|>|<"
+        },
+        {
+          "name": "keyword.operator.arithmetic.blockdsl",
+          "match": "[+\\-*/]"
+        },
+        {
+          "name": "keyword.operator.assignment.blockdsl",
+          "match": "="
+        },
+        {
+          "name": "punctuation.separator.comma.blockdsl",
+          "match": ","
+        },
+        {
+          "name": "punctuation.terminator.statement.blockdsl",
+          "match": ";"
+        },
+        {
+          "name": "punctuation.section.braces.blockdsl",
+          "match": "[{}]"
+        },
+        {
+          "name": "punctuation.section.brackets.blockdsl",
+          "match": "[\\[\\]]"
+        },
+        {
+          "name": "punctuation.section.parens.blockdsl",
+          "match": "[()]"
+        }
+      ]
+    },
+    "identifiers": {
+      "patterns": [
+        {
+          "name": "variable.other.readwrite.blockdsl",
+          "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b"
+        }
+      ]
+    }
+  }
+}

@@ -40,6 +40,7 @@ Each compile writes a `.bbmodel`, canonical DSL, typed AST JSON, world-space sce
 | Multi-Backend Exporters & Intake | Blockbench 5 `.bbmodel` (static + animated), Bedrock `1.12.0` `.geo.json` + `1.8.0` `.animation.json` (with exact left-handed X-reflection), GeckoLib, Java modern/legacy `.json`, zero-`eval` decompilers, and 5-pillar closed-loop artist assistant |
 | Clean-Room Dataset & World Benchmark | `55` core procedural families + `10` clean-room Apex musculoskeletal families (`elemental_companion_critter`, `modular_botanical_healing_station`, etc.), zero split-name prompt leakage, 3 holdout splits (`test_unseen_params`, `test_unseen`, `test_compositional`), and 7-Level World Capability Ladder |
 | Repair, Gate G2 & Colab Notebook | Bounded repair loop (`run_bounded_repair_policy`, `<= 3` re-audits with monotonic `CostLedger`), prompt-adherence verifier (`verify_prompt_adherence`), artifact-derived Gate G2 evaluator, and [notebooks/synccraft_end_to_end.ipynb](notebooks/synccraft_end_to_end.ipynb) (`StreamMixtureSampler`, VRAM-safe response loss, 20-min full-state checkpointing & resume, smoke-upload refusal) |
+| VS Code Language Extension | [editors/vscode-blockdsl](editors/vscode-blockdsl): TextMate + Markdown code-fence highlighting, deterministic `mirror_x`/`radial`/`chain`/`def` expanded-symbol auto-completion, hover cards, snippets, go-to-definition, canonical formatting, live SE(3) + 15-axis SAT audit diagnostics, and zero-`npm` `.vsix` packager (`python scripts/package_vscode_extension.py`) |
 
 ## What still needs implementation or external validation
 
@@ -55,6 +56,7 @@ See [docs/STATUS.md](docs/STATUS.md), [TASKS.json](TASKS.json), [docs/tasks/BACK
 | Path | Purpose |
 | --- | --- |
 | `src/synccraft/` | Compiler, kinematics, SAT/contact audit, surface/optics, world simulator, data generators, modeling & exporters |
+| `editors/vscode-blockdsl/` | Visual Studio Code grammar, semantic syntax highlighting, auto-completion, hover & live SAT audit extension |
 | `notebooks/` | Standalone Colab G4 BF16 LoRA training, bounded repair, Gate G2 & 7-level World evaluation notebook |
 | `examples/` | Original deterministic Block-DSL example assets; no imported game textures |
 | `tests/` | Executable CPU regression, physics, dataset hygiene, adversarial & notebook E2E suites |

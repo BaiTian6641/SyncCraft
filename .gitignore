@@ -79,6 +79,8 @@ huggingface_cache/
 .agents/
 .vscode/
 .idea/
+node_modules/
+editors/vscode-blockdsl/*.vsix
 *.swp
 *.swo
 .DS_Store

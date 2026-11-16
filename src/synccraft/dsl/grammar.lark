@@ -82,6 +82,7 @@ box_field: "size" ":" (vec2 | vec3)
          | "uv_faces" ":" "{" uv_face_entry* "}"
          | "texture" ":" IDENT
          | "cullface" ":" ident_list
+         | "blend_with" ":" ident_list
          | "place" ":" place
 uv_face_entry: IDENT ":" (vec4 | vec5) ","?
 

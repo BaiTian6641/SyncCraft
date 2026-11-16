@@ -1,0 +1,112 @@
+{
+  "name": "synccraft-blockdsl",
+  "displayName": "SyncCraft Block-DSL",
+  "description": "Language grammar, semantic syntax highlighting, context-aware auto-completion (including mirror_x/radial/chain/macro expanded symbols), hover documentation, snippets, document outline, go-to-definition, canonical formatting, and live SE(3) + 15-axis SAT audit diagnostics for SyncCraft Block-DSL v3.2.",
+  "version": "0.3.2",
+  "publisher": "synccraft",
+  "license": "Apache-2.0",
+  "icon": "images/icon.png",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Snippets",
+    "Linters",
+    "Formatters"
+  ],
+  "keywords": [
+    "blockdsl",
+    "block-dsl",
+    "synccraft",
+    "minecraft",
+    "blockbench",
+    "bedrock",
+    "geckolib",
+    "3d-modeling",
+    "rigging"
+  ],
+  "activationEvents": [
+    "onLanguage:blockdsl",
+    "onCommand:synccraft.blockdsl.auditActiveFile",
+    "onCommand:synccraft.blockdsl.formatActiveFile"
+  ],
+  "main": "./extension.js",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/BaiTian6641/SyncCraft.git"
+  },
+  "contributes": {
+    "languages": [
+      {
+        "id": "blockdsl",
+        "aliases": [
+          "SyncCraft Block-DSL",
+          "Block-DSL",
+          "blockdsl",
+          "dsl"
+        ],
+        "extensions": [
+          ".blockdsl",
+          ".bdsl"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "blockdsl",
+        "scopeName": "source.blockdsl",
+        "path": "./syntaxes/blockdsl.tmLanguage.json"
+      },
+      {
+        "scopeName": "markdown.blockdsl.codeblock",
+        "path": "./syntaxes/blockdsl.markdown.injection.json",
+        "injectTo": [
+          "text.html.markdown"
+        ],
+        "embeddedLanguages": {
+          "meta.embedded.block.blockdsl": "blockdsl"
+        }
+      }
+    ],
+    "snippets": [
+      {
+        "language": "blockdsl",
+        "path": "./snippets/blockdsl.code-snippets"
+      }
+    ],
+    "commands": [
+      {
+        "command": "synccraft.blockdsl.auditActiveFile",
+        "title": "Block-DSL: Run SE(3) + 15-Axis SAT & Swept Clip Audit",
+        "category": "SyncCraft"
+      },
+      {
+        "command": "synccraft.blockdsl.formatActiveFile",
+        "title": "Block-DSL: Canonical Format Program",
+        "category": "SyncCraft"
+      }
+    ],
+    "configuration": {
+      "title": "SyncCraft Block-DSL",
+      "properties": {
+        "synccraft.blockdsl.pythonPath": {
+          "type": "string",
+          "default": "",
+          "description": "Optional path to Python interpreter with `synccraft` installed. When empty, automatically checks `<workspace>/.venv/bin/python` then `python3`."
+        },
+        "synccraft.blockdsl.enableCompilerAudit": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run SyncCraft's Python parser, SE(3) forward kinematics, and 15-axis SAT / P1-02 / sculpted audit on open and save when `synccraft` is available."
+        },
+        "synccraft.blockdsl.auditBehaviorClipsOnSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "Also audit 12-frame swept `@behavior` clips (`< 0.02u` stance slip & swept SAT) on save."
+        }
+      }
+    }
+  }
+}
