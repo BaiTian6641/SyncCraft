@@ -1,0 +1,410 @@
+// Mizutsune (Bewitching Bubblefox Leviathan) — Stage 2 Secondary Anatomy, Vulpine Wedge Snout,
+// 6-Petal Blooming Orchid Head Crests, Undulating Dorsal Sakura Fins & Voluminous Fox-Brush Tail.
+@meta {
+  dsl_version: "4.1",
+  archetype: entity,
+  target_profile: bbmodel_5,
+  texel_density: 32,
+  size_step: 0.5,
+  audit_profile: sculpted
+}
+@layout {
+  budget max_boxes = 260
+  budget max_bones = 80
+  envelope grounded = true
+  envelope ground_y = 0.0
+  envelope ground_tol = 0.25
+}
+@palette {
+  pearl_cream: ramp(base_lch=[0.89, 0.038, 74], steps=6, hue_shift=[22, -12])
+  sakura_scale: ramp(base_lch=[0.78, 0.112, 358], steps=6, hue_shift=[20, -14])
+  sakura_pink: ramp(base_lch=[0.69, 0.158, 350], steps=6, hue_shift=[20, -14])
+  orchid_magenta: ramp(base_lch=[0.54, 0.172, 342], steps=6, hue_shift=[18, -14])
+  plum_fur: ramp(base_lch=[0.29, 0.118, 308], steps=6, hue_shift=[18, -14])
+  violet_silk: ramp(base_lch=[0.41, 0.132, 316], steps=6, hue_shift=[20, -14])
+  iris_gold: ramp(base_lch=[0.80, 0.145, 84], steps=6, hue_shift=[18, -12])
+  nose_rose: ramp(base_lch=[0.28, 0.068, 345], steps=6, hue_shift=[14, -10])
+  amber_glow: ramp(base_lch=[0.84, 0.165, 78], steps=6, hue_shift=[12, -16], emissive=true)
+}
+@rig {
+  root bone root {
+    pivot_local: [0, 0, 0]
+    locator ground_origin { offset: [0, 0, 0] }
+
+    bone pelvis joint(parent=ground_origin, at=[0, 15.17, -12.5]) {
+      rest_euler: [7, -6, 0]
+      box pelvis_core { size: [10.5, 9.0, 12.5], material: pearl_cream }
+      box pelvis_belly_fur place(base_box=pelvis_core, anchor=[0, -0.96, 0], align=[0, 0.42, 0]) {
+        size: [8.5, 2.0, 10.5], material: plum_fur, blend_with: [waist_belly_fur, tail_1_seg, tail_1_ventral_fur]
+      }
+      box sacrum_scale_ridge place(base_box=pelvis_core, anchor=[0, 0.96, -0.05], align=[0, -0.58, 0]) {
+        size: [6.0, 2.0, 10.0], material: sakura_scale, rotate: [6, 0, 0], blend_with: [waist_core, lumbar_ridge, tail_1_seg]
+      }
+      box pelvis_petal_spine place(base_box=sacrum_scale_ridge, anchor=[0, 0.96, -0.15], align=[0, -0.82, 0.30]) {
+        size: [1.5, 5.0, 6.5], material: sakura_pink, rotate: [28, 0, 0], blend_with: [pelvis_core, tail_1_seg, tail_1_dorsal_fin]
+      }
+      box haunch_muscle_l place(base_box=pelvis_core, anchor=[0.96, 0.18, -0.05], align=[-0.52, 0, 0]) {
+        size: [3.0, 6.5, 8.5], material: sakura_scale, rotate: [5, 8, -12], blend_with: [thigh_mass, waist_core]
+      }
+      box haunch_muscle_r place(base_box=pelvis_core, anchor=[-0.96, 0.18, -0.05], align=[0.52, 0, 0]) {
+        size: [3.0, 6.5, 8.5], material: sakura_scale, rotate: [5, -8, 12], blend_with: [hind_thigh_r__thigh_mass, waist_core]
+      }
+
+      bone waist attach(parent_box=pelvis_core, anchor=[0, 0.04, 1], align=[0, 0, -1], seat=0.26) {
+        rest_euler: [-9, 8, 0]
+        box waist_core { size: [10.0, 8.5, 13.0], material: pearl_cream }
+        box waist_belly_fur place(base_box=waist_core, anchor=[0, -0.96, 0], align=[0, 0.42, 0]) {
+          size: [8.0, 2.0, 11.0], material: plum_fur, blend_with: [pelvis_belly_fur, pelvis_core, chest_fur_rear, thigh_mass, hind_thigh_r__thigh_mass]
+        }
+        box lumbar_ridge place(base_box=waist_core, anchor=[0, 0.96, 0], align=[0, -0.55, 0]) {
+          size: [6.0, 2.0, 11.0], material: sakura_scale, rotate: [-5, 0, 0], blend_with: [pelvis_core, chest_core, withers_scale_cap]
+        }
+        box waist_fur_fringe_l place(base_box=waist_core, anchor=[0.96, -0.45, -0.05], align=[-0.62, 0.25, 0]) {
+          size: [2.5, 3.5, 9.5], material: violet_silk, rotate: [6, 10, -18], blend_with: [waist_belly_fur, pelvis_core, chest_core, thigh_mass]
+        }
+        box waist_fur_fringe_r place(base_box=waist_core, anchor=[-0.96, -0.45, -0.05], align=[0.62, 0.25, 0]) {
+          size: [2.5, 3.5, 9.5], material: violet_silk, rotate: [6, -10, 18], blend_with: [waist_belly_fur, pelvis_core, chest_core, hind_thigh_r__thigh_mass]
+        }
+
+        bone dorsal_fin_2 attach(parent_box=waist_core, anchor=[0, 0.98, 0.05], align=[0, -0.88, 0.25]) {
+          rest_euler: [28, 0, 0]
+          box waist_fin_spar_1 { size: [1.5, 7.5, 4.5], material: sakura_pink, blend_with: [lumbar_ridge, chest_core, withers_scale_cap] }
+          box waist_fin_spar_2 place(base_box=waist_fin_spar_1, anchor=[0, -0.15, -0.94], align=[0, 0, 0.55]) {
+            size: [1.5, 6.0, 4.5], material: orchid_magenta, rotate: [12, 0, 0], blend_with: [waist_core, lumbar_ridge, pelvis_core, sacrum_scale_ridge]
+          }
+        }
+
+        bone chest attach(parent_box=waist_core, anchor=[0, 0.14, 1], align=[0, 0, -1], seat=0.26) {
+          rest_euler: [-10, -6, 0]
+          box chest_core { size: [13.0, 11.0, 14.5], material: pearl_cream }
+          box withers_scale_cap place(base_box=chest_core, anchor=[0, 0.96, 0.08], align=[0, -0.55, 0]) {
+            size: [8.5, 2.5, 12.0], material: sakura_scale, rotate: [-8, 0, 0], blend_with: [neck_base, lumbar_ridge, waist_core]
+          }
+          box chest_fur_rear place(base_box=chest_core, anchor=[0, -0.95, -0.30], align=[0, 0.42, 0]) {
+            size: [10.0, 2.5, 7.5], material: plum_fur, rotate: [4, 0, 0], blend_with: [waist_belly_fur, waist_core]
+          }
+          box chest_fur_keel place(base_box=chest_core, anchor=[0, -0.95, 0.48], align=[0, 0.48, -0.20]) {
+            size: [9.5, 3.0, 8.0], material: plum_fur, rotate: [-16, 0, 0], blend_with: [chest_fur_rear, neck_base, neck_throat_fur_1, fore_bicep, fore_shoulder_r__fore_bicep]
+          }
+          box chest_plum_ruff_l place(base_box=chest_core, anchor=[0.88, -0.58, 0.36], align=[-0.52, 0.35, -0.25]) {
+            size: [3.5, 4.5, 8.0], material: violet_silk, rotate: [-12, 16, -24], blend_with: [chest_fur_keel, chest_fur_rear, neck_base, fore_bicep]
+          }
+          box chest_plum_ruff_r place(base_box=chest_core, anchor=[-0.88, -0.58, 0.36], align=[0.52, 0.35, -0.25]) {
+            size: [3.5, 4.5, 8.0], material: violet_silk, rotate: [-12, -16, 24], blend_with: [chest_fur_keel, chest_fur_rear, neck_base, fore_shoulder_r__fore_bicep]
+          }
+
+          bone dorsal_fin_1 attach(parent_box=chest_core, anchor=[0, 0.98, -0.05], align=[0, -0.88, 0.25]) {
+            rest_euler: [26, 0, 0]
+            box chest_fin_spar_1 { size: [1.5, 10.5, 4.5], material: sakura_pink, blend_with: [withers_scale_cap, neck_base, neck_1_fin] }
+            box chest_fin_gold_tip place(base_box=chest_fin_spar_1, anchor=[0, 0.96, -0.15], align=[0, -0.82, 0]) {
+              size: [1.0, 3.5, 2.5], material: iris_gold, rotate: [10, 0, 0]
+            }
+            box chest_fin_spar_2 place(base_box=chest_fin_spar_1, anchor=[0, -0.10, -0.94], align=[0, 0, 0.55]) {
+              size: [1.5, 9.0, 4.5], material: orchid_magenta, rotate: [10, 0, 0], blend_with: [chest_core, withers_scale_cap, neck_1_fin, waist_core, waist_fin_spar_1]
+            }
+          }
+
+          bone neck_1 attach(parent_box=chest_core, anchor=[0, 0.30, 1], align=[0, 0, -1], seat=0.26) {
+            rest_euler: [-34, 6, 0]
+            box neck_base { size: [9.5, 8.5, 9.5], material: pearl_cream }
+            box neck_throat_fur_1 place(base_box=neck_base, anchor=[0, -0.96, 0.08], align=[0, 0.45, 0]) {
+              size: [7.5, 3.0, 8.5], material: plum_fur, rotate: [-8, 0, 0], blend_with: [chest_core, chest_fur_keel, neck_mid, neck_throat_fur_2]
+            }
+            box neck_ruff_wedge_l place(base_box=neck_base, anchor=[0.94, -0.38, 0.05], align=[-0.58, 0.25, 0]) {
+              size: [3.0, 4.0, 7.5], material: violet_silk, rotate: [-8, 18, -22], blend_with: [neck_throat_fur_1, chest_core, chest_plum_ruff_l, neck_mid]
+            }
+            box neck_ruff_wedge_r place(base_box=neck_base, anchor=[-0.94, -0.38, 0.05], align=[0.58, 0.25, 0]) {
+              size: [3.0, 4.0, 7.5], material: violet_silk, rotate: [-8, -18, 22], blend_with: [neck_throat_fur_1, chest_core, chest_plum_ruff_r, neck_mid]
+            }
+            box neck_1_fin place(base_box=neck_base, anchor=[0, 0.98, 0.15], align=[0, -0.84, 0.25]) {
+              size: [1.5, 7.5, 4.5], material: sakura_pink, rotate: [26, 0, 0], blend_with: [chest_core, withers_scale_cap, chest_fin_spar_1, neck_mid, neck_2_fin]
+            }
+
+            bone neck_2 attach(parent_box=neck_base, anchor=[0, 0.12, 1], align=[0, 0, -1], seat=0.26) {
+              rest_euler: [-12, 5, 0]
+              box neck_mid { size: [8.0, 7.5, 8.5], material: pearl_cream }
+              box neck_throat_fur_2 place(base_box=neck_mid, anchor=[0, -0.96, 0.08], align=[0, 0.48, 0]) {
+                size: [6.0, 2.5, 7.5], material: plum_fur, rotate: [-6, 0, 0], blend_with: [neck_base, neck_throat_fur_1, neck_upper, neck_throat_fur_3]
+              }
+              box neck_2_fin place(base_box=neck_mid, anchor=[0, 0.98, 0.05], align=[0, -0.84, 0.25]) {
+                size: [1.5, 6.5, 4.5], material: sakura_pink, rotate: [28, 0, 0], blend_with: [neck_base, neck_1_fin, neck_upper, neck_3_fin]
+              }
+
+              bone neck_3 attach(parent_box=neck_mid, anchor=[0, 0.08, 1], align=[0, 0, -1], seat=0.24) {
+                rest_euler: [28, -5, 0]
+                box neck_upper { size: [6.5, 6.0, 7.5], material: pearl_cream }
+                box neck_throat_fur_3 place(base_box=neck_upper, anchor=[0, -0.96, 0.05], align=[0, 0.52, 0]) {
+                  size: [5.0, 2.0, 6.5], material: violet_silk, rotate: [-6, 0, 0], blend_with: [neck_mid, neck_throat_fur_2, skull_core, jaw_core, chin_plum_tuft]
+                }
+                box neck_3_fin place(base_box=neck_upper, anchor=[0, 0.98, -0.10], align=[0, -0.84, 0.30]) {
+                  size: [1.5, 5.5, 4.5], material: orchid_magenta, rotate: [30, 0, 0], blend_with: [neck_mid, neck_2_fin, skull_core, skull_crown]
+                }
+
+                bone head attach(parent_box=neck_upper, anchor=[0, 0.08, 1], align=[0, 0, -1], seat=0.22) {
+                  rest_euler: [30, -4, 0]
+                  box skull_core { size: [8.5, 5.5, 6.5], material: pearl_cream }
+                  box skull_crown place(base_box=skull_core, anchor=[0, 0.96, -0.08], align=[0, -0.68, 0]) {
+                    size: [5.0, 1.5, 5.5], material: sakura_scale, rotate: [6, 0, 0], blend_with: [neck_upper, brow_ridge_l, brow_ridge_r]
+                  }
+                  box brow_ridge_l place(base_box=skull_core, anchor=[0.78, 0.78, 0.52], align=[-0.20, -0.52, -0.30]) {
+                    size: [2.0, 1.5, 5.0], material: sakura_pink, rotate: [8, -12, -12], blend_with: [skull_crown]
+                  }
+                  box brow_ridge_r place(base_box=skull_core, anchor=[-0.78, 0.78, 0.52], align=[0.20, -0.52, -0.30]) {
+                    size: [2.0, 1.5, 5.0], material: sakura_pink, rotate: [8, 12, 12], blend_with: [skull_crown]
+                  }
+                  box cheek_jowl_l place(base_box=skull_core, anchor=[0.98, -0.18, -0.05], align=[-0.55, 0, 0]) {
+                    size: [2.5, 3.5, 5.5], material: pearl_cream, rotate: [6, -16, 10], blend_with: [brow_ridge_l, neck_upper]
+                  }
+                  box cheek_jowl_r place(base_box=skull_core, anchor=[-0.98, -0.18, -0.05], align=[0.55, 0, 0]) {
+                    size: [2.5, 3.5, 5.5], material: pearl_cream, rotate: [6, 16, -10], blend_with: [brow_ridge_r, neck_upper]
+                  }
+                  box eye_amber_l place(base_box=skull_core, anchor=[0.98, 0.42, 0.55], align=[-0.72, 0, 0]) {
+                    size: [1.0, 1.5, 2.5], material: amber_glow, rotate: [6, -10, 0], blend_with: [brow_ridge_l, cheek_jowl_l, snout_base]
+                  }
+                  box eye_amber_r place(base_box=skull_core, anchor=[-0.98, 0.42, 0.55], align=[0.72, 0, 0]) {
+                    size: [1.0, 1.5, 2.5], material: amber_glow, rotate: [6, 10, 0], blend_with: [brow_ridge_r, cheek_jowl_r, snout_base]
+                  }
+
+                  // Ultra-Slender 3D Wedged Vulpine Fox Rostrum (snout_taper_ratio < 0.30!)
+                  box snout_base place(base_box=skull_core, anchor=[0, -0.12, 1], align=[0, 0, -0.80]) {
+                    size: [4.5, 3.5, 5.5], material: pearl_cream, rotate: [7, 0, 0], blend_with: [brow_ridge_l, brow_ridge_r, eye_amber_l, eye_amber_r]
+                  }
+                  box nasal_bridge place(base_box=snout_base, anchor=[0, 0.90, 0.05], align=[0, -0.62, 0]) {
+                    size: [3.0, 1.5, 5.5], material: sakura_scale, rotate: [5, 0, 0], blend_with: [skull_core, skull_crown, brow_ridge_l, brow_ridge_r]
+                  }
+                  box maxilla_wedge_l place(base_box=snout_base, anchor=[0.94, -0.12, -0.08], align=[-0.55, 0, 0]) {
+                    size: [1.5, 2.5, 5.0], material: pearl_cream, rotate: [7, -18, 6], blend_with: [skull_core, cheek_jowl_l, nasal_bridge, eye_amber_l]
+                  }
+                  box maxilla_wedge_r place(base_box=snout_base, anchor=[-0.94, -0.12, -0.08], align=[0.55, 0, 0]) {
+                    size: [1.5, 2.5, 5.0], material: pearl_cream, rotate: [7, 18, -6], blend_with: [skull_core, cheek_jowl_r, nasal_bridge, eye_amber_r]
+                  }
+                  box snout_distal place(base_box=snout_base, anchor=[0, -0.06, 0.96], align=[0, 0, -0.84]) {
+                    size: [2.5, 2.5, 5.5], material: pearl_cream, rotate: [5, 0, 0], blend_with: [nasal_bridge, maxilla_wedge_l, maxilla_wedge_r]
+                  }
+                  box nose_tip place(base_box=snout_distal, anchor=[0, 0.16, 0.96], align=[0, 0, -0.72]) {
+                    size: [2.0, 1.5, 2.0], material: nose_rose, rotate: [10, 0, 0]
+                  }
+
+                  // Swept Fox-Carp Whisker Barbels attached symmetrically to centered `snout_base`
+                  bone whisker_l attach(parent_box=snout_base, anchor=[1.0, -0.62, 0.58], align=[-0.92, 0.45, 0.92]) mirror_x(whisker_r) {
+                    rest_euler: [-18, -42, 12]
+                    box whisker_barbel { size: [1.0, 1.0, 7.5], material: iris_gold, blend_with: [skull_core, maxilla_wedge_l, maxilla_wedge_r, cheek_jowl_l, cheek_jowl_r, jaw_core] }
+                  }
+
+                  // Extravagant 6-Petal Blooming Orchid Head-Fin Crests (`crest_fin_1..3_l/r`)!
+                  bone crest_fin_1_l attach(parent_box=skull_core, anchor=[0.38, 0.96, -0.10], align=[0, -0.88, 0.45]) mirror_x(crest_fin_1_r) {
+                    rest_euler: [26, -12, -16]
+                    box crest_spar_1 { size: [1.5, 8.0, 3.5], material: sakura_pink, blend_with: [skull_crown, brow_ridge_l, neck_upper, neck_3_fin, crest_fin_1_r__crest_spar_1] }
+                    box crest_gold_rib_1 place(base_box=crest_spar_1, anchor=[0.20, 0.22, 0.94], align=[0, -0.25, -0.82]) {
+                      size: [1.0, 6.5, 1.5], material: iris_gold, rotate: [4, 0, 0], blend_with: [skull_core, skull_crown, brow_ridge_l]
+                    }
+                    bone crest_tip_1_l attach(parent_box=crest_spar_1, anchor=[0, 1.0, 0.05], align=[0, -0.86, 0], seat=0.18) {
+                      rest_euler: [8, -4, -6]
+                      box crest_blade_tip_1 { size: [1.0, 6.5, 3.0], material: iris_gold, blend_with: [crest_gold_rib_1] }
+                    }
+                  }
+
+                  bone crest_fin_2_l attach(parent_box=skull_core, anchor=[0.92, 0.56, -0.20], align=[0, -0.88, 0.45]) mirror_x(crest_fin_2_r) {
+                    rest_euler: [32, -24, -50]
+                    box crest_spar_2 { size: [1.5, 7.5, 3.5], material: orchid_magenta, blend_with: [cheek_jowl_l, brow_ridge_l, neck_upper, crest_spar_1] }
+                    bone crest_tip_2_l attach(parent_box=crest_spar_2, anchor=[0, 1.0, 0.05], align=[0, -0.86, 0], seat=0.18) {
+                      rest_euler: [8, -6, -8]
+                      box crest_blade_tip_2 { size: [1.0, 5.5, 3.0], material: iris_gold }
+                    }
+                  }
+
+                  bone crest_fin_3_l attach(parent_box=skull_core, anchor=[1.0, -0.36, -0.94], align=[-0.92, -0.92, 0.75]) mirror_x(crest_fin_3_r) {
+                    rest_euler: [38, -28, -74]
+                    box crest_spar_3 { size: [1.0, 6.5, 2.5], material: sakura_pink, blend_with: [cheek_jowl_l, cheek_jowl_r, neck_upper, neck_throat_fur_3, crest_spar_2] }
+                  }
+
+                  bone jaw attach(parent_box=skull_core, anchor=[0, -0.82, 0.26], align=[0, 0, -1], seat=0.08) {
+                    rest_euler: [6, 0, 0]
+                    box jaw_core { size: [3.0, 1.5, 5.5], material: pearl_cream, blend_with: [snout_base, cheek_jowl_l, cheek_jowl_r, neck_throat_fur_3] }
+                    box jaw_tip place(base_box=jaw_core, anchor=[0, 0.05, 0.96], align=[0, 0, -0.84]) {
+                      size: [2.0, 1.5, 4.5], material: pearl_cream, rotate: [-4, 0, 0], blend_with: [snout_base, snout_distal]
+                    }
+                    box chin_plum_tuft place(base_box=jaw_core, anchor=[0, -0.94, -0.18], align=[0, 0.45, 0.35]) {
+                      size: [2.5, 2.0, 5.0], material: plum_fur, rotate: [-14, 0, 0], blend_with: [neck_upper, neck_throat_fur_3]
+                    }
+                  }
+                }
+              }
+            }
+          }
+
+          // Agile Low-Slung Fox-Leviathan Forelimbs
+          bone fore_shoulder_l attach(parent_box=chest_core, anchor=[0.94, -0.22, 0.36], align=[-0.52, 0.82, 0], seat=0.14) mirror_x(fore_shoulder_r) {
+            rest_euler: [22, 8, 34]
+            box fore_bicep { size: [5.5, 8.5, 6.0], material: pearl_cream, blend_with: [chest_fur_keel, chest_plum_ruff_l] }
+            box shoulder_pauldron place(base_box=fore_bicep, anchor=[0.96, 0.32, 0.05], align=[-0.55, 0, 0]) {
+              size: [2.0, 5.5, 5.0], material: sakura_scale, rotate: [-6, 8, -12], blend_with: [chest_core]
+            }
+            box elbow_fur_wedge place(base_box=fore_bicep, anchor=[0.18, -0.76, -0.92], align=[0, 0, 0.68]) {
+              size: [3.5, 3.5, 5.0], material: plum_fur, rotate: [20, 0, 0], blend_with: [fore_bracer]
+            }
+
+            bone fore_arm_l attach(parent_box=fore_bicep, anchor=[0.08, -1, -0.05], align=[0, 0.88, 0], seat=0.16) {
+              rest_euler: [-28, 0, -24]
+              box fore_bracer { size: [4.5, 8.5, 5.0], material: pearl_cream }
+              box forearm_fin_1 place(base_box=fore_bracer, anchor=[0.94, 0.32, -0.20], align=[-0.62, 0, 0.45]) {
+                size: [1.5, 2.5, 5.5], material: sakura_pink, rotate: [16, 26, -12], blend_with: [fore_bicep, elbow_fur_wedge]
+              }
+              box forearm_fin_2 place(base_box=fore_bracer, anchor=[0.94, -0.24, -0.20], align=[-0.65, 0, 0.45]) {
+                size: [1.5, 2.0, 5.0], material: orchid_magenta, rotate: [16, 26, -12], blend_with: [forearm_fin_1, fore_paw_pad]
+              }
+
+              bone fore_paw_l attach(parent_box=fore_bracer, anchor=[0, -1, 0.12], align=[0, 0.85, -0.45], seat=0.14) {
+                rest_euler: [18, 0, -10]
+                box fore_paw_pad { size: [6.0, 2.5, 5.5], material: plum_fur }
+                box f_toe_1 place(base_box=fore_paw_pad, anchor=[-0.68, -0.10, 0.94], align=[0, 0, -0.78]) {
+                  size: [1.5, 2.0, 3.5], material: pearl_cream, rotate: [3, 16, 0]
+                }
+                box f_toe_2 place(base_box=fore_paw_pad, anchor=[-0.22, -0.10, 0.96], align=[0, 0, -0.80]) {
+                  size: [1.5, 2.0, 4.0], material: pearl_cream, rotate: [3, 5, 0], blend_with: [f_toe_1]
+                }
+                box f_toe_3 place(base_box=fore_paw_pad, anchor=[0.24, -0.10, 0.96], align=[0, 0, -0.80]) {
+                  size: [1.5, 2.0, 4.0], material: pearl_cream, rotate: [3, -6, 0], blend_with: [f_toe_2]
+                }
+                box f_toe_4 place(base_box=fore_paw_pad, anchor=[0.70, -0.10, 0.92], align=[0, 0, -0.78]) {
+                  size: [1.5, 2.0, 3.5], material: pearl_cream, rotate: [3, -18, 0], blend_with: [f_toe_3]
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // Agile Digitigrade Hindlimbs
+      bone hind_thigh_l attach(parent_box=pelvis_core, anchor=[0.94, -0.16, -0.06], align=[-0.52, 0.84, 0], seat=0.14) mirror_x(hind_thigh_r) {
+        rest_euler: [-20, -6, 28]
+        box thigh_mass { size: [5.5, 8.5, 6.5], material: pearl_cream, blend_with: [waist_core, waist_belly_fur, tail_1_seg] }
+        box thigh_fur_wedge place(base_box=thigh_mass, anchor=[0.96, 0.12, -0.15], align=[-0.55, 0, 0.25]) {
+          size: [2.5, 5.5, 5.5], material: violet_silk, rotate: [8, 14, -14], blend_with: [pelvis_core, haunch_muscle_l]
+        }
+
+        bone hind_shin_l attach(parent_box=thigh_mass, anchor=[0.06, -1, -0.10], align=[0, 0.88, 0], seat=0.16) {
+          rest_euler: [38, 0, -18]
+          box shin_mass { size: [4.0, 8.0, 4.5], material: pearl_cream }
+          box hock_fin_spur place(base_box=shin_mass, anchor=[0.15, 0.62, -0.92], align=[0, 0, 0.72]) {
+            size: [2.0, 3.0, 4.0], material: sakura_pink, rotate: [22, 0, 0], blend_with: [thigh_mass]
+          }
+
+          bone hind_paw_l attach(parent_box=shin_mass, anchor=[0, -1, 0.14], align=[0, 0.86, -0.42], seat=0.14) {
+            rest_euler: [-25, 0, -10]
+            box hind_paw_pad { size: [5.5, 2.5, 5.5], material: plum_fur }
+            box h_toe_1 place(base_box=hind_paw_pad, anchor=[-0.62, -0.10, 0.94], align=[0, 0, -0.78]) {
+              size: [1.5, 2.0, 3.5], material: pearl_cream, rotate: [3, 14, 0]
+            }
+            box h_toe_2 place(base_box=hind_paw_pad, anchor=[0.0, -0.10, 0.96], align=[0, 0, -0.80]) {
+              size: [1.5, 2.0, 4.0], material: pearl_cream, rotate: [3, 0, 0], blend_with: [h_toe_1]
+            }
+            box h_toe_3 place(base_box=hind_paw_pad, anchor=[0.62, -0.10, 0.94], align=[0, 0, -0.78]) {
+              size: [1.5, 2.0, 3.5], material: pearl_cream, rotate: [3, -14, 0], blend_with: [h_toe_2]
+            }
+          }
+        }
+      }
+
+      // Signature HUGE, Voluminous Upward-Sweeping & Curling Fox-Brush Tail (`tail_1..tail_6`)
+      bone tail_1 attach(parent_box=pelvis_core, anchor=[0, 0.16, -1], align=[0, 0, 1], seat=0.24) {
+        rest_euler: [14, 10, 0]
+        box tail_1_seg { size: [9.0, 8.0, 9.5], material: pearl_cream }
+        box tail_1_ventral_fur place(base_box=tail_1_seg, anchor=[0, -0.96, 0], align=[0, 0.48, 0]) {
+          size: [7.5, 2.5, 8.5], material: plum_fur, blend_with: [pelvis_core, pelvis_belly_fur, tail_2_seg, tail_2_ventral_fur]
+        }
+        box tail_1_dorsal_fin place(base_box=tail_1_seg, anchor=[0, 0.96, -0.05], align=[0, -0.82, 0.30]) {
+          size: [1.5, 5.5, 6.5], material: sakura_pink, rotate: [24, 0, 0], blend_with: [pelvis_core, sacrum_scale_ridge, pelvis_petal_spine, tail_2_seg]
+        }
+
+        bone tail_2 attach(parent_box=tail_1_seg, anchor=[0, 0.10, -1], align=[0, 0, 1], seat=0.24) {
+          rest_euler: [24, 12, 0]
+          box tail_2_seg { size: [10.0, 9.0, 10.5], material: plum_fur }
+          box tail_2_ventral_fur place(base_box=tail_2_seg, anchor=[0, -0.96, -0.05], align=[0, 0.45, 0]) {
+            size: [8.5, 3.5, 9.5], material: plum_fur, rotate: [-8, 0, 0], blend_with: [tail_1_seg, tail_1_ventral_fur, tail_3_seg, tail_3_ventral_fur]
+          }
+          box tail_2_fur_l place(base_box=tail_2_seg, anchor=[0.96, -0.10, -0.15], align=[-0.52, 0, 0.45]) {
+            size: [3.5, 6.5, 9.5], material: violet_silk, rotate: [10, 22, -14], blend_with: [tail_1_seg, tail_3_seg, tail_3_fur_l]
+          }
+          box tail_2_fur_r place(base_box=tail_2_seg, anchor=[-0.96, -0.10, -0.15], align=[0.52, 0, 0.45]) {
+            size: [3.5, 6.5, 9.5], material: violet_silk, rotate: [10, -22, 14], blend_with: [tail_1_seg, tail_3_seg, tail_3_fur_r]
+          }
+          box tail_2_dorsal_fin place(base_box=tail_2_seg, anchor=[0, 0.96, -0.05], align=[0, -0.82, 0.30]) {
+            size: [1.5, 6.0, 7.5], material: sakura_pink, rotate: [22, 0, 0], blend_with: [tail_1_seg, tail_1_dorsal_fin, tail_3_seg, tail_3_dorsal_fin]
+          }
+
+          bone tail_3 attach(parent_box=tail_2_seg, anchor=[0, 0.10, -1], align=[0, 0, 1], seat=0.24) {
+            rest_euler: [26, 8, 0]
+            box tail_3_seg { size: [11.5, 10.5, 11.5], material: plum_fur }
+            box tail_3_ventral_fur place(base_box=tail_3_seg, anchor=[0, -0.96, -0.10], align=[0, 0.45, 0.20]) {
+              size: [9.5, 4.5, 10.5], material: plum_fur, rotate: [-10, 0, 0], blend_with: [tail_2_seg, tail_2_ventral_fur, tail_4_seg, tail_4_ventral_fur]
+            }
+            box tail_3_fur_l place(base_box=tail_3_seg, anchor=[0.96, -0.05, -0.18], align=[-0.52, 0, 0.48]) {
+              size: [4.5, 7.5, 11.0], material: violet_silk, rotate: [12, 26, -16], blend_with: [tail_2_seg, tail_2_fur_l, tail_4_seg, tail_4_fur_l]
+            }
+            box tail_3_fur_r place(base_box=tail_3_seg, anchor=[-0.96, -0.05, -0.18], align=[0.52, 0, 0.48]) {
+              size: [4.5, 7.5, 11.0], material: violet_silk, rotate: [12, -26, 16], blend_with: [tail_2_seg, tail_2_fur_r, tail_4_seg, tail_4_fur_r]
+            }
+            box tail_3_dorsal_fin place(base_box=tail_3_seg, anchor=[0, 0.96, -0.05], align=[0, -0.82, 0.30]) {
+              size: [1.5, 7.0, 8.0], material: orchid_magenta, rotate: [20, 0, 0], blend_with: [tail_2_seg, tail_2_dorsal_fin, tail_4_seg, tail_4_dorsal_fin]
+            }
+
+            bone tail_4 attach(parent_box=tail_3_seg, anchor=[0, 0.10, -1], align=[0, 0, 1], seat=0.24) {
+              rest_euler: [24, -10, 0]
+              box tail_4_seg { size: [11.0, 10.5, 11.0], material: plum_fur }
+              box tail_4_ventral_fur place(base_box=tail_4_seg, anchor=[0, -0.96, -0.12], align=[0, 0.48, 0.25]) {
+                size: [9.0, 4.5, 10.0], material: plum_fur, rotate: [-12, 0, 0], blend_with: [tail_3_seg, tail_3_ventral_fur, tail_5_seg, tail_5_ventral_fur]
+              }
+              box tail_4_fur_l place(base_box=tail_4_seg, anchor=[0.96, -0.05, -0.20], align=[-0.52, 0, 0.52]) {
+                size: [4.5, 7.5, 11.0], material: violet_silk, rotate: [14, 28, -16], blend_with: [tail_3_seg, tail_3_fur_l, tail_5_seg, tail_5_fur_l]
+              }
+              box tail_4_fur_r place(base_box=tail_4_seg, anchor=[-0.96, -0.05, -0.20], align=[0.52, 0, 0.52]) {
+                size: [4.5, 7.5, 11.0], material: violet_silk, rotate: [14, -28, 16], blend_with: [tail_3_seg, tail_3_fur_r, tail_5_seg, tail_5_fur_r]
+              }
+              box tail_4_dorsal_fin place(base_box=tail_4_seg, anchor=[0, 0.96, -0.05], align=[0, -0.82, 0.30]) {
+                size: [1.5, 6.5, 7.5], material: sakura_pink, rotate: [18, 0, 0], blend_with: [tail_3_seg, tail_3_dorsal_fin, tail_5_seg, tail_5_dorsal_fin]
+              }
+
+              // Articulated Lateral Fox-Brush Plume Fans on `tail_4`
+              bone tail_plume_l attach(parent_box=tail_4_seg, anchor=[0.96, -0.68, -0.38], align=[-0.78, 0.58, 0.78]) mirror_x(tail_plume_r) {
+                rest_euler: [-18, 36, 24]
+                box brush_plume_lobe { size: [3.0, 4.0, 9.0], material: plum_fur, blend_with: [tail_4_ventral_fur, tail_4_fur_l, tail_3_seg, tail_5_seg, tail_5_ventral_fur, tail_5_fur_l] }
+              }
+
+              bone tail_5 attach(parent_box=tail_4_seg, anchor=[0, 0.08, -1], align=[0, 0, 1], seat=0.24) {
+                rest_euler: [22, -12, 0]
+                box tail_5_seg { size: [8.5, 8.0, 9.5], material: violet_silk }
+                box tail_5_ventral_fur place(base_box=tail_5_seg, anchor=[0, -0.96, -0.10], align=[0, 0.55, 0.25]) {
+                  size: [6.5, 3.5, 8.5], material: plum_fur, rotate: [-10, 0, 0], blend_with: [tail_4_seg, tail_4_ventral_fur, tail_6_tip]
+                }
+                box tail_5_fur_l place(base_box=tail_5_seg, anchor=[0.95, 0.0, -0.20], align=[-0.55, 0, 0.50]) {
+                  size: [3.5, 5.5, 9.5], material: sakura_pink, rotate: [12, 24, -14], blend_with: [tail_4_seg, tail_4_fur_l, tail_6_tip, tail_6_fur_l]
+                }
+                box tail_5_fur_r place(base_box=tail_5_seg, anchor=[-0.95, 0.0, -0.20], align=[0.55, 0, 0.50]) {
+                  size: [3.5, 5.5, 9.5], material: sakura_pink, rotate: [12, -24, 14], blend_with: [tail_4_seg, tail_4_fur_r, tail_6_tip, tail_6_fur_r]
+                }
+                box tail_5_dorsal_fin place(base_box=tail_5_seg, anchor=[0, 0.96, -0.05], align=[0, -0.82, 0.30]) {
+                  size: [1.5, 5.0, 6.5], material: iris_gold, rotate: [16, 0, 0], blend_with: [tail_4_seg, tail_4_dorsal_fin, tail_6_tip]
+                }
+
+                bone tail_6 attach(parent_box=tail_5_seg, anchor=[0, 0.06, -1], align=[0, 0, 1], seat=0.22) {
+                  rest_euler: [20, -10, 0]
+                  box tail_6_tip { size: [5.5, 5.5, 8.5], material: sakura_pink }
+                  box tail_6_fur_l place(base_box=tail_6_tip, anchor=[0.94, 0.0, -0.18], align=[-0.62, 0, 0.48]) {
+                    size: [2.5, 3.5, 7.5], material: orchid_magenta, rotate: [10, 20, -10], blend_with: [tail_5_seg, tail_5_fur_l, tail_brush_spear]
+                  }
+                  box tail_6_fur_r place(base_box=tail_6_tip, anchor=[-0.94, 0.0, -0.18], align=[0.62, 0, 0.48]) {
+                    size: [2.5, 3.5, 7.5], material: orchid_magenta, rotate: [10, -20, 10], blend_with: [tail_5_seg, tail_5_fur_r, tail_brush_spear]
+                  }
+                  box tail_brush_spear place(base_box=tail_6_tip, anchor=[0, 0.06, -0.94], align=[0, 0, 0.72]) {
+                    size: [3.5, 3.5, 7.0], material: iris_gold, rotate: [12, 0, 0]
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

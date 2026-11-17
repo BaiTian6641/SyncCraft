@@ -1,8 +1,8 @@
 {
   "name": "synccraft-blockdsl",
   "displayName": "SyncCraft Block-DSL",
-  "description": "Language grammar, semantic syntax highlighting, context-aware auto-completion (including v4.0 @layout/@component/@assembly instances & frames plus v3.2 mirror_x/radial/chain/macro symbols), hover documentation, snippets, document outline, go-to-definition, canonical formatting, and live SE(3) + 15-axis SAT + adaptive swept motion audit diagnostics for SyncCraft Block-DSL v4.0.",
-  "version": "0.4.0",
+  "description": "Language grammar, semantic syntax highlighting, context-aware auto-completion (including v4.1 @layout/@component/@assembly/@stamps/gait/edge/banded/octagon constructs plus v3.2 mirror_x/radial/chain/macro symbols), hover documentation, snippets, document outline, go-to-definition, canonical formatting, and live SE(3) + 15-axis SAT + adaptive swept motion audit diagnostics for SyncCraft Block-DSL v4.1.",
+  "version": "0.4.1",
   "publisher": "synccraft",
   "license": "Apache-2.0",
   "icon": "images/icon.png",

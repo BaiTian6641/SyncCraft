@@ -6,7 +6,8 @@
     "dsl_version": "3.2",
     "size_step": 1.0,
     "audit_profile": "strict",
-    "units_per_block": 16
+    "units_per_block": 16,
+    "gravity": null
   },
   "palettes": [
     {
@@ -94,7 +95,10 @@
         "component_rest_euler": null,
         "explicit_local_center": null,
         "explicit_contact_with": [],
-        "instance_name": null
+        "instance_name": null,
+        "edge": null,
+        "layer": 0,
+        "prism_group": null
       },
       {
         "name": "pommel",
@@ -140,7 +144,10 @@
         "component_rest_euler": null,
         "explicit_local_center": null,
         "explicit_contact_with": [],
-        "instance_name": null
+        "instance_name": null,
+        "edge": null,
+        "layer": 0,
+        "prism_group": null
       },
       {
         "name": "guard",
@@ -172,7 +179,8 @@
             0.0
           ],
           "detached": false,
-          "joint_mode": false
+          "joint_mode": false,
+          "seat": 0.0
         },
         "mirror_name": null,
         "items": [
@@ -203,7 +211,10 @@
             "component_rest_euler": null,
             "explicit_local_center": null,
             "explicit_contact_with": [],
-            "instance_name": null
+            "instance_name": null,
+            "edge": null,
+            "layer": 0,
+            "prism_group": null
           },
           {
             "name": "blade",
@@ -235,7 +246,8 @@
                 0.0
               ],
               "detached": false,
-              "joint_mode": false
+              "joint_mode": false,
+              "seat": 0.0
             },
             "mirror_name": null,
             "items": [
@@ -266,7 +278,10 @@
                 "component_rest_euler": null,
                 "explicit_local_center": null,
                 "explicit_contact_with": [],
-                "instance_name": null
+                "instance_name": null,
+                "edge": null,
+                "layer": 0,
+                "prism_group": null
               }
             ],
             "joint_limits": null,
@@ -293,5 +308,6 @@
   "textures": [],
   "controller": null,
   "assembly_spec": null,
-  "source_map": null
+  "source_map": null,
+  "stamps": []
 }

@@ -67,6 +67,7 @@
   "authored_exempt_pairs": [],
   "z_fighting_pairs": [],
   "contact_violations": [],
+  "contract_violations": [],
   "connected_components": [
     [
       "crosspiece",

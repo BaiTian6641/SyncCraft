@@ -141,6 +141,7 @@ class BehaviorFrameSample:
     scene: Scene
     pose_position_deltas: dict[str, Vec3] = field(default_factory=dict)
     pose_scale_factors: dict[str, Vec3] = field(default_factory=dict)
+    root_motion_velocity: Vec3 = (0.0, 0.0, 0.0)
 
 
 def _bone_anchor_point_world(scene: Scene, bone_name: str, preferred_box: str | None = None) -> np.ndarray:
@@ -348,10 +349,14 @@ def evaluate_muscles_at_activations(
     root_translation_delta: Vec3 | None = None,
     pose_position_deltas: dict[str, Vec3] | None = None,
     pose_scale_factors: dict[str, Vec3] | None = None,
+    validate: bool = True,
+    _rest_scene: Scene | None = None,
+    _limits_map: dict[str, tuple[Any, np.ndarray]] | None = None,
+    _skip_scene: bool = False,
 ) -> MusculoskeletalPoseResult:
     """Compute Zajac/Hill force-length joint equilibrium, tendon couplings, and belly bulges."""
-    rest_scene = compile_geometry(program)
-    limits_map = _collect_expanded_joint_limits(program)
+    rest_scene = _rest_scene if _rest_scene is not None else compile_geometry(program, validate=validate)
+    limits_map = _limits_map if _limits_map is not None else _collect_expanded_joint_limits(program)
     act_in = activations or {}
     poses: dict[str, np.ndarray] = {
         b: np.asarray(v, dtype=np.float64).copy() for b, v in (base_pose_deltas or {}).items()
@@ -407,6 +412,16 @@ def evaluate_muscles_at_activations(
         b: (float(v[0]), float(v[1]), float(v[2])) for b, v in poses.items()
     }
 
+    if _skip_scene and not muscles:
+        return MusculoskeletalPoseResult(
+            pose_euler_deltas=pose_tuples,
+            box_inflate_deltas={},
+            joint_stiffness=stiffness_out,
+            muscle_telemetry=(),
+            scene=rest_scene,
+            fidelity_label=MUSCULOSKELETAL_FIDELITY_LABEL,
+        )
+
     # 3. Pre-bulge posed kinematics to measure exact 3D SE(3) fiber shortening
     kin_scene = compile_posed_geometry(
         program,
@@ -414,6 +429,7 @@ def evaluate_muscles_at_activations(
         root_translation_delta=root_translation_delta,
         pose_position_deltas=pose_position_deltas,
         pose_scale_factors=pose_scale_factors,
+        validate=validate,
     )
 
     inflate_deltas, telemetry = _compute_muscle_bulge_and_telemetry(
@@ -432,6 +448,7 @@ def evaluate_muscles_at_activations(
             root_translation_delta=root_translation_delta,
             pose_position_deltas=pose_position_deltas,
             pose_scale_factors=pose_scale_factors,
+            validate=validate,
         )
         if inflate_deltas
         else kin_scene
@@ -553,6 +570,8 @@ def _solve_ik_chain_with_root_delta(
     *,
     base_pose_deltas: dict[str, Vec3],
     root_translation_delta: Vec3,
+    validate: bool = True,
+    _limits_cache: dict[str, tuple[Any, np.ndarray]] | None = None,
 ) -> NBoneIKResult:
     """Solve generalized N-bone IK when the root bone has translated by root_translation_delta."""
     from synccraft.data_gen.ik_motion_templates import NBoneIKResult, solve_n_bone_ik
@@ -570,6 +589,9 @@ def _solve_ik_chain_with_root_delta(
         base_pose_deltas=base_pose_deltas,
         hinge_axis=chain.hinge_axis,
         pole_world=chain.pole,
+        plane=getattr(chain, "plane", None),
+        validate=validate,
+        _limits_cache=_limits_cache,
     )
     ach = (
         float(res.achieved_world[0] + root_translation_delta[0]),
@@ -792,14 +814,32 @@ def evaluate_behavior_clip(
     num_frames: int = 12,
     active_state: str | None = None,
     sample_phases: Sequence[float] | None = None,
+    _validate: bool = True,
+    _pre_spring_cache: dict[float, Any] | None = None,
 ) -> list[BehaviorFrameSample]:
-    """Synthesize exact posed, muscle-inflated, keyframe, spring, and IK-locked frames for a @behavior clip."""
+    """Synthesize exact posed, muscle-inflated, keyframe, spring, gait, and IK-locked frames for a @behavior clip."""
+    from synccraft.dsl.ast_nodes import validate_program
+
+    if _validate:
+        validate_program(program)
     if program.behavior is None:
         raise ValueError("Program has no @behavior section")
     clip_map: dict[str, ClipDecl] = {c.name: c for c in program.behavior.clips}
     if clip_name not in clip_map:
         raise KeyError(f"Unknown @behavior clip {clip_name!r}; available: {sorted(clip_map)}")
     clip = clip_map[clip_name]
+
+    if getattr(clip, "gaits", ()):
+        from synccraft.kinematics.gait_solver import evaluate_gait_clip
+
+        return evaluate_gait_clip(
+            program,
+            clip,
+            num_frames=num_frames,
+            active_state=active_state,
+            sample_phases=sample_phases,
+            _phase_cache=_pre_spring_cache,
+        )
 
     state_pose_bias: dict[str, Vec3] = {}
     state_muscle_tone: dict[str, float] = {}
@@ -811,7 +851,7 @@ def evaluate_behavior_clip(
         state_pose_bias = dict(st.pose_biases)
         state_muscle_tone = dict(st.muscle_tones)
 
-    rest_scene = compile_geometry(program)
+    rest_scene = compile_geometry(program, validate=False)
     limits_map = _collect_expanded_joint_limits(program)
     prismatic_map: dict[str, tuple[str, tuple[float, float], Vec3 | None]] = {}
     if program.kinematics is not None:
@@ -864,6 +904,33 @@ def evaluate_behavior_clip(
 
     for phi_raw in phases:
         phi = float(phi_raw)
+        phi_key = round(phi, 8)
+        if _pre_spring_cache is not None and phi_key in _pre_spring_cache:
+            (
+                t_s,
+                root_delta,
+                acts,
+                frame_pos_deltas,
+                frame_scale_factors,
+                cur_poses,
+                ms_res,
+                eff_positions,
+                eff_stance,
+                eff_step_ids,
+            ) = _pre_spring_cache[phi_key]
+            times_list.append(t_s)
+            phases_list.append(phi)
+            root_deltas_list.append(root_delta)
+            acts_list.append(acts)
+            pos_deltas_list.append(frame_pos_deltas)
+            scale_factors_list.append(frame_scale_factors)
+            pre_spring_poses_list.append(cur_poses)
+            pre_spring_ms_res_list.append(ms_res)
+            eff_pos_list.append(eff_positions)
+            eff_stance_list.append(eff_stance)
+            eff_step_list.append(eff_step_ids)
+            continue
+
         t_s = phi * clip.duration_s
         times_list.append(t_s)
         phases_list.append(phi)
@@ -877,7 +944,7 @@ def evaluate_behavior_clip(
         root_deltas_list.append(root_delta)
 
         # 1. Neural muscle excitation curves
-        acts: dict[str, float] = dict(state_muscle_tone)
+        acts = dict(state_muscle_tone)
         for md in clip.muscle_drives:
             u_m = (t_s * md.freq_hz + md.phase_deg / 360.0) % 1.0
             val = md.baseline + (md.peak - md.baseline) * (0.5 - 0.5 * math.cos(2.0 * math.pi * u_m))
@@ -888,8 +955,8 @@ def evaluate_behavior_clip(
         track_poses: dict[str, np.ndarray] = {
             b: np.asarray(v, dtype=np.float64).copy() for b, v in state_pose_bias.items()
         }
-        frame_pos_deltas: dict[str, Vec3] = {}
-        frame_scale_factors: dict[str, Vec3] = {}
+        frame_pos_deltas = {}
+        frame_scale_factors = {}
 
         for tr in clip.tracks:
             ang = _evaluate_track_angle(
@@ -956,11 +1023,15 @@ def evaluate_behavior_clip(
             root_translation_delta=root_delta,
             pose_position_deltas=frame_pos_deltas or None,
             pose_scale_factors=frame_scale_factors or None,
+            validate=False,
+            _rest_scene=rest_scene,
+            _limits_map=limits_map,
+            _skip_scene=bool(clip.ik_drives or all_springs),
         )
         cur_poses = dict(ms_res.pose_euler_deltas)
-        eff_positions: dict[str, Vec3] = {}
-        eff_stance: dict[str, bool] = {}
-        eff_step_ids: dict[str, int] = {}
+        eff_positions = {}
+        eff_stance = {}
+        eff_step_ids = {}
 
         # 4. Closed-loop world-anchored foot_cycle N-bone IK drives (< 0.02u stance slip)
         for ikd in clip.ik_drives:
@@ -996,12 +1067,27 @@ def evaluate_behavior_clip(
                 (float(tgt_w[0]), float(tgt_w[1]), float(tgt_w[2])),
                 base_pose_deltas=cur_poses,
                 root_translation_delta=root_delta,
+                validate=False,
+                _limits_cache=limits_map,
             )
             cur_poses = ik_sol.pose_euler_deltas
             eff_positions[ikd.chain] = ik_sol.achieved_world
             eff_stance[ikd.chain] = in_stance
             eff_step_ids[ikd.chain] = step_id
 
+        if _pre_spring_cache is not None:
+            _pre_spring_cache[phi_key] = (
+                t_s,
+                root_delta,
+                acts,
+                frame_pos_deltas,
+                frame_scale_factors,
+                cur_poses,
+                ms_res,
+                eff_positions,
+                eff_stance,
+                eff_step_ids,
+            )
         pre_spring_poses_list.append(cur_poses)
         pre_spring_ms_res_list.append(ms_res)
         eff_pos_list.append(eff_positions)
@@ -1034,35 +1120,43 @@ def evaluate_behavior_clip(
         f_scl = scale_factors_list[f_idx]
 
         if clip.ik_drives or all_springs:
-            kin_scene = compile_posed_geometry(
-                program,
-                cur_poses,
-                root_translation_delta=root_delta,
-                pose_position_deltas=f_pos or None,
-                pose_scale_factors=f_scl or None,
-            )
-            if program.muscles:
-                frame_inflate_deltas, _ = _compute_muscle_bulge_and_telemetry(
-                    rest_scene,
-                    kin_scene,
-                    program.muscles,
-                    acts,
-                    cur_poses,
-                )
+            final_cache_key = ("__final__", round(phases_list[f_idx], 8))
+            if not all_springs and _pre_spring_cache is not None and final_cache_key in _pre_spring_cache:
+                frame_inflate_deltas, final_scene = _pre_spring_cache[final_cache_key]
             else:
-                frame_inflate_deltas = ms_res.box_inflate_deltas
-            final_scene = (
-                compile_posed_geometry(
+                kin_scene = compile_posed_geometry(
                     program,
                     cur_poses,
-                    box_inflate_deltas=frame_inflate_deltas,
                     root_translation_delta=root_delta,
                     pose_position_deltas=f_pos or None,
                     pose_scale_factors=f_scl or None,
+                    validate=False,
                 )
-                if frame_inflate_deltas
-                else kin_scene
-            )
+                if program.muscles:
+                    frame_inflate_deltas, _ = _compute_muscle_bulge_and_telemetry(
+                        rest_scene,
+                        kin_scene,
+                        program.muscles,
+                        acts,
+                        cur_poses,
+                    )
+                else:
+                    frame_inflate_deltas = ms_res.box_inflate_deltas
+                final_scene = (
+                    compile_posed_geometry(
+                        program,
+                        cur_poses,
+                        box_inflate_deltas=frame_inflate_deltas,
+                        root_translation_delta=root_delta,
+                        pose_position_deltas=f_pos or None,
+                        pose_scale_factors=f_scl or None,
+                        validate=False,
+                    )
+                    if frame_inflate_deltas
+                    else kin_scene
+                )
+                if not all_springs and _pre_spring_cache is not None:
+                    _pre_spring_cache[final_cache_key] = (frame_inflate_deltas, final_scene)
         else:
             frame_inflate_deltas = ms_res.box_inflate_deltas
             final_scene = ms_res.scene
@@ -1137,21 +1231,39 @@ def _subdivide_clip_phases(
             p0 = np.asarray(prev_f.pose_position_deltas.get(bname, (0.0, 0.0, 0.0)), dtype=np.float64)
             p1 = np.asarray(cur_f.pose_position_deltas.get(bname, (0.0, 0.0, 0.0)), dtype=np.float64)
             step_u = max(step_u, float(np.linalg.norm(p1 - p0)))
-        sub_k = max(1, int(math.ceil(max(step_deg / max(1e-6, max_step_deg), step_u / max(1e-6, max_step_units)))))
-        interval_needs.append(sub_k - 1)
+        sub_k = max(
+            1,
+            int(
+                math.ceil(
+                    max(
+                        step_deg / max(1e-6, 0.90 * max_step_deg),
+                        step_u / max(1e-6, 0.90 * max_step_units),
+                    )
+                )
+            ),
+        )
+        # Gradual local refinement (<= 2 inserts per interval per pass) focuses budget on swing peaks
+        interval_needs.append(min(sub_k - 1, 2))
 
     total_extra = sum(interval_needs)
     if total_extra == 0:
         return [f.phase for f in frames]
 
     scale = min(1.0, budget_left / float(total_extra))
+    extras = [int(math.floor(er * scale)) for er in interval_needs]
+    rem_budget = max(0, budget_left - sum(extras))
+    if rem_budget > 0:
+        ranked = sorted(range(len(interval_needs)), key=lambda idx: interval_needs[idx], reverse=True)
+        for idx in ranked:
+            if rem_budget <= 0:
+                break
+            if interval_needs[idx] > extras[idx]:
+                extras[idx] += 1
+                rem_budget -= 1
     new_phases: list[float] = [frames[0].phase]
-    for idx, extra_raw in enumerate(interval_needs):
+    for idx, extra in enumerate(extras):
         p0 = frames[idx].phase
         p1 = frames[idx + 1].phase
-        extra = int(math.floor(extra_raw * scale))
-        if extra_raw > 0 and extra == 0 and len(new_phases) + (len(frames) - idx) <= max_frames:
-            extra = 1
         sub_k = extra + 1
         for k in range(1, sub_k + 1):
             new_phases.append(p0 + (p1 - p0) * (k / float(sub_k)))
@@ -1169,45 +1281,75 @@ def audit_behavior_clip(
     adaptive_subdivision: bool | None = None,
     max_step_deg: float = 10.0,
     max_step_units: float = 0.5,
-    max_frames: int = 72,
+    max_frames: int = 144,
 ) -> dict[str, Any]:
-    """Run adaptive discrete-step swept 15-axis OBB SAT + stance foot-skating audit on a @behavior clip."""
+    """Run unified adaptive discrete-step swept 15-axis OBB SAT + stance foot-skating audit on a @behavior clip."""
     from synccraft.audit.sync_audit import audit_scene
 
     clip_obj = next((c for c in (program.behavior.clips if program.behavior else ()) if c.name == clip_name), None)
     duration_s = float(clip_obj.duration_s) if clip_obj is not None else 0.0
     is_loop = bool(clip_obj.loop) if clip_obj is not None else True
-    use_adaptive = (
-        bool(adaptive_subdivision)
-        if adaptive_subdivision is not None
-        else (
-            getattr(program.meta, "dsl_version", "3.0") == "4.0"
-            or (
-                clip_obj is not None
-                and (
-                    any(t.law == "spin" for t in clip_obj.tracks)
-                    or bool(getattr(clip_obj, "slides", ()))
-                )
-            )
-        )
+    use_adaptive = True if adaptive_subdivision is None else bool(adaptive_subdivision)
+    eff_max_frames = (
+        max(int(max_frames), int(math.ceil(120.0 * duration_s)))
+        if int(max_frames) == 144 and duration_s > 1.2
+        else int(max_frames)
     )
+    gait_cycles_in_clip = 1
+    if clip_obj is not None and getattr(clip_obj, "gaits", ()) and int(max_frames) == 144:
+        from synccraft.kinematics.gait_solver import analyze_morphology, compute_froude_kinematics
 
-    frames = evaluate_behavior_clip(
-        program,
-        clip_name,
-        num_frames=num_frames,
-        active_state=active_state,
-    )
+        _g_rest = compile_geometry(program, validate=False)
+        _g_morph = analyze_morphology(program, _g_rest)
+        _g_kin = compute_froude_kinematics(program, clip_obj.gaits[0], _g_morph, duration_s)
+        gait_cycles_in_clip = max(1, int(_g_kin["cycles_in_clip"]))
+        eff_max_frames = max(eff_max_frames, 72 * gait_cycles_in_clip)
+
+    pre_spring_cache: dict[Any, Any] = {}
+    if use_adaptive and clip_obj is not None:
+        base_n = max(2, int(num_frames))
+        if getattr(clip_obj, "gaits", ()):
+            base_n = min(max(2, eff_max_frames - 1), max(base_n, 28 * gait_cycles_in_clip))
+        seed_phases_set: set[float] = set(
+            round(float(x), 8)
+            for x in np.linspace(0.0, 1.0, base_n + (1 if is_loop else 0), endpoint=True, dtype=np.float64)
+        )
+        if duration_s > 1e-9:
+            for kf_tr in getattr(clip_obj, "keyframes", ()):
+                for t_k, _ in kf_tr.keys:
+                    phi_k = float(t_k) / duration_s
+                    if 0.0 <= phi_k <= 1.0:
+                        seed_phases_set.add(round(phi_k, 8))
+        seed_phases = sorted(seed_phases_set)
+        if len(seed_phases) > eff_max_frames:
+            seed_phases = [
+                float(x) for x in np.linspace(0.0, 1.0, eff_max_frames, endpoint=True, dtype=np.float64)
+            ]
+        frames = evaluate_behavior_clip(
+            program,
+            clip_name,
+            active_state=active_state,
+            sample_phases=seed_phases,
+            _pre_spring_cache=pre_spring_cache,
+        )
+    else:
+        frames = evaluate_behavior_clip(
+            program,
+            clip_name,
+            num_frames=num_frames,
+            active_state=active_state,
+            _pre_spring_cache=pre_spring_cache,
+        )
     measured_max_deg, measured_max_units = _measure_max_interframe_steps(frames, is_loop)
     if use_adaptive:
-        for _ in range(2):
-            if len(frames) >= max_frames or (measured_max_deg <= max_step_deg and measured_max_units <= max_step_units):
+        for _ in range(9):
+            if len(frames) >= eff_max_frames or (measured_max_deg <= max_step_deg and measured_max_units <= max_step_units):
                 break
             refined_phases = _subdivide_clip_phases(
                 frames,
                 max_step_deg=max_step_deg,
                 max_step_units=max_step_units,
-                max_frames=max_frames,
+                max_frames=eff_max_frames,
             )
             if len(refined_phases) <= len(frames):
                 break
@@ -1216,6 +1358,8 @@ def audit_behavior_clip(
                 clip_name,
                 active_state=active_state,
                 sample_phases=refined_phases,
+                _validate=False,
+                _pre_spring_cache=pre_spring_cache,
             )
             measured_max_deg, measured_max_units = _measure_max_interframe_steps(frames, is_loop)
     colliding_frames: list[dict[str, Any]] = []
@@ -1263,15 +1407,22 @@ def audit_behavior_clip(
             bone_excursion_deg[bname] = bone_excursion_deg.get(bname, 0.0) + float(np.linalg.norm(v1 - v0))
 
     stance_ok = max_stance_slip <= max_allowed_stance_slip
-    passed = (len(colliding_frames) == 0) and stance_ok
-    return {
+    step_bound_satisfied = (
+        True
+        if not use_adaptive
+        else (measured_max_deg <= max_step_deg + 1e-4 and measured_max_units <= max_step_units + 1e-4)
+    )
+    passed = (len(colliding_frames) == 0) and stance_ok and step_bound_satisfied
+    result_dict: dict[str, Any] = {
         "clip_name": clip_name,
         "active_state": active_state,
         "motion_audit_method": "adaptive_discrete_step" if use_adaptive else "fixed_uniform_sampling",
         "time_range_s": [0.0, round(duration_s, 4)],
         "num_frames": len(frames),
+        "max_frames_cap": eff_max_frames,
         "measured_max_step_deg": round(measured_max_deg, 4),
         "measured_max_step_units": round(measured_max_units, 5),
+        "step_bound_satisfied": step_bound_satisfied,
         "passed": passed,
         "swept_collision_free": len(colliding_frames) == 0,
         "swept_collision_frame_count": len(colliding_frames),
@@ -1283,3 +1434,17 @@ def audit_behavior_clip(
         "per_chain_stance_slip": {k: round(v, 6) for k, v in sorted(per_chain_slip.items())},
         "bone_angular_excursion_deg": {k: round(v, 3) for k, v in sorted(bone_excursion_deg.items())},
     }
+    if clip_obj is not None and getattr(clip_obj, "gaits", ()):
+        from synccraft.kinematics.gait_solver import audit_gait_clip_contracts
+
+        gait_audit = audit_gait_clip_contracts(
+            program,
+            clip_obj,
+            frames,
+            precomputed_collision_events=total_collision_events,
+        )
+        result_dict["gait_audit"] = gait_audit
+        result_dict["root_motion"] = gait_audit.get("root_motion")
+        if not gait_audit["passed"]:
+            result_dict["passed"] = False
+    return result_dict

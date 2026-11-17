@@ -15,8 +15,33 @@ from synccraft.kinematics.se3_chain import Scene, WorldBox
 MAX_HINGE_ANGLE_DEG: float = 60.0
 MAX_HINGE_ALLOWANCE_UNITS: float = 2.5
 MAX_SCULPTED_OVERLAP_RATIO: float = 0.85
+MAX_SCULPTED_PARALLEL_OVERLAP_RATIO: float = 0.65
+MAX_SCULPTED_BURIED_VOLUME_RATIO: float = 0.65
 MAX_SCULPTED_HINGE_ANGLE_DEG: float = 135.0
 MAX_SCULPTED_HINGE_ALLOWANCE_UNITS: float = 6.0
+
+_LATTICE_1D = np.linspace(-1.0 + 1.0 / 8.0, 1.0 - 1.0 / 8.0, 8, dtype=np.float64)
+_UNIT_OBB_LATTICE = np.stack(
+    np.meshgrid(_LATTICE_1D, _LATTICE_1D, _LATTICE_1D, indexing="ij"), axis=-1
+).reshape(-1, 3)
+
+
+def _max_buried_volume_fraction(left: WorldBox, right: WorldBox, tol: float = 1e-6) -> float:
+    """Deterministic 512-cell midpoint OBB-in-OBB buried-volume fraction max(V(L∩R)/V(L), V(L∩R)/V(R))."""
+    if getattr(left, "plane_normal", None) is not None or getattr(right, "plane_normal", None) is not None:
+        return 0.0
+    ext_l = left.half_extents
+    ext_r = right.half_extents
+    if np.any(ext_l <= 1e-9) or np.any(ext_r <= 1e-9):
+        return 0.0
+    pts_l = (_UNIT_OBB_LATTICE * ext_l) @ left.rotation.T + left.center
+    in_r = np.all(np.abs((pts_l - right.center) @ right.rotation) <= (ext_r + tol), axis=-1)
+    frac_l = float(np.mean(in_r))
+
+    pts_r = (_UNIT_OBB_LATTICE * ext_r) @ right.rotation.T + right.center
+    in_l = np.all(np.abs((pts_r - left.center) @ left.rotation) <= (ext_l + tol), axis=-1)
+    frac_r = float(np.mean(in_l))
+    return max(frac_l, frac_r)
 
 
 def compute_delta_hinge(
@@ -343,8 +368,12 @@ def _sculpted_exemption_reason(
     *,
     left_instance: str | None = None,
     right_instance: str | None = None,
+    left_prism_group: str | None = None,
+    right_prism_group: str | None = None,
 ) -> str | None:
-    """Return explicit ADR 0007/0008 sculpted-overlap contract category, or None (never sibling/instance immunity)."""
+    """Return explicit ADR 0007/0008/0011 sculpted-overlap contract category, or None (never sibling/instance immunity)."""
+    if left_prism_group is not None and left_prism_group == right_prism_group:
+        return "sculpted_prism_hub"
     if is_blend_pair:
         return "declared_blend"
     if left_bone not in bone_parent_map or right_bone not in bone_parent_map:
@@ -374,7 +403,7 @@ def _evaluate_sculpted_overlap(
     max_inset_depth: float,
     enforce_gap: bool,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
-    """Verify ADR 0007 sculpted partial-overlap bounds and anti-swallowing protrusion invariant."""
+    """Verify ADR 0007/0011 sculpted partial-overlap bounds and anti-swallowing buried-volume invariant."""
     rel_rot = left.rotation.T @ right.rotation
     cos_theta = float(np.clip((np.trace(rel_rot) - 1.0) * 0.5, -1.0, 1.0))
     theta = math.acos(cos_theta)
@@ -393,6 +422,10 @@ def _evaluate_sculpted_overlap(
         else 0.0
     )
 
+    pg_l = getattr(left, "prism_group", None)
+    pg_r = getattr(right, "prism_group", None)
+    is_prism_hub = (pg_l is not None and pg_l == pg_r) or (reason == "sculpted_prism_hub")
+
     inflate_allowance = float(left.inflate + right.inflate)
     hinge_allowance = compute_delta_hinge(
         theta,
@@ -401,25 +434,36 @@ def _evaluate_sculpted_overlap(
         max_hinge_angle_deg=MAX_SCULPTED_HINGE_ANGLE_DEG,
         max_hinge_allowance=MAX_SCULPTED_HINGE_ALLOWANCE_UNITS,
     )
-    max_allowed_overlap = (
-        max(max_inset_depth, hinge_allowance, MAX_SCULPTED_OVERLAP_RATIO * t_med)
-        + inflate_allowance
-        + collision_tolerance
-    )
+    eff_ratio = MAX_SCULPTED_PARALLEL_OVERLAP_RATIO if theta_deg < 5.0 else MAX_SCULPTED_OVERLAP_RATIO
+    if is_prism_hub:
+        t_max_any = max(float(np.max(left_pos)), float(np.max(right_pos))) if (left_pos.size > 0 and right_pos.size > 0) else 0.0
+        max_allowed_overlap = t_max_any + inflate_allowance + collision_tolerance
+    else:
+        max_allowed_overlap = (
+            max(max_inset_depth, hinge_allowance, eff_ratio * t_med)
+            + inflate_allowance
+            + collision_tolerance
+        )
 
     prot_l, prot_r = _min_exterior_protrusion(left, right)
     min_prot = min(prot_l, prot_r)
     has_plane = (getattr(left, "plane_normal", None) is not None) or (getattr(right, "plane_normal", None) is not None)
-    min_req_prot = collision_tolerance if has_plane else min(0.25, 0.15 * t_thin)
+    min_req_prot = collision_tolerance if (has_plane or is_prism_hub) else min(0.25, 0.15 * t_thin)
+    buried_frac = (
+        0.0
+        if (has_plane or is_prism_hub or raw_min_overlap <= collision_tolerance)
+        else _max_buried_volume_fraction(left, right, tol=collision_tolerance)
+    )
 
     telemetry = {
         "pair": list(pair),
-        "exemption_reason": reason,
+        "exemption_reason": "sculpted_prism_hub" if is_prism_hub else reason,
         "raw_min_overlap": raw_min_overlap,
         "max_allowed_overlap": max_allowed_overlap,
         "relative_angle_deg": theta_deg,
         "min_protrusion_units": min_prot,
         "min_required_protrusion": min_req_prot,
+        "buried_volume_fraction": buried_frac,
     }
 
     if enforce_gap and raw_min_overlap < -max_contact_gap:
@@ -435,7 +479,10 @@ def _evaluate_sculpted_overlap(
             telemetry,
         )
 
-    if raw_min_overlap > collision_tolerance and min_prot <= min_req_prot:
+    if raw_min_overlap > collision_tolerance and (
+        min_prot <= min_req_prot
+        or (not has_plane and not is_prism_hub and buried_frac > MAX_SCULPTED_BURIED_VOLUME_RATIO)
+    ):
         return (
             {
                 "pair": list(pair),
@@ -444,6 +491,8 @@ def _evaluate_sculpted_overlap(
                 "raw_min_overlap": raw_min_overlap,
                 "min_protrusion_units": min_prot,
                 "min_required_protrusion": min_req_prot,
+                "buried_volume_fraction": buried_frac,
+                "max_buried_volume_ratio": MAX_SCULPTED_BURIED_VOLUME_RATIO,
             },
             telemetry,
         )
@@ -458,6 +507,7 @@ def _evaluate_sculpted_overlap(
                 "max_allowed_overlap": max_allowed_overlap,
                 "relative_angle_deg": theta_deg,
                 "min_protrusion_units": min_prot,
+                "buried_volume_fraction": buried_frac,
             },
             telemetry,
         )
@@ -596,150 +646,154 @@ def audit_scene(
 
     physical_graph: dict[str, set[str]] = {box.name: set() for box in boxes}
     broadphase_margin = math.sqrt(3.0) * max(collision_tolerance, max_contact_gap, 1e-4) + 1e-6
+    scene_blend_pairs = getattr(scene, "blend_pairs", frozenset())
 
-    for i in range(n_boxes):
-        if not valid_mask[i]:
-            continue
+    valid_arr = np.asarray(valid_mask, dtype=bool)
+    n_valid = int(np.sum(valid_arr))
+    box_idx_by_name = {box.name: idx for idx, box in enumerate(boxes)}
+
+    declared_idx_pairs: set[tuple[int, int]] = set()
+    for a_name, b_name in scene.adjacency:
+        ia = box_idx_by_name.get(a_name)
+        ib = box_idx_by_name.get(b_name)
+        if ia is not None and ib is not None and ia != ib and valid_mask[ia] and valid_mask[ib]:
+            declared_idx_pairs.add((ia, ib) if ia < ib else (ib, ia))
+
+    evaluated_pairs = max(0, (n_valid * (n_valid - 1)) // 2 - len(declared_idx_pairs))
+
+    candidate_pairs_set: set[tuple[int, int]] = set(declared_idx_pairs)
+    if n_valid >= 2:
+        sep_a = world_mins[:, None, :] - world_maxs[None, :, :]
+        sep_b = world_mins[None, :, :] - world_maxs[:, None, :]
+        overlap_mat = np.all(np.maximum(sep_a, sep_b) <= broadphase_margin, axis=-1)
+        overlap_mat &= valid_arr[:, None] & valid_arr[None, :]
+        ii, jj = np.nonzero(np.triu(overlap_mat, k=1))
+        for a_i, b_j in zip(ii.tolist(), jj.tolist()):
+            candidate_pairs_set.add((a_i, b_j))
+
+    for i, j in sorted(candidate_pairs_set):
         left = boxes[i]
-        min_i = world_mins[i]
-        max_i = world_maxs[i]
-        for j in range(i + 1, n_boxes):
-            if not valid_mask[j]:
-                continue
-            right = boxes[j]
-            pair = (left.name, right.name) if left.name <= right.name else (right.name, left.name)
-            is_declared = pair in scene.adjacency
+        right = boxes[j]
+        pair = (left.name, right.name) if left.name <= right.name else (right.name, left.name)
+        is_declared = (i, j) in declared_idx_pairs
 
-            if not is_declared:
-                evaluated_pairs += 1
-                min_j = world_mins[j]
-                max_j = world_maxs[j]
-                if (
-                    min_i[0] - max_j[0] > broadphase_margin
-                    or min_j[0] - max_i[0] > broadphase_margin
-                    or min_i[1] - max_j[1] > broadphase_margin
-                    or min_j[1] - max_i[1] > broadphase_margin
-                    or min_i[2] - max_j[2] > broadphase_margin
-                    or min_j[2] - max_i[2] > broadphase_margin
-                ):
-                    continue
+        try:
+            result = sat_obb(left, right, collision_tolerance=collision_tolerance)
+        except ValueError as exc:
+            errors.append(f"{left.name} / {right.name}: {exc}")
+            continue
 
-            try:
-                result = sat_obb(left, right, collision_tolerance=collision_tolerance)
-            except ValueError as exc:
-                errors.append(f"{left.name} / {right.name}: {exc}")
-                continue
+        z_fight = _detect_coplanar_z_fighting(left, right, collision_tolerance=collision_tolerance)
+        is_blend_pair = pair in scene_blend_pairs
 
-            z_fight = _detect_coplanar_z_fighting(left, right, collision_tolerance=collision_tolerance)
-            scene_blend_pairs = getattr(scene, "blend_pairs", frozenset())
-            is_blend_pair = pair in scene_blend_pairs
-
-            entry = {"pair": list(pair), **result.to_dict()}
-            if is_declared:
-                reason = scene.adjacency_reasons.get(pair, "declared")
-                entry["reason"] = reason
-                declared_contacts.append(entry)
-                if is_authored:
+        entry = {"pair": list(pair), **result.to_dict()}
+        if is_declared:
+            reason = scene.adjacency_reasons.get(pair, "declared")
+            entry["reason"] = reason
+            declared_contacts.append(entry)
+            if is_authored:
+                physical_graph[left.name].add(right.name)
+                physical_graph[right.name].add(left.name)
+                if result.collision and z_fight is None:
+                    authored_exempt_pairs.append(
+                        {**entry, "exemption_reason": f"declared_{reason}"}
+                    )
+            elif is_sculpted:
+                violation, sc_tel = _evaluate_sculpted_overlap(
+                    left,
+                    right,
+                    pair,
+                    f"declared_{reason}",
+                    result.raw_min_overlap,
+                    collision_tolerance=collision_tolerance,
+                    max_contact_gap=max_contact_gap,
+                    max_inset_depth=max_inset_depth,
+                    enforce_gap=enforce_physical_contact,
+                )
+                if violation is not None:
+                    contact_violations.append(violation)
+                    if not enforce_physical_contact:
+                        collisions.append({**entry, "violation": violation["violation"]})
+                elif z_fight is None:
                     physical_graph[left.name].add(right.name)
                     physical_graph[right.name].add(left.name)
-                    if result.collision and z_fight is None:
-                        authored_exempt_pairs.append(
-                            {**entry, "exemption_reason": f"declared_{reason}"}
-                        )
-                elif is_sculpted:
-                    violation, sc_tel = _evaluate_sculpted_overlap(
-                        left,
-                        right,
-                        pair,
-                        f"declared_{reason}",
-                        result.raw_min_overlap,
-                        collision_tolerance=collision_tolerance,
-                        max_contact_gap=max_contact_gap,
-                        max_inset_depth=max_inset_depth,
-                        enforce_gap=enforce_physical_contact,
-                    )
-                    if violation is not None:
-                        contact_violations.append(violation)
-                        if not enforce_physical_contact:
-                            collisions.append({**entry, "violation": violation["violation"]})
-                    elif z_fight is None:
-                        physical_graph[left.name].add(right.name)
-                        physical_graph[right.name].add(left.name)
-                        if result.collision:
-                            sculpted_overlap_pairs.append({**entry, **sc_tel})
-                else:
-                    violation = _evaluate_declared_contact(
-                        left,
-                        right,
-                        pair,
-                        reason,
-                        result.raw_min_overlap,
-                        collision_tolerance=collision_tolerance,
-                        max_contact_gap=max_contact_gap,
-                        max_inset_depth=max_inset_depth,
-                    )
-                    if violation is not None:
-                        contact_violations.append(violation)
-                    elif z_fight is None:
-                        physical_graph[left.name].add(right.name)
-                        physical_graph[right.name].add(left.name)
-                if z_fight is not None:
-                    z_fighting_pairs.append(z_fight)
-                    contact_violations.append(z_fight)
+                    if result.collision:
+                        sculpted_overlap_pairs.append({**entry, **sc_tel})
             else:
-                if z_fight is not None:
-                    z_fighting_pairs.append(z_fight)
-                    contact_violations.append(z_fight)
-                if result.collision:
-                    if is_authored:
-                        auth_reason = _authored_bone_exemption_reason(
-                            left.bone_name,
-                            right.bone_name,
-                            bone_parent_map,
-                            effective_box_parent_map,
+                violation = _evaluate_declared_contact(
+                    left,
+                    right,
+                    pair,
+                    reason,
+                    result.raw_min_overlap,
+                    collision_tolerance=collision_tolerance,
+                    max_contact_gap=max_contact_gap,
+                    max_inset_depth=max_inset_depth,
+                )
+                if violation is not None:
+                    contact_violations.append(violation)
+                elif z_fight is None:
+                    physical_graph[left.name].add(right.name)
+                    physical_graph[right.name].add(left.name)
+            if z_fight is not None:
+                z_fighting_pairs.append(z_fight)
+                contact_violations.append(z_fight)
+        else:
+            if z_fight is not None:
+                z_fighting_pairs.append(z_fight)
+                contact_violations.append(z_fight)
+            if result.collision:
+                if is_authored:
+                    auth_reason = _authored_bone_exemption_reason(
+                        left.bone_name,
+                        right.bone_name,
+                        bone_parent_map,
+                        effective_box_parent_map,
+                    )
+                    if auth_reason is not None and z_fight is None:
+                        authored_exempt_pairs.append({**entry, "exemption_reason": auth_reason})
+                        physical_graph[left.name].add(right.name)
+                        physical_graph[right.name].add(left.name)
+                    else:
+                        collisions.append(entry)
+                elif is_sculpted:
+                    sc_reason = _sculpted_exemption_reason(
+                        left.bone_name,
+                        right.bone_name,
+                        is_blend_pair,
+                        bone_parent_map,
+                        effective_box_parent_map,
+                        left_instance=getattr(left, "instance_name", None),
+                        right_instance=getattr(right, "instance_name", None),
+                        left_prism_group=getattr(left, "prism_group", None),
+                        right_prism_group=getattr(right, "prism_group", None),
+                    )
+                    if sc_reason is not None and z_fight is None:
+                        sc_viol, sc_tel = _evaluate_sculpted_overlap(
+                            left,
+                            right,
+                            pair,
+                            sc_reason,
+                            result.raw_min_overlap,
+                            collision_tolerance=collision_tolerance,
+                            max_contact_gap=max_contact_gap,
+                            max_inset_depth=max_inset_depth,
+                            enforce_gap=False,
                         )
-                        if auth_reason is not None and z_fight is None:
-                            authored_exempt_pairs.append({**entry, "exemption_reason": auth_reason})
+                        if sc_viol is None:
+                            sculpted_overlap_pairs.append({**entry, **sc_tel})
                             physical_graph[left.name].add(right.name)
                             physical_graph[right.name].add(left.name)
                         else:
-                            collisions.append(entry)
-                    elif is_sculpted:
-                        sc_reason = _sculpted_exemption_reason(
-                            left.bone_name,
-                            right.bone_name,
-                            is_blend_pair,
-                            bone_parent_map,
-                            effective_box_parent_map,
-                            left_instance=getattr(left, "instance_name", None),
-                            right_instance=getattr(right, "instance_name", None),
-                        )
-                        if sc_reason is not None and z_fight is None:
-                            sc_viol, sc_tel = _evaluate_sculpted_overlap(
-                                left,
-                                right,
-                                pair,
-                                sc_reason,
-                                result.raw_min_overlap,
-                                collision_tolerance=collision_tolerance,
-                                max_contact_gap=max_contact_gap,
-                                max_inset_depth=max_inset_depth,
-                                enforce_gap=False,
-                            )
-                            if sc_viol is None:
-                                sculpted_overlap_pairs.append({**entry, **sc_tel})
-                                physical_graph[left.name].add(right.name)
-                                physical_graph[right.name].add(left.name)
-                            else:
-                                contact_violations.append(sc_viol)
-                                collisions.append({**entry, "violation": sc_viol["violation"]})
-                        else:
-                            collisions.append(entry)
+                            contact_violations.append(sc_viol)
+                            collisions.append({**entry, "violation": sc_viol["violation"]})
                     else:
                         collisions.append(entry)
-                elif result.raw_min_overlap >= -max_contact_gap and z_fight is None:
-                    physical_graph[left.name].add(right.name)
-                    physical_graph[right.name].add(left.name)
+                else:
+                    collisions.append(entry)
+            elif result.raw_min_overlap >= -max_contact_gap and z_fight is None:
+                physical_graph[left.name].add(right.name)
+                physical_graph[right.name].add(left.name)
 
     physical_components = _graph_components(physical_graph) if n_boxes > 0 else []
     authorized_detached = _count_authorized_detached_bones(scene)
@@ -755,6 +809,63 @@ def audit_scene(
             }
         )
 
+    contract_violations: list[dict[str, Any]] = []
+    lay_contracts = getattr(scene, "layout_contracts", None)
+    if lay_contracts is not None:
+        b_spec = getattr(lay_contracts, "budget", None)
+        if b_spec is not None:
+            if b_spec.max_boxes is not None and n_boxes > b_spec.max_boxes:
+                v_mb = {
+                    "violation": "layout_budget_max_boxes",
+                    "measured": n_boxes,
+                    "limit": int(b_spec.max_boxes),
+                }
+                contract_violations.append(v_mb)
+                contact_violations.append(v_mb)
+            if b_spec.max_bones is not None and len(scene.bones) > b_spec.max_bones:
+                v_bn = {
+                    "violation": "layout_budget_max_bones",
+                    "measured": len(scene.bones),
+                    "limit": int(b_spec.max_bones),
+                }
+                contract_violations.append(v_bn)
+                contact_violations.append(v_bn)
+        e_spec = getattr(lay_contracts, "envelope", None)
+        if e_spec is not None and n_valid > 0:
+            g_min = np.min(world_mins[valid_arr], axis=0)
+            g_max = np.max(world_maxs[valid_arr], axis=0)
+            span_xyz = g_max - g_min
+            if e_spec.max_span is not None:
+                for ax_i, ax_lbl in enumerate(("x", "y", "z")):
+                    if float(span_xyz[ax_i]) > float(e_spec.max_span[ax_i]) + 1e-5:
+                        v_sp = {
+                            "violation": f"layout_envelope_max_span_{ax_lbl}",
+                            "measured": round(float(span_xyz[ax_i]), 4),
+                            "limit": float(e_spec.max_span[ax_i]),
+                        }
+                        contract_violations.append(v_sp)
+                        contact_violations.append(v_sp)
+            if e_spec.min_ground_y is not None and float(g_min[1]) < float(e_spec.min_ground_y) - 1e-5:
+                v_gy = {
+                    "violation": "layout_envelope_min_ground_y",
+                    "measured": round(float(g_min[1]), 4),
+                    "limit": float(e_spec.min_ground_y),
+                }
+                contract_violations.append(v_gy)
+                contact_violations.append(v_gy)
+            if getattr(e_spec, "grounded", False):
+                target_gy = float(getattr(e_spec, "ground_y", 0.0))
+                gtol = float(getattr(e_spec, "ground_tol", 0.15))
+                if abs(float(g_min[1]) - target_gy) > gtol:
+                    v_gr = {
+                        "violation": "layout_envelope_grounded",
+                        "measured_min_y": round(float(g_min[1]), 4),
+                        "target_ground_y": target_gy,
+                        "ground_tol": gtol,
+                    }
+                    contract_violations.append(v_gr)
+                    contact_violations.append(v_gr)
+
     if enforce_physical_contact:
         contact_ok = (not z_fighting_pairs) if is_authored else (not contact_violations and not z_fighting_pairs)
     else:
@@ -762,6 +873,7 @@ def audit_scene(
     passed = (
         not collisions
         and contact_ok
+        and not contract_violations
         and not errors
     )
     return {
@@ -793,6 +905,7 @@ def audit_scene(
         "authored_exempt_pairs": authored_exempt_pairs,
         "z_fighting_pairs": z_fighting_pairs,
         "contact_violations": contact_violations,
+        "contract_violations": contract_violations,
         "connected_components": _components(scene),
         "physical_connected_components": physical_components,
         "errors": errors,

@@ -1,0 +1,186 @@
+// Shrieking Legiana (Rime-Crowned Gale Wyvern) — Stage 1 Primary Blockout
+// Distinct Hoarfrost Reach variant posture: steeper aggressive blizzard crouch on Y=0,
+// forward-coiled freezer-sac chest & S-neck, elongated swept head-vanes, high-flared
+// split frost kite-wing spars, and enlarged 5-ribbed cryo swallowtail fan.
+@meta {
+  dsl_version: "4.1",
+  archetype: entity,
+  target_profile: bbmodel_5,
+  texel_density: 32,
+  size_step: 0.5,
+  audit_profile: sculpted
+}
+@layout {
+  budget max_boxes = 480
+  budget max_bones = 115
+  envelope grounded = true
+  envelope ground_y = 0.0
+  envelope ground_tol = 0.25
+}
+@palette {
+  midnight_indigo: ramp(base_lch=[0.28, 0.098, 262], steps=6, hue_shift=[22, -14])
+  obsidian_rime: ramp(base_lch=[0.20, 0.068, 256], steps=6, hue_shift=[18, -12])
+  glacial_silver: ramp(base_lch=[0.66, 0.078, 232], steps=6, hue_shift=[20, -14])
+  frost_wing_pale: ramp(base_lch=[0.84, 0.052, 224], steps=6, hue_shift=[18, -12])
+  rime_white: ramp(base_lch=[0.92, 0.028, 218], steps=6, hue_shift=[16, -10])
+  rime_cyan: ramp(base_lch=[0.88, 0.148, 206], steps=6, hue_shift=[12, -16], emissive=true)
+}
+@rig {
+  root bone root {
+    pivot_local: [0, 0, 0]
+    locator ground_origin { offset: [0, 0, 0] }
+
+    bone pelvis joint(parent=ground_origin, at=[0, 18.06, -6.5]) {
+      rest_euler: [-6, 0, 0]
+      box pelvis_core { size: [9.0, 8.0, 10.0], material: midnight_indigo }
+
+      bone waist attach(parent_box=pelvis_core, anchor=[0, 0.14, 1], align=[0, 0, -1], seat=0.28) {
+        rest_euler: [-6, 0, 0]
+        box waist_core { size: [8.0, 7.5, 9.5], material: midnight_indigo }
+
+        bone chest attach(parent_box=waist_core, anchor=[0, 0.16, 1], align=[0, 0, -1], seat=0.28) {
+          rest_euler: [10, 0, 0]
+          box chest_core { size: [14.5, 13.0, 14.0], material: midnight_indigo }
+
+          bone neck_1 attach(parent_box=chest_core, anchor=[0, 0.34, 1], align=[0, 0, -1], seat=0.26) {
+            rest_euler: [-34, 0, 0]
+            box neck_base { size: [8.5, 8.0, 8.5], material: midnight_indigo }
+
+            bone neck_2 attach(parent_box=neck_base, anchor=[0, 0.10, 1], align=[0, 0, -1], seat=0.26) {
+              rest_euler: [18, 0, 0]
+              box neck_mid { size: [7.0, 6.5, 8.0], material: glacial_silver }
+
+              bone neck_3 attach(parent_box=neck_mid, anchor=[0, 0.08, 1], align=[0, 0, -1], seat=0.26) {
+                rest_euler: [22, 0, 0]
+                box neck_upper { size: [5.5, 5.5, 7.5], material: midnight_indigo }
+
+                bone head attach(parent_box=neck_upper, anchor=[0, 0.05, 1], align=[0, 0, -1], seat=0.24) {
+                  rest_euler: [12, 0, 0]
+                  box skull_core { size: [8.0, 5.0, 6.5], material: midnight_indigo }
+                  box snout_core place(base_box=skull_core, anchor=[0, -0.10, 1], align=[0, 0, -0.78]) {
+                    size: [3.5, 3.0, 6.0], material: glacial_silver, rotate: [8, 0, 0]
+                  }
+                  box rostrum_tip place(base_box=snout_core, anchor=[0, -0.05, 0.96], align=[0, 0, -0.82]) {
+                    size: [2.0, 2.0, 5.0], material: obsidian_rime, rotate: [12, 0, 0]
+                  }
+
+                  // Elongated swept rime-crowned head-vanes!
+                  bone head_vane_l attach(parent_box=skull_core, anchor=[0.78, 0.92, -0.24], align=[0, -0.25, 0.94]) mirror_x(head_vane_r) {
+                    rest_euler: [22, -28, 18]
+                    box vane_rib_1 { size: [2.0, 2.0, 13.5], material: rime_white, blend_with: [neck_upper] }
+                  }
+
+                  bone jaw attach(parent_box=skull_core, anchor=[0, -0.76, 0.25], align=[0, 0, -1], seat=0.16) {
+                    rest_euler: [16, 0, 0]
+                    box jaw_core { size: [3.0, 2.0, 7.5], material: frost_wing_pale, blend_with: [snout_core] }
+                  }
+                }
+              }
+            }
+          }
+
+          // High-Flared Frost Kite-Wing Spars
+          bone wing_arm_l attach(parent_box=chest_core, anchor=[0.96, 0.54, 0.24], align=[-0.92, 0, 0], seat=0.06) mirror_x(wing_arm_r) {
+            rest_euler: [10, 16, 30]
+            box wing_humerus { size: [13.5, 4.0, 4.5], material: midnight_indigo }
+
+            bone wing_patagium_l attach(parent_box=wing_humerus, anchor=[0.64, -0.06, -0.92], align=[-0.94, 0, 0.25], seat=0.04) {
+              rest_euler: [0, 64, -14]
+              box patagium_spar { size: [16.0, 2.0, 2.5], material: frost_wing_pale, blend_with: [chest_core, waist_core, wing_radius] }
+            }
+
+            bone wing_forearm_l attach(parent_box=wing_humerus, anchor=[1, 0.05, 0], align=[-1, 0, 0], seat=0.14) {
+              rest_euler: [-8, -32, 12]
+              box wing_radius { size: [17.5, 3.5, 4.0], material: glacial_silver }
+
+              bone wing_digit_1_l attach(parent_box=wing_radius, anchor=[0.98, 0.12, 0.42], align=[-0.96, 0, 0], seat=0.04) {
+                rest_euler: [0, -12, 6]
+                box digit_1_spar { size: [25.0, 2.5, 2.5], material: obsidian_rime }
+              }
+              bone wing_digit_2_l attach(parent_box=wing_radius, anchor=[0.96, 0.05, 0.08], align=[-0.96, 0, 0], seat=0.04) {
+                rest_euler: [0, 18, -2]
+                box digit_2_spar { size: [26.0, 2.0, 2.5], material: frost_wing_pale, blend_with: [digit_1_spar] }
+              }
+              bone wing_digit_3_l attach(parent_box=wing_radius, anchor=[0.99, 0.0, -0.45], align=[-0.98, 0, 0.30], seat=0.02) {
+                rest_euler: [0, 46, -8]
+                box digit_3_spar { size: [23.0, 2.0, 2.5], material: frost_wing_pale, blend_with: [digit_1_spar, digit_2_spar] }
+              }
+              bone wing_digit_4_l attach(parent_box=wing_radius, anchor=[0.96, -0.05, -0.82], align=[-0.96, 0, 0.45], seat=0.02) {
+                rest_euler: [0, 72, -14]
+                box digit_4_spar { size: [19.5, 2.0, 2.5], material: frost_wing_pale, blend_with: [digit_1_spar, digit_2_spar, digit_3_spar, patagium_spar] }
+              }
+            }
+          }
+        }
+      }
+
+      // Steeper Coiled Biped Ice-Grip Hindlimbs on Y = 0.0
+      bone hind_thigh_l attach(parent_box=pelvis_core, anchor=[0.94, -0.10, 0.05], align=[-0.55, 0.85, 0], seat=0.14) mirror_x(hind_thigh_r) {
+        rest_euler: [-28, -8, 20]
+        box thigh_mass { size: [5.5, 10.5, 6.5], material: midnight_indigo, blend_with: [waist_core, tail_1_seg] }
+
+        bone hind_shin_l attach(parent_box=thigh_mass, anchor=[0.05, -1, -0.10], align=[0, 0.88, 0], seat=0.16) {
+          rest_euler: [64, 0, -12]
+          box shin_mass { size: [3.5, 11.5, 4.0], material: obsidian_rime }
+
+          bone hind_foot_l attach(parent_box=shin_mass, anchor=[0, -1, 0.15], align=[0, 0.88, -0.42], seat=0.14) {
+            rest_euler: [-30, 0, -8]
+            box foot_pad { size: [5.5, 2.5, 6.5], material: obsidian_rime }
+          }
+        }
+      }
+
+      // Whip Tail & Enlarged Jagged 5-Ribbed Cryo Swallowtail Fan!
+      bone tail_1 attach(parent_box=pelvis_core, anchor=[0, 0.15, -1], align=[0, 0, 1], seat=0.24) {
+        rest_euler: [-6, 0, 0]
+        box tail_1_seg { size: [7.0, 6.0, 8.5], material: midnight_indigo }
+
+        bone tail_2 attach(parent_box=tail_1_seg, anchor=[0, 0.06, -1], align=[0, 0, 1], seat=0.24) {
+          rest_euler: [12, 0, 0]
+          box tail_2_seg { size: [5.5, 5.0, 8.5], material: midnight_indigo }
+
+          bone tail_3 attach(parent_box=tail_2_seg, anchor=[0, 0.06, -1], align=[0, 0, 1], seat=0.24) {
+            rest_euler: [16, 0, 0]
+            box tail_3_seg { size: [4.5, 4.0, 8.5], material: glacial_silver }
+
+            bone tail_4 attach(parent_box=tail_3_seg, anchor=[0, 0.06, -1], align=[0, 0, 1], seat=0.24) {
+              rest_euler: [16, 0, 0]
+              box tail_4_seg { size: [3.5, 3.5, 8.5], material: obsidian_rime }
+
+              bone tail_5 attach(parent_box=tail_4_seg, anchor=[0, 0.06, -1], align=[0, 0, 1], seat=0.22) {
+                rest_euler: [12, 0, 0]
+                box tail_5_seg { size: [3.5, 3.0, 8.0], material: obsidian_rime }
+
+                bone tail_fan_c attach(parent_box=tail_5_seg, anchor=[0, 0.12, -0.94], align=[0, 0, 0.90], seat=0.10) {
+                  rest_euler: [8, 0, 0]
+                  box tail_fan_rib_c { size: [2.5, 1.5, 15.0], material: rime_white }
+                }
+                bone tail_fan_inner_l attach(parent_box=tail_5_seg, anchor=[0.78, 0.10, -0.88], align=[-0.45, 0, 0.92], seat=0.08) mirror_x(tail_fan_inner_r) {
+                  rest_euler: [8, -22, -6]
+                  box tail_fan_rib_in { size: [2.0, 1.5, 14.0], material: glacial_silver, blend_with: [tail_fan_rib_c, tail_fan_inner_r__tail_fan_rib_in] }
+                }
+                bone tail_fan_outer_l attach(parent_box=tail_5_seg, anchor=[0.96, 0.06, -0.68], align=[-0.72, 0, 0.92], seat=0.06) mirror_x(tail_fan_outer_r) {
+                  rest_euler: [6, -46, -14]
+                  box tail_fan_rib_out { size: [2.0, 1.5, 12.5], material: obsidian_rime, blend_with: [tail_fan_rib_c, tail_fan_rib_in, tail_fan_inner_r__tail_fan_rib_in, tail_fan_outer_r__tail_fan_rib_out] }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+@materials {
+  midnight_indigo: process(family=keratin_scales, coat=scale_rows, roughness=0.48)
+  obsidian_rime: process(family=keratin_scales, coat=banded_limb, roughness=0.38)
+  glacial_silver: process(family=keratin_scales, coat=scale_rows, roughness=0.34)
+  frost_wing_pale: process(family=patterned_skin, coat=striped, roughness=0.52)
+  rime_white: process(family=weathered_stone, coat=plain, roughness=0.30)
+  rime_cyan: process(family=thin_film_iridescence, coat=plain, roughness=0.16, emissive=0.95)
+}
+@style {
+  target_encoding: vanilla,
+  shade: banded(steps=5, direction=down, cluster=diagonal),
+  glow_bleed: 2
+}

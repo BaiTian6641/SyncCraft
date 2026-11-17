@@ -1,0 +1,925 @@
+// Azure Rathalos (Cerulean Sky Sovereign) — Stage 3 Sculpted Blockbench Masterwork (V9)
+// Hand-authored progressive Block-DSL v4.1 modeled from official Capcom Monster Hunter Azure Rathalos
+// physiology & @zyhfisme sculpted Blockbench conventions:
+// - Distinct high-altitude aerial-pursuit silhouette (NOT a palette swap of standard Rathalos!):
+//   sleeker horizontal peregrine-falcon posture, narrower drag-reducing waist, deep wind-splitter chest keel,
+//   elongated 3-segment temporal crown prongs + swept cheek lances, high-aspect gull-arched 4-finger wings
+//   lined with ivory saw-spikes & 12 emerald-chartreuse scroll membrane bays, & diamond-spiked tail mace!
+@meta {
+  dsl_version: "4.1",
+  archetype: entity,
+  target_profile: bbmodel_5,
+  texel_density: 32,
+  size_step: 0.5,
+  audit_profile: sculpted
+}
+@layout {
+  budget max_boxes = 400
+  budget max_bones = 96
+  envelope grounded = true
+  envelope ground_y = 0.0
+  envelope ground_tol = 0.25
+}
+@palette {
+  azure_cobalt: ramp(base_lch=[0.52, 0.148, 246], steps=6, hue_shift=[20, -16])
+  cerulean_rim: ramp(base_lch=[0.61, 0.142, 234], steps=6, hue_shift=[18, -14])
+  deep_sapphire: ramp(base_lch=[0.38, 0.132, 254], steps=6, hue_shift=[18, -14])
+  midnight_slate: ramp(base_lch=[0.27, 0.046, 258], steps=6, hue_shift=[18, -12])
+  emerald_sail: ramp(base_lch=[0.73, 0.118, 146], steps=6, hue_shift=[22, -16])
+  jade_patagium: ramp(base_lch=[0.64, 0.112, 158], steps=6, hue_shift=[20, -14])
+  ivory_bone: ramp(base_lch=[0.88, 0.040, 88], steps=6, hue_shift=[18, -10])
+  mist_cream: ramp(base_lch=[0.83, 0.042, 86], steps=6, hue_shift=[18, -10])
+  mouth_crimson: ramp(base_lch=[0.42, 0.145, 24], steps=6, hue_shift=[16, -12])
+  napalm_amber: ramp(base_lch=[0.85, 0.170, 56], steps=6, hue_shift=[14, -16], emissive=true)
+}
+@rig {
+  root bone root {
+    pivot_local: [0, 0, 0]
+    locator ground_origin { offset: [0, 0, 0] }
+
+    bone pelvis joint(parent=ground_origin, at=[0, 21.60, -9.0]) {
+      rest_euler: [-6, 0, 0]
+      box pelvis_core { size: [11.5, 11.0, 13.5], material: midnight_slate }
+      box pelvis_belly place(base_box=pelvis_core, anchor=[0, -0.96, 0], align=[0, 0.42, 0]) {
+        size: [8.5, 2.0, 11.5], material: mist_cream
+      }
+      box sacrum_shingle place(base_box=pelvis_core, anchor=[0, 0.96, 0], align=[0, -0.52, 0]) {
+        size: [9.0, 2.5, 12.0], material: azure_cobalt, rotate: [6, 0, 0], blend_with: [lumbar_shingle, tail_1_plate, tail_1_seg]
+      }
+      box sacrum_fin_1 place(base_box=sacrum_shingle, anchor=[0, 0.96, 0.34], align=[0, -0.80, 0]) {
+        size: [1.5, 2.5, 3.5], material: ivory_bone, rotate: [20, 0, 0], blend_with: [pelvis_core, lumbar_shingle]
+      }
+      box sacrum_fin_2 place(base_box=sacrum_shingle, anchor=[0, 0.96, -0.36], align=[0, -0.80, 0]) {
+        size: [1.5, 2.5, 3.5], material: ivory_bone, rotate: [22, 0, 0], blend_with: [pelvis_core, tail_1_plate]
+      }
+      box haunch_muscle_l place(base_box=pelvis_core, anchor=[0.98, 0.22, 0.04], align=[-0.50, 0, 0]) {
+        size: [3.5, 7.0, 9.5], material: azure_cobalt, rotate: [4, 6, -12], blend_with: [thigh_mass, waist_core]
+      }
+      box haunch_muscle_r place(base_box=pelvis_core, anchor=[-0.98, 0.22, 0.04], align=[0.50, 0, 0]) {
+        size: [3.5, 7.0, 9.5], material: azure_cobalt, rotate: [4, -6, 12], blend_with: [hind_thigh_r__thigh_mass, waist_core]
+      }
+      box hip_strake_l place(base_box=haunch_muscle_l, anchor=[0.92, 0.42, -0.38], align=[-0.68, 0, 0.35]) {
+        size: [2.0, 2.0, 5.5], material: cerulean_rim, rotate: [14, 24, -14], blend_with: [pelvis_core, thigh_mass, thigh_carapace]
+      }
+      box hip_strake_r place(base_box=haunch_muscle_r, anchor=[-0.92, 0.42, -0.38], align=[0.68, 0, 0.35]) {
+        size: [2.0, 2.0, 5.5], material: cerulean_rim, rotate: [14, -24, 14], blend_with: [pelvis_core, hind_thigh_r__thigh_mass, hind_thigh_r__thigh_carapace]
+      }
+
+      bone waist attach(parent_box=pelvis_core, anchor=[0, 0.10, 1], align=[0, 0, -1], seat=0.26) {
+        rest_euler: [-4, 0, 0]
+        box waist_core { size: [11.5, 11.5, 12.5], material: midnight_slate }
+        box waist_belly place(base_box=waist_core, anchor=[0, -0.96, 0], align=[0, 0.42, 0]) {
+          size: [8.5, 2.0, 11.0], material: mist_cream, blend_with: [pelvis_belly, thigh_mass, hind_thigh_r__thigh_mass]
+        }
+        box lumbar_shingle place(base_box=waist_core, anchor=[0, 0.96, 0], align=[0, -0.52, 0]) {
+          size: [9.5, 2.5, 11.5], material: azure_cobalt, rotate: [-4, 0, 0], blend_with: [pelvis_core, chest_core, withers_carapace_c]
+        }
+        box lumbar_fin_1 place(base_box=lumbar_shingle, anchor=[0, 0.96, 0.32], align=[0, -0.80, 0]) {
+          size: [2.0, 3.0, 4.0], material: deep_sapphire, rotate: [20, 0, 0], blend_with: [waist_core, chest_core, withers_carapace_c]
+        }
+        box lumbar_fin_2 place(base_box=lumbar_shingle, anchor=[0, 0.96, -0.34], align=[0, -0.80, 0]) {
+          size: [1.5, 2.5, 3.5], material: ivory_bone, rotate: [22, 0, 0], blend_with: [waist_core, pelvis_core, sacrum_shingle]
+        }
+        box flank_strake_l_1 place(base_box=waist_core, anchor=[0.98, 0.32, 0.24], align=[-0.68, 0, 0]) {
+          size: [2.0, 4.0, 5.0], material: deep_sapphire, rotate: [8, 12, -14], blend_with: [chest_core, lumbar_shingle]
+        }
+        box flank_strake_r_1 place(base_box=waist_core, anchor=[-0.98, 0.32, 0.24], align=[0.68, 0, 0]) {
+          size: [2.0, 4.0, 5.0], material: deep_sapphire, rotate: [8, -12, 14], blend_with: [chest_core, lumbar_shingle]
+        }
+        box flank_strake_l_2 place(base_box=waist_core, anchor=[0.98, -0.14, -0.22], align=[-0.68, 0, 0]) {
+          size: [2.0, 4.0, 5.0], material: cerulean_rim, rotate: [6, 14, -10], blend_with: [flank_strake_l_1, pelvis_core, haunch_muscle_l, thigh_mass]
+        }
+        box flank_strake_r_2 place(base_box=waist_core, anchor=[-0.98, -0.14, -0.22], align=[0.68, 0, 0]) {
+          size: [2.0, 4.0, 5.0], material: cerulean_rim, rotate: [6, -14, 10], blend_with: [flank_strake_r_1, pelvis_core, haunch_muscle_r, hind_thigh_r__thigh_mass]
+        }
+        plane lumbar_aero_fin place(base_box=lumbar_shingle, anchor=[0.18, 0.94, 0], align=[0, -0.88, 0]) {
+          size: [4.0, 9.5], normal: x, material: cerulean_rim, rotate: [6, 0, -6],
+          edge: spikes(width=2, min_len=2, max_len=6, side=top, seed=13), layer: 1,
+          blend_with: [lumbar_fin_1, lumbar_fin_2, withers_carapace_c, sacrum_shingle]
+        }
+
+        bone chest attach(parent_box=waist_core, anchor=[0, 0.16, 1], align=[0, 0, -1], seat=0.26) {
+          rest_euler: [12, 0, 0]
+          box chest_core { size: [18.0, 16.5, 16.5], material: midnight_slate }
+          box withers_carapace_c place(base_box=chest_core, anchor=[0, 0.98, 0.08], align=[0, -0.55, 0]) {
+            size: [12.0, 3.5, 15.0], material: azure_cobalt, rotate: [-8, 0, 0], blend_with: [neck_base, neck_shingle_c, waist_core, lumbar_fin_1]
+          }
+          box withers_plate_l place(base_box=chest_core, anchor=[0.68, 0.90, 0.10], align=[-0.15, -0.58, 0]) {
+            size: [5.0, 3.0, 13.0], material: deep_sapphire, rotate: [-8, -10, -20], blend_with: [withers_carapace_c, neck_base, wing_humerus]
+          }
+          box withers_plate_r place(base_box=chest_core, anchor=[-0.68, 0.90, 0.10], align=[0.15, -0.58, 0]) {
+            size: [5.0, 3.0, 13.0], material: deep_sapphire, rotate: [-8, 10, 20], blend_with: [withers_carapace_c, neck_base, wing_arm_r__wing_humerus]
+          }
+          box withers_spine_1 place(base_box=withers_carapace_c, anchor=[0, 0.96, 0.36], align=[0, -0.80, 0]) {
+            size: [2.0, 3.5, 4.5], material: ivory_bone, rotate: [18, 0, 0], blend_with: [chest_core, neck_base, neck_shingle_c]
+          }
+          box withers_spine_2 place(base_box=withers_carapace_c, anchor=[0, 0.96, -0.04], align=[0, -0.80, 0]) {
+            size: [2.0, 3.5, 4.5], material: deep_sapphire, rotate: [20, 0, 0], blend_with: [chest_core, withers_spine_1]
+          }
+          box withers_spine_3 place(base_box=withers_carapace_c, anchor=[0, 0.96, -0.44], align=[0, -0.80, 0]) {
+            size: [2.0, 3.0, 4.0], material: ivory_bone, rotate: [22, 0, 0], blend_with: [chest_core, withers_spine_2, waist_core, lumbar_shingle]
+          }
+          plane withers_aero_fin place(base_box=withers_carapace_c, anchor=[-0.18, 0.94, 0], align=[0, -0.88, 0]) {
+            size: [4.5, 12.5], normal: x, material: emerald_sail, rotate: [4, 0, 6],
+            edge: spikes(width=2, min_len=3, max_len=7, side=top, seed=19), layer: 2,
+            blend_with: [withers_spine_1, withers_spine_2, withers_spine_3, neck_shingle_c, lumbar_shingle, lumbar_aero_fin]
+          }
+          box pectoral_mount_l place(base_box=chest_core, anchor=[0.98, 0.10, 0.24], align=[-0.68, 0, 0]) {
+            size: [2.5, 6.5, 10.0], material: deep_sapphire, rotate: [-6, 8, -12], blend_with: [withers_carapace_c, withers_plate_l, wing_humerus]
+          }
+          box pectoral_mount_r place(base_box=chest_core, anchor=[-0.98, 0.10, 0.24], align=[0.68, 0, 0]) {
+            size: [2.5, 6.5, 10.0], material: deep_sapphire, rotate: [-6, -8, 12], blend_with: [withers_carapace_c, withers_plate_r, wing_arm_r__wing_humerus]
+          }
+          box rib_strake_l place(base_box=chest_core, anchor=[0.99, -0.28, -0.20], align=[-0.72, 0, 0]) {
+            size: [2.0, 4.5, 6.0], material: cerulean_rim, rotate: [6, 12, -10], blend_with: [pectoral_mount_l, waist_core, flank_strake_l_1]
+          }
+          box rib_strake_r place(base_box=chest_core, anchor=[-0.99, -0.28, -0.20], align=[0.72, 0, 0]) {
+            size: [2.0, 4.5, 6.0], material: cerulean_rim, rotate: [6, -12, 10], blend_with: [pectoral_mount_r, waist_core, flank_strake_r_1]
+          }
+
+          // Streamlined Aerodynamic Chest Keel & Wind-Splitter Sternum Blade!
+          box chest_scute_rear place(base_box=chest_core, anchor=[0, -0.96, -0.34], align=[0, 0.42, 0]) {
+            size: [11.0, 2.5, 8.5], material: mist_cream, rotate: [4, 0, 0], blend_with: [waist_belly, waist_core]
+          }
+          box chest_scute_front place(base_box=chest_core, anchor=[0, -0.96, 0.48], align=[0, 0.48, -0.20]) {
+            size: [9.5, 2.5, 9.0], material: mist_cream, rotate: [-18, 0, 0], blend_with: [chest_scute_rear, neck_throat_scute]
+          }
+          box aero_sternum_keel place(base_box=chest_scute_front, anchor=[0, -0.96, 0.24], align=[0, 0.72, 0]) {
+            size: [4.5, 3.0, 9.0], material: deep_sapphire, rotate: [-14, 0, 0], blend_with: [chest_core, chest_scute_rear, neck_throat_scute]
+          }
+          box keel_splitter_blade place(base_box=aero_sternum_keel, anchor=[0, -0.96, 0.25], align=[0, 0.84, 0]) {
+            size: [2.0, 1.5, 7.5], material: ivory_bone, rotate: [-10, 0, 0], blend_with: [chest_scute_front, neck_throat_scute]
+          }
+          box collar_strake_l place(base_box=chest_core, anchor=[0.60, -0.38, 0.96], align=[-0.35, 0, -0.68]) {
+            size: [4.0, 4.5, 2.5], material: azure_cobalt, rotate: [-10, -18, -8], blend_with: [chest_scute_front, aero_sternum_keel, pectoral_mount_l, neck_base, neck_throat_scute]
+          }
+          box collar_strake_r place(base_box=chest_core, anchor=[-0.60, -0.38, 0.96], align=[0.35, 0, -0.68]) {
+            size: [4.0, 4.5, 2.5], material: azure_cobalt, rotate: [-10, 18, 8], blend_with: [chest_scute_front, aero_sternum_keel, pectoral_mount_r, neck_base, neck_throat_scute]
+          }
+
+          bone neck_1 attach(parent_box=chest_core, anchor=[0, 0.28, 1], align=[0, 0, -1], seat=0.24) {
+            rest_euler: [-22, 0, 0]
+            box neck_base { size: [10.0, 9.5, 10.5], material: midnight_slate }
+            box neck_shingle_c place(base_box=neck_base, anchor=[0, 0.96, 0.05], align=[0, -0.55, 0]) {
+              size: [8.0, 2.5, 9.5], material: azure_cobalt, rotate: [6, 0, 0], blend_with: [chest_core, withers_carapace_c, withers_spine_1, neck_upper, nape_shingle_c]
+            }
+            box neck_spine_1 place(base_box=neck_shingle_c, anchor=[0, 0.96, -0.06], align=[0, -0.86, 0]) {
+              size: [1.5, 3.0, 3.5], material: ivory_bone, rotate: [18, 0, 0], blend_with: [neck_base, chest_core, withers_carapace_c, withers_spine_1]
+            }
+            box neck_spine_2 place(base_box=neck_shingle_c, anchor=[0, 0.96, 0.34], align=[0, -0.82, 0]) {
+              size: [1.5, 2.5, 3.5], material: deep_sapphire, rotate: [18, 0, 0], blend_with: [neck_base, neck_upper, nape_shingle_c]
+            }
+            box neck_side_plate_l place(base_box=neck_base, anchor=[0.98, 0.24, 0.08], align=[-0.68, 0, 0]) {
+              size: [2.0, 4.0, 8.0], material: deep_sapphire, rotate: [6, -10, -14], blend_with: [neck_shingle_c, chest_core, withers_plate_l, neck_upper]
+            }
+            box neck_side_plate_r place(base_box=neck_base, anchor=[-0.98, 0.24, 0.08], align=[0.68, 0, 0]) {
+              size: [2.0, 4.0, 8.0], material: deep_sapphire, rotate: [6, 10, 14], blend_with: [neck_shingle_c, chest_core, withers_plate_r, neck_upper]
+            }
+            box neck_throat_scute place(base_box=neck_base, anchor=[0, -0.96, 0.10], align=[0, 0.48, 0]) {
+              size: [7.5, 2.0, 9.0], material: mist_cream, rotate: [-6, 0, 0], blend_with: [chest_core, chest_scute_front, aero_sternum_keel]
+            }
+
+            bone neck_2 attach(parent_box=neck_base, anchor=[0, 0.10, 1], align=[0, 0, -1], seat=0.24) {
+              rest_euler: [14, 0, 0]
+              box neck_upper { size: [8.0, 8.0, 9.0], material: midnight_slate }
+              box nape_shingle_c place(base_box=neck_upper, anchor=[0, 0.96, 0.0], align=[0, -0.55, 0]) {
+                size: [6.5, 2.5, 8.5], material: azure_cobalt, rotate: [8, 0, 0], blend_with: [neck_base, neck_spine_2, skull_core, skull_crown]
+              }
+              box nape_spine_1 place(base_box=nape_shingle_c, anchor=[0, 0.96, -0.24], align=[0, -0.82, 0]) {
+                size: [1.5, 2.5, 3.0], material: ivory_bone, rotate: [18, 0, 0], blend_with: [neck_upper, neck_shingle_c, horn_mid, crown_horn_r__horn_mid]
+              }
+              box nape_spine_2 place(base_box=nape_shingle_c, anchor=[0, 0.96, 0.28], align=[0, -0.82, 0]) {
+                size: [1.5, 2.0, 2.5], material: deep_sapphire, rotate: [16, 0, 0], blend_with: [neck_upper, skull_core, skull_crown, horn_root, crown_horn_r__horn_root]
+              }
+              box nape_side_plate_l place(base_box=neck_upper, anchor=[0.98, 0.22, 0.05], align=[-0.68, 0, 0]) {
+                size: [1.5, 3.5, 7.0], material: cerulean_rim, rotate: [6, -10, -14], blend_with: [nape_shingle_c, neck_base, neck_side_plate_l, skull_core, cheek_jowl_l, lance_frill_plate]
+              }
+              box nape_side_plate_r place(base_box=neck_upper, anchor=[-0.98, 0.22, 0.05], align=[0.68, 0, 0]) {
+                size: [1.5, 3.5, 7.0], material: cerulean_rim, rotate: [6, 10, 14], blend_with: [nape_shingle_c, neck_base, neck_side_plate_r, skull_core, cheek_jowl_r, temporal_lance_r__lance_frill_plate]
+              }
+              box nape_throat_scute place(base_box=neck_upper, anchor=[0, -0.96, 0.05], align=[0, 0.52, 0]) {
+                size: [5.5, 1.5, 7.5], material: mist_cream, rotate: [-4, 0, 0], blend_with: [neck_base, neck_throat_scute, jaw_core]
+              }
+              plane nape_aero_fin place(base_box=nape_shingle_c, anchor=[0.15, 0.94, 0], align=[0, -0.88, 0]) {
+                size: [3.5, 7.0], normal: x, material: cerulean_rim, rotate: [8, 0, -5],
+                edge: spikes(width=2, min_len=2, max_len=5, side=top, seed=23), layer: 1,
+                blend_with: [nape_spine_1, nape_spine_2, neck_shingle_c, skull_crown, horn_root, crown_horn_r__horn_root, horn_mid, crown_horn_r__horn_mid]
+              }
+
+              bone head attach(parent_box=neck_upper, anchor=[0, 0.06, 1], align=[0, 0, -1], seat=0.22) {
+                rest_euler: [20, 0, 0]
+                box skull_core { size: [9.0, 6.0, 8.0], material: azure_cobalt }
+                box skull_crown place(base_box=skull_core, anchor=[0, 0.98, -0.10], align=[0, -0.60, 0]) {
+                  size: [6.0, 2.0, 7.0], material: deep_sapphire, rotate: [6, 0, 0], blend_with: [neck_upper, nape_shingle_c, nape_spine_2, brow_blade_l, brow_blade_r]
+                }
+                box crown_aero_keel place(base_box=skull_crown, anchor=[0, 0.96, 0.14], align=[0, -0.80, 0]) {
+                  size: [1.5, 1.5, 5.5], material: ivory_bone, rotate: [8, 0, 0], blend_with: [skull_core, nasal_aero_ridge, nape_spine_2]
+                }
+                box brow_blade_l place(base_box=skull_core, anchor=[0.84, 0.80, 0.52], align=[-0.15, -0.48, -0.25]) {
+                  size: [2.5, 2.0, 6.0], material: deep_sapphire, rotate: [10, -14, -14], blend_with: [skull_crown]
+                }
+                box brow_blade_r place(base_box=skull_core, anchor=[-0.84, 0.80, 0.52], align=[0.15, -0.48, -0.25]) {
+                  size: [2.5, 2.0, 6.0], material: deep_sapphire, rotate: [10, 14, 14], blend_with: [skull_crown]
+                }
+                box brow_lance_l place(base_box=brow_blade_l, anchor=[0.68, 0.92, -0.38], align=[-0.55, -0.80, 0.40]) {
+                  size: [1.5, 1.5, 3.5], material: ivory_bone, rotate: [16, -20, -14], blend_with: [skull_core, skull_crown, horn_root]
+                }
+                box brow_lance_r place(base_box=brow_blade_r, anchor=[-0.68, 0.92, -0.38], align=[0.55, -0.80, 0.40]) {
+                  size: [1.5, 1.5, 3.5], material: ivory_bone, rotate: [16, 20, 14], blend_with: [skull_core, skull_crown, crown_horn_r__horn_root]
+                }
+                box cheek_jowl_l place(base_box=skull_core, anchor=[0.98, -0.18, 0.05], align=[-0.50, 0, 0]) {
+                  size: [2.5, 4.0, 6.0], material: azure_cobalt, rotate: [6, -14, 8], blend_with: [brow_blade_l, neck_upper]
+                }
+                box cheek_jowl_r place(base_box=skull_core, anchor=[-0.98, -0.18, 0.05], align=[0.50, 0, 0]) {
+                  size: [2.5, 4.0, 6.0], material: azure_cobalt, rotate: [6, 14, -8], blend_with: [brow_blade_r, neck_upper]
+                }
+                box cheek_spur_l place(base_box=cheek_jowl_l, anchor=[0.92, -0.32, -0.58], align=[-0.72, 0, 0.55]) {
+                  size: [1.5, 2.0, 4.0], material: ivory_bone, rotate: [8, -26, 12], blend_with: [skull_core, neck_upper, nape_side_plate_l, lance_frill_plate]
+                }
+                box cheek_spur_r place(base_box=cheek_jowl_r, anchor=[-0.92, -0.32, -0.58], align=[0.72, 0, 0.55]) {
+                  size: [1.5, 2.0, 4.0], material: ivory_bone, rotate: [8, 26, -12], blend_with: [skull_core, neck_upper, nape_side_plate_r, temporal_lance_r__lance_frill_plate]
+                }
+                box eye_slit_l place(base_box=skull_core, anchor=[0.98, 0.45, 0.56], align=[-0.72, 0, 0]) {
+                  size: [1.0, 1.5, 2.5], material: napalm_amber, rotate: [8, -10, 0], blend_with: [brow_blade_l, cheek_jowl_l]
+                }
+                box eye_slit_r place(base_box=skull_core, anchor=[-0.98, 0.45, 0.56], align=[0.72, 0, 0]) {
+                  size: [1.0, 1.5, 2.5], material: napalm_amber, rotate: [8, 10, 0], blend_with: [brow_blade_r, cheek_jowl_r]
+                }
+
+                // Sleek Aerodynamic Peregrine-Wedge Snout (snout_taper_ratio < 0.40!)
+                box snout_core place(base_box=skull_core, anchor=[0, -0.08, 1], align=[0, 0, -0.82]) {
+                  size: [4.0, 3.5, 7.0], material: azure_cobalt, rotate: [8, 0, 0], blend_with: [brow_blade_l, brow_blade_r, eye_slit_l, eye_slit_r]
+                }
+                box nasal_aero_ridge place(base_box=snout_core, anchor=[0, 0.90, 0.05], align=[0, -0.52, 0]) {
+                  size: [2.5, 2.0, 7.0], material: deep_sapphire, rotate: [6, 0, 0], blend_with: [skull_core, skull_crown, crown_aero_keel, brow_blade_l, brow_blade_r]
+                }
+                box nasal_fin_1 place(base_box=nasal_aero_ridge, anchor=[0, 0.96, 0.36], align=[0, -0.82, 0]) {
+                  size: [1.0, 1.5, 2.5], material: ivory_bone, rotate: [-14, 0, 0], blend_with: [snout_core, falcon_beak]
+                }
+                box nasal_fin_2 place(base_box=nasal_aero_ridge, anchor=[0, 0.96, -0.26], align=[0, -0.82, 0]) {
+                  size: [1.0, 1.0, 2.5], material: midnight_slate, rotate: [-10, 0, 0], blend_with: [snout_core, skull_crown, crown_aero_keel]
+                }
+                box maxilla_wedge_l place(base_box=snout_core, anchor=[0.96, -0.10, -0.06], align=[-0.50, 0, 0]) {
+                  size: [2.0, 3.0, 6.0], material: azure_cobalt, rotate: [8, -18, 8], blend_with: [skull_core, cheek_jowl_l, nasal_aero_ridge, eye_slit_l]
+                }
+                box maxilla_wedge_r place(base_box=snout_core, anchor=[-0.96, -0.10, -0.06], align=[0.50, 0, 0]) {
+                  size: [2.0, 3.0, 6.0], material: azure_cobalt, rotate: [8, 18, -8], blend_with: [skull_core, cheek_jowl_r, nasal_aero_ridge, eye_slit_r]
+                }
+                box falcon_beak place(base_box=snout_core, anchor=[0, -0.14, 0.96], align=[0, 0.15, -0.80]) {
+                  size: [2.0, 2.5, 2.5], material: midnight_slate, rotate: [30, 0, 0], blend_with: [nasal_aero_ridge, maxilla_wedge_l, maxilla_wedge_r, jaw_core]
+                }
+                box beak_razor_hook place(base_box=falcon_beak, anchor=[0, -0.72, 0.72], align=[0, 0.65, -0.65]) {
+                  size: [1.5, 2.0, 1.5], material: ivory_bone, rotate: [44, 0, 0], blend_with: [snout_core, jaw_core, lower_fang_l, lower_fang_r]
+                }
+                box upper_fang_l place(base_box=snout_core, anchor=[0.80, -0.96, 0.56], align=[0, 0.88, 0]) {
+                  size: [1.0, 2.0, 1.5], material: ivory_bone, rotate: [-8, 0, -8], blend_with: [maxilla_wedge_l, jaw_core, palate_upper]
+                }
+                box upper_fang_r place(base_box=snout_core, anchor=[-0.80, -0.96, 0.56], align=[0, 0.88, 0]) {
+                  size: [1.0, 2.0, 1.5], material: ivory_bone, rotate: [-8, 0, 8], blend_with: [maxilla_wedge_r, jaw_core, palate_upper]
+                }
+                box palate_upper place(base_box=snout_core, anchor=[0, -0.96, 0.22], align=[0, 0.78, 0]) {
+                  size: [2.5, 1.0, 4.5], material: mouth_crimson, blend_with: [skull_core, jaw_core, tongue_bed]
+                }
+
+                // Swept Supersonic Temporal/Cheek Lances
+                bone temporal_lance_l attach(parent_box=skull_core, anchor=[0.96, 0.18, -0.38], align=[0, 0, 0.88], seat=0.05) mirror_x(temporal_lance_r) {
+                  rest_euler: [10, -32, 8]
+                  box lance_frill_plate { size: [1.5, 3.5, 7.5], material: azure_cobalt, blend_with: [cheek_jowl_l, brow_blade_l, neck_upper, horn_root, crown_horn_r__horn_root] }
+                  box lance_prong_top place(base_box=lance_frill_plate, anchor=[0, 0.65, -0.94], align=[0, 0, 0.82]) {
+                    size: [1.0, 1.5, 4.5], material: ivory_bone, rotate: [8, 0, 0]
+                  }
+                  box lance_prong_mid place(base_box=lance_frill_plate, anchor=[0, 0.08, -0.96], align=[0, 0, 0.82]) {
+                    size: [1.0, 1.0, 4.0], material: cerulean_rim, rotate: [2, 0, 0], blend_with: [lance_prong_top, lance_prong_low]
+                  }
+                  box lance_prong_low place(base_box=lance_frill_plate, anchor=[0, -0.45, -0.94], align=[0, 0, 0.82]) {
+                    size: [1.0, 1.5, 4.0], material: midnight_slate, rotate: [-6, 0, 0]
+                  }
+                  plane lance_fin_plane place(base_box=lance_frill_plate, anchor=[0.20, 0, -0.88], align=[0, 0, 0.85]) {
+                    size: [4.5, 5.0], normal: x, material: emerald_sail,
+                    edge: spikes(width=2, min_len=2, max_len=6, side=right, seed=43), layer: 1,
+                    blend_with: [lance_prong_top, lance_prong_mid, lance_prong_low]
+                  }
+                }
+
+                // Elongated 3-Segment Swept Temporal Crown Prongs
+                bone crown_horn_l attach(parent_box=skull_core, anchor=[0.66, 0.88, -0.64], align=[0, 0, 0.94], seat=0.05) mirror_x(crown_horn_r) {
+                  rest_euler: [18, -20, 12]
+                  box horn_root { size: [2.5, 2.5, 6.0], material: deep_sapphire, blend_with: [skull_crown, brow_blade_l, neck_upper, nape_shingle_c, nape_side_plate_l, nape_side_plate_r] }
+                  box horn_keel_1 place(base_box=horn_root, anchor=[0, 0.96, -0.42], align=[0, -0.84, 0]) {
+                    size: [1.0, 1.0, 3.0], material: cerulean_rim, blend_with: [horn_mid, skull_crown, nape_shingle_c]
+                  }
+                  bone crown_horn_mid_l attach(parent_box=horn_root, anchor=[0, 0.05, -1], align=[0, 0, 1], seat=0.20) {
+                    rest_euler: [10, -4, 0]
+                    box horn_mid { size: [2.0, 2.0, 5.5], material: midnight_slate, blend_with: [nape_shingle_c, neck_upper] }
+                    box horn_keel_2 place(base_box=horn_mid, anchor=[0, 0.96, 0], align=[0, -0.80, 0]) {
+                      size: [1.0, 1.0, 4.5], material: cerulean_rim, blend_with: [horn_keel_1, horn_tip]
+                    }
+                    bone crown_horn_tip_l attach(parent_box=horn_mid, anchor=[0, 0.05, -1], align=[0, 0, 1], seat=0.20) {
+                      rest_euler: [10, 4, 0]
+                      box horn_tip { size: [1.5, 1.5, 5.0], material: ivory_bone }
+                      box horn_needle place(base_box=horn_tip, anchor=[0, 0.02, -0.96], align=[0, 0, 0.84]) {
+                        size: [1.0, 1.0, 3.0], material: ivory_bone, rotate: [6, 0, 0]
+                      }
+                    }
+                  }
+                }
+
+                bone jaw attach(parent_box=skull_core, anchor=[0, -0.76, 0.22], align=[0, 0, -1], seat=0.14) {
+                  rest_euler: [24, 0, 0]
+                  box jaw_core { size: [3.5, 2.0, 8.5], material: mist_cream, blend_with: [snout_core, cheek_jowl_l, cheek_jowl_r, palate_upper] }
+                  box tongue_bed place(base_box=jaw_core, anchor=[0, 0.98, 0.32], align=[0, -0.84, 0]) {
+                    size: [2.0, 1.0, 4.5], material: napalm_amber, blend_with: [palate_upper, snout_core, skull_core]
+                  }
+                  box lower_fang_l place(base_box=jaw_core, anchor=[0.84, 0.98, 0.96], align=[0, -0.92, -0.65]) {
+                    size: [1.0, 1.5, 1.0], material: ivory_bone, rotate: [6, 0, 8], blend_with: [snout_core, maxilla_wedge_l, upper_fang_l, falcon_beak]
+                  }
+                  box lower_fang_r place(base_box=jaw_core, anchor=[-0.84, 0.98, 0.96], align=[0, -0.92, -0.65]) {
+                    size: [1.0, 1.5, 1.0], material: ivory_bone, rotate: [6, 0, -8], blend_with: [snout_core, maxilla_wedge_r, upper_fang_r, falcon_beak]
+                  }
+                  box mandible_strake_l place(base_box=jaw_core, anchor=[0.96, -0.18, 0.16], align=[-0.72, 0, 0]) {
+                    size: [1.0, 2.0, 4.5], material: azure_cobalt, rotate: [4, -10, 8], blend_with: [cheek_jowl_l, skull_core, neck_upper]
+                  }
+                  box mandible_strake_r place(base_box=jaw_core, anchor=[-0.96, -0.18, 0.16], align=[0.72, 0, 0]) {
+                    size: [1.0, 2.0, 4.5], material: azure_cobalt, rotate: [4, 10, -8], blend_with: [cheek_jowl_r, skull_core, neck_upper]
+                  }
+                  box chin_blade place(base_box=jaw_core, anchor=[0, -0.92, 0.74], align=[0, 0.82, -0.25]) {
+                    size: [1.5, 3.5, 2.5], material: deep_sapphire, rotate: [-18, 0, 0]
+                  }
+                  box chin_razor_tip place(base_box=chin_blade, anchor=[0, -0.96, 0.15], align=[0, 0.84, 0]) {
+                    size: [1.0, 2.0, 1.5], material: ivory_bone, rotate: [-12, 0, 0]
+                  }
+                }
+              }
+            }
+          }
+
+          // High-Aspect Gull-Arched Cerulean & Emerald-Chartreuse Scroll Wings!
+          bone wing_arm_l attach(parent_box=chest_core, anchor=[0.96, 0.60, 0.34], align=[-1, 0, 0], seat=0.10) mirror_x(wing_arm_r) {
+            rest_euler: [-6, 22, 24]
+            box wing_humerus { size: [15.0, 4.5, 4.5], material: azure_cobalt, blend_with: [pectoral_mount_l, withers_plate_l] }
+            box wing_pauldron place(base_box=wing_humerus, anchor=[-0.55, 0.88, 0.15], align=[0.35, -0.62, 0]) {
+              size: [6.0, 2.5, 5.5], material: deep_sapphire, rotate: [-8, 12, -14], blend_with: [chest_core, withers_carapace_c, withers_plate_l]
+            }
+            box humerus_leading_tooth place(base_box=wing_humerus, anchor=[0.42, 0.25, 0.96], align=[0, 0, -0.80]) {
+              size: [1.5, 1.5, 3.5], material: ivory_bone, rotate: [-8, -28, 0]
+            }
+            box elbow_armor place(base_box=wing_humerus, anchor=[0.96, 0.35, -0.25], align=[-0.55, -0.45, 0.35]) {
+              size: [3.5, 3.0, 4.5], material: deep_sapphire, rotate: [8, 14, -10], blend_with: [wing_ulna]
+            }
+            box elbow_spur place(base_box=elbow_armor, anchor=[0.75, 0.25, -0.94], align=[-0.55, 0, 0.82]) {
+              size: [1.5, 1.5, 4.0], material: ivory_bone, rotate: [10, 24, 0], blend_with: [wing_humerus, wing_ulna]
+            }
+            plane wing_arm_patagium place(base_box=wing_humerus, anchor=[0.06, 0.10, -0.60], align=[0, 0, 1.0]) {
+              size: [16.5, 17.5], normal: y, material: jade_patagium,
+              edge: scallop(bays=2, depth=5, side=top, seed=13), layer: 1,
+              blend_with: [chest_core, pectoral_mount_l, pectoral_mount_r, rib_strake_l, rib_strake_r, waist_core, lumbar_shingle, flank_strake_l_1, flank_strake_r_1, flank_strake_l_2, flank_strake_r_2, pelvis_core, sacrum_shingle, haunch_muscle_l, haunch_muscle_r, wing_ulna, wing_forearm_patagium, finger_3_spar, finger_4_spar, wing_bay_3, wing_bay_4]
+            }
+
+            bone wing_forearm_l attach(parent_box=wing_humerus, anchor=[1, 0.05, 0], align=[-1, 0, 0], seat=0.10) {
+              rest_euler: [4, -46, 12]
+              box wing_ulna { size: [19.5, 4.0, 4.0], material: azure_cobalt }
+              box ulna_ridge place(base_box=wing_ulna, anchor=[0.0, 0.94, 0.12], align=[0, -0.75, 0]) {
+                size: [16.0, 1.5, 2.5], material: cerulean_rim, rotate: [4, 0, 0], blend_with: [wing_humerus, elbow_armor, wrist_hub_armor]
+              }
+              box wrist_hub_armor place(base_box=wing_ulna, anchor=[0.94, 0.35, 0.15], align=[-0.55, -0.55, 0]) {
+                size: [3.5, 2.5, 4.5], material: deep_sapphire, rotate: [6, -12, -8], blend_with: [thumb_scythe_base, finger_1_spar, finger_2_spar, finger_3_spar, finger_4_spar]
+              }
+              // 5 Swept Sapphire & Ivory Leading-Edge Saw-Teeth (azure_rathalos_reference.png top-left!)
+              box leading_saw_1 place(base_box=wing_ulna, anchor=[-0.62, 0.35, 0.96], align=[0, 0, -0.80]) {
+                size: [1.5, 1.5, 3.0], material: ivory_bone, rotate: [-10, -26, 0], blend_with: [wing_humerus]
+              }
+              box leading_saw_2 place(base_box=wing_ulna, anchor=[-0.28, 0.35, 0.96], align=[0, 0, -0.80]) {
+                size: [1.5, 1.5, 3.5], material: ivory_bone, rotate: [-10, -24, 0]
+              }
+              box leading_saw_3 place(base_box=wing_ulna, anchor=[0.06, 0.35, 0.96], align=[0, 0, -0.80]) {
+                size: [1.5, 1.5, 4.0], material: ivory_bone, rotate: [-10, -22, 0]
+              }
+              box leading_saw_4 place(base_box=wing_ulna, anchor=[0.40, 0.35, 0.96], align=[0, 0, -0.80]) {
+                size: [1.5, 2.0, 4.5], material: ivory_bone, rotate: [-10, -20, 0]
+              }
+              box leading_saw_5 place(base_box=wing_ulna, anchor=[0.72, 0.35, 0.96], align=[0, 0, -0.80]) {
+                size: [1.5, 2.0, 4.5], material: ivory_bone, rotate: [-10, -18, 0], blend_with: [wrist_hub_armor, thumb_scythe_base]
+              }
+              plane wing_forearm_patagium place(base_box=wing_ulna, anchor=[0.05, -0.10, -0.60], align=[0, 0, 1.0]) {
+                size: [18.5, 18.5], normal: y, material: jade_patagium,
+                edge: scallop(bays=2, depth=5, side=top, seed=19), layer: 2,
+                blend_with: [wing_humerus, elbow_armor, elbow_spur, wing_arm_patagium, finger_1_spar, finger_2_spar, finger_3_spar, finger_4_spar, wing_bay_1, wing_bay_2, wing_bay_3, wing_bay_4, chest_core, waist_core]
+              }
+
+              bone wing_thumb_claw_l attach(parent_box=wing_ulna, anchor=[0.94, 0.12, 0.92], align=[0, 0, -1], seat=0.08) {
+                rest_euler: [12, -16, 0]
+                box thumb_scythe_base { size: [2.0, 2.0, 4.5], material: azure_cobalt, blend_with: [wrist_hub_armor] }
+                box thumb_scythe_tip place(base_box=thumb_scythe_base, anchor=[0, -0.10, 0.96], align=[0, 0, -0.82]) {
+                  size: [1.5, 1.5, 4.5], material: ivory_bone, rotate: [22, 0, 0]
+                }
+              }
+
+              bone wing_finger_1_l attach(parent_box=wing_ulna, anchor=[0.98, 0.08, 0.65], align=[-1, 0, 0], seat=0.05) {
+                rest_euler: [-4, 22, -10]
+                box finger_1_spar { size: [25.0, 2.5, 2.5], material: azure_cobalt, blend_with: [wrist_hub_armor, thumb_scythe_base, finger_2_spar, finger_3_spar, finger_4_spar] }
+                box finger_1_claw place(base_box=finger_1_spar, anchor=[0.98, -0.05, 0.05], align=[-0.86, 0, 0]) {
+                  size: [6.0, 1.5, 2.0], material: ivory_bone, rotate: [0, 12, -8], blend_with: [wing_bay_1]
+                }
+                plane wing_bay_1 place(base_box=finger_1_spar, anchor=[0.12, 0.10, -0.55], align=[0, 0, 1.0]) {
+                  size: [26.0, 12.0], normal: y, material: emerald_sail,
+                  edge: scallop(bays=1, depth=6, side=right, seed=23), layer: 1,
+                  blend_with: [wing_ulna, wing_forearm_patagium, finger_1_claw, finger_2_spar, finger_2_claw, finger_3_spar, finger_3_claw, finger_4_spar, wing_bay_2, wing_bay_3, wing_bay_4]
+                }
+              }
+
+              bone wing_finger_2_l attach(parent_box=wing_ulna, anchor=[0.98, 0.02, 0.15], align=[-1, 0, 0], seat=0.05) {
+                rest_euler: [-6, 46, -14]
+                box finger_2_spar { size: [23.0, 2.5, 2.5], material: azure_cobalt, blend_with: [wrist_hub_armor, finger_1_spar, finger_3_spar, finger_4_spar] }
+                box finger_2_claw place(base_box=finger_2_spar, anchor=[0.98, -0.05, 0], align=[-0.86, 0, 0]) {
+                  size: [5.5, 1.5, 1.5], material: ivory_bone, rotate: [0, 12, -8], blend_with: [wing_bay_1, wing_bay_2]
+                }
+                plane wing_bay_2 place(base_box=finger_2_spar, anchor=[0.12, -0.10, -0.55], align=[0, 0, 1.0]) {
+                  size: [24.0, 12.0], normal: y, material: emerald_sail,
+                  edge: scallop(bays=1, depth=6, side=right, seed=29), layer: 2,
+                  blend_with: [wing_ulna, wing_forearm_patagium, finger_1_spar, finger_2_claw, finger_3_spar, finger_3_claw, finger_4_spar, wing_bay_1, wing_bay_3, wing_bay_4]
+                }
+              }
+
+              bone wing_finger_3_l attach(parent_box=wing_ulna, anchor=[0.96, -0.04, -0.38], align=[-1, 0, 0], seat=0.04) {
+                rest_euler: [-8, 74, -18]
+                box finger_3_spar { size: [20.5, 2.0, 2.0], material: deep_sapphire, blend_with: [wrist_hub_armor, finger_1_spar, finger_2_spar, finger_4_spar] }
+                box finger_3_claw place(base_box=finger_3_spar, anchor=[0.98, -0.05, 0], align=[-0.86, 0, 0]) {
+                  size: [4.5, 1.5, 1.5], material: ivory_bone, rotate: [0, 10, -8], blend_with: [wing_bay_2, wing_bay_3]
+                }
+                plane wing_bay_3 place(base_box=finger_3_spar, anchor=[0.10, 0.10, -0.55], align=[0, 0, 1.0]) {
+                  size: [21.0, 12.0], normal: y, material: emerald_sail,
+                  edge: scallop(bays=1, depth=6, side=right, seed=31), layer: 1,
+                  blend_with: [wing_ulna, wing_arm_patagium, wing_forearm_patagium, finger_1_spar, finger_2_spar, finger_3_claw, finger_4_spar, finger_4_claw, wing_bay_1, wing_bay_2, wing_bay_4]
+                }
+              }
+
+              bone wing_finger_4_l attach(parent_box=wing_ulna, anchor=[0.92, -0.08, -0.88], align=[-1, 0, 0], seat=0.04) {
+                rest_euler: [-8, 104, -18]
+                box finger_4_spar { size: [17.5, 2.0, 2.0], material: midnight_slate, blend_with: [wrist_hub_armor, finger_1_spar, finger_2_spar, finger_3_spar, wing_humerus, wing_forearm_patagium] }
+                box finger_4_claw place(base_box=finger_4_spar, anchor=[0.98, -0.05, 0], align=[-0.86, 0, 0]) {
+                  size: [4.0, 1.5, 1.5], material: ivory_bone, rotate: [0, 10, -8], blend_with: [wing_bay_3, wing_bay_4, wing_arm_patagium, wing_forearm_patagium]
+                }
+                plane wing_bay_4 place(base_box=finger_4_spar, anchor=[0.08, -0.10, -0.55], align=[0, 0, 1.0]) {
+                  size: [18.5, 15.0], normal: y, material: jade_patagium,
+                  edge: scallop(bays=2, depth=5, side=top, seed=37), layer: 2,
+                  blend_with: [wing_ulna, wing_humerus, elbow_armor, elbow_spur, wing_arm_patagium, wing_forearm_patagium, finger_1_spar, finger_2_spar, finger_3_spar, finger_4_claw, wing_bay_1, wing_bay_2, wing_bay_3, chest_core, pectoral_mount_l, pectoral_mount_r, rib_strake_l, rib_strake_r, waist_core, lumbar_shingle, flank_strake_l_1, flank_strake_r_1]
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // Lean Agile Raptorial Hindlegs Splayed Wide on Y = 0!
+      bone hind_thigh_l attach(parent_box=pelvis_core, anchor=[0.96, -0.08, 0.10], align=[-0.55, 0.85, 0], seat=0.12) mirror_x(hind_thigh_r) {
+        rest_euler: [-28, -8, 22]
+        box thigh_mass { size: [6.5, 13.0, 8.0], material: midnight_slate, blend_with: [waist_core, tail_1_seg] }
+        box thigh_carapace place(base_box=thigh_mass, anchor=[0.98, 0.28, 0.08], align=[-0.50, 0, 0]) {
+          size: [2.5, 6.5, 6.5], material: azure_cobalt, rotate: [6, -8, -10], blend_with: [pelvis_core, haunch_muscle_l]
+        }
+        box thigh_shingle_low place(base_box=thigh_mass, anchor=[0.98, -0.28, 0.05], align=[-0.55, 0, 0]) {
+          size: [2.0, 5.0, 5.5], material: deep_sapphire, rotate: [4, -6, -8], blend_with: [thigh_carapace, knee_guard, shin_mass]
+        }
+        box thigh_aero_spur place(base_box=thigh_carapace, anchor=[0.90, 0.15, -0.52], align=[-0.72, 0, 0.45]) {
+          size: [1.5, 2.0, 5.0], material: ivory_bone, rotate: [14, 24, -12], blend_with: [thigh_mass, hip_strake_l]
+        }
+        box knee_guard place(base_box=thigh_mass, anchor=[0.10, -0.82, 0.96], align=[0, 0, -0.72]) {
+          size: [3.5, 3.5, 2.5], material: azure_cobalt, rotate: [-14, 0, 0], blend_with: [shin_mass, waist_core, waist_belly]
+        }
+        box knee_spike place(base_box=knee_guard, anchor=[0, 0.15, 0.96], align=[0, 0, -0.82]) {
+          size: [1.5, 1.5, 2.5], material: ivory_bone, rotate: [-18, 0, 0]
+        }
+        plane thigh_scale_fringe place(base_box=thigh_mass, anchor=[0.42, -0.15, -0.98], align=[0, 0, 0.88]) {
+          size: [6.5, 4.0], normal: x, material: cerulean_rim, rotate: [-10, 12, 0],
+          edge: spikes(width=2, min_len=2, max_len=5, side=right, seed=47), layer: 1,
+          blend_with: [thigh_carapace, thigh_shingle_low, thigh_aero_spur, shin_mass]
+        }
+
+        bone hind_shin_l attach(parent_box=thigh_mass, anchor=[0.05, -1, -0.10], align=[0, 0.88, 0], seat=0.16) {
+          rest_euler: [58, 0, -14]
+          box shin_mass { size: [4.5, 12.5, 5.0], material: midnight_slate }
+          box calf_bulge place(base_box=shin_mass, anchor=[0, 0.35, -0.92], align=[0, 0, 0.55]) {
+            size: [3.5, 5.5, 2.5], material: deep_sapphire, rotate: [10, 0, 0], blend_with: [thigh_mass, hock_spur]
+          }
+          box shin_guard place(base_box=shin_mass, anchor=[0.15, 0.12, 0.96], align=[0, 0, -0.68]) {
+            size: [3.0, 8.0, 2.0], material: azure_cobalt, rotate: [4, 0, 0], blend_with: [thigh_mass, knee_guard, hind_foot_pad]
+          }
+          box ankle_shingle place(base_box=shin_guard, anchor=[0, -0.82, 0.88], align=[0, 0.45, -0.75]) {
+            size: [2.5, 2.5, 1.5], material: cerulean_rim, rotate: [12, 0, 0], blend_with: [shin_mass, hind_foot_pad, h_knuckle_plate]
+          }
+          box hock_spur place(base_box=shin_mass, anchor=[0, -0.12, -0.96], align=[0, 0, 0.82]) {
+            size: [2.0, 2.0, 4.0], material: ivory_bone, rotate: [20, 0, 0], blend_with: [calf_bulge]
+          }
+          plane shin_scale_fringe place(base_box=shin_mass, anchor=[0.30, -0.35, -0.98], align=[0, 0, 0.88]) {
+            size: [5.5, 3.5], normal: x, material: deep_sapphire, rotate: [8, 10, 0],
+            edge: spikes(width=2, min_len=2, max_len=5, side=right, seed=53), layer: 1,
+            blend_with: [calf_bulge, hock_spur, hind_foot_pad]
+          }
+
+          bone hind_foot_l attach(parent_box=shin_mass, anchor=[0, -1, 0.15], align=[0, 0.88, -0.45], seat=0.14) {
+            rest_euler: [-24, 0, -8]
+            box hind_foot_pad { size: [6.5, 3.0, 7.0], material: midnight_slate }
+            box h_knuckle_plate place(base_box=hind_foot_pad, anchor=[0, 0.96, 0.58], align=[0, -0.80, 0]) {
+              size: [5.0, 1.0, 3.5], material: azure_cobalt, rotate: [10, 0, 0], blend_with: [shin_mass, shin_guard, ankle_shingle, h_toe_1, h_toe_2, h_toe_3]
+            }
+            box h_toe_1 place(base_box=hind_foot_pad, anchor=[-0.64, -0.12, 0.92], align=[0, 0, -0.76]) {
+              size: [2.0, 2.0, 4.0], material: mist_cream, rotate: [3, 16, 0]
+            }
+            box h_talon_1 place(base_box=h_toe_1, anchor=[0, -0.05, 0.96], align=[0, 0, -0.82]) {
+              size: [1.5, 1.5, 3.5], material: ivory_bone, rotate: [10, 4, 0]
+            }
+            box h_toe_2 place(base_box=hind_foot_pad, anchor=[0.0, -0.12, 0.96], align=[0, 0, -0.78]) {
+              size: [2.0, 2.0, 4.5], material: mist_cream, rotate: [3, 0, 0], blend_with: [h_toe_1]
+            }
+            box h_talon_2 place(base_box=h_toe_2, anchor=[0, -0.05, 0.96], align=[0, 0, -0.82]) {
+              size: [1.5, 1.5, 4.0], material: ivory_bone, rotate: [10, 0, 0], blend_with: [h_talon_1]
+            }
+            box h_toe_3 place(base_box=hind_foot_pad, anchor=[0.64, -0.12, 0.92], align=[0, 0, -0.76]) {
+              size: [2.0, 2.0, 4.0], material: mist_cream, rotate: [3, -16, 0], blend_with: [h_toe_2]
+            }
+            box h_talon_3 place(base_box=h_toe_3, anchor=[0, -0.05, 0.96], align=[0, 0, -0.82]) {
+              size: [1.5, 1.5, 3.5], material: ivory_bone, rotate: [10, -4, 0], blend_with: [h_talon_2]
+            }
+            box h_inner_dewclaw place(base_box=hind_foot_pad, anchor=[-0.96, 0.10, -0.28], align=[0.75, 0, 0.35]) {
+              size: [1.5, 1.5, 3.0], material: ivory_bone, rotate: [8, -24, 0], blend_with: [shin_mass]
+            }
+            box h_hallux_claw place(base_box=hind_foot_pad, anchor=[0, -0.05, -0.94], align=[0, 0, 0.80]) {
+              size: [1.5, 1.5, 3.5], material: ivory_bone, rotate: [-8, 0, 0], blend_with: [shin_mass]
+            }
+          }
+        }
+      }
+
+      // Whip-Sleek Tail Terminating in Sharper Diamond-Spiked Cerulean Mace (`tail_1..tail_6`)!
+      bone tail_1 attach(parent_box=pelvis_core, anchor=[0, 0.16, -1], align=[0, 0, 1], seat=0.22) {
+        rest_euler: [4, 0, 0]
+        box tail_1_seg { size: [9.0, 8.5, 9.5], material: midnight_slate }
+        box tail_1_plate place(base_box=tail_1_seg, anchor=[0, 0.96, 0], align=[0, -0.52, 0]) {
+          size: [7.0, 2.5, 8.5], material: azure_cobalt, rotate: [6, 0, 0], blend_with: [pelvis_core, sacrum_shingle, sacrum_fin_2, tail_2_seg, tail_2_plate]
+        }
+        box tail_1_spine place(base_box=tail_1_plate, anchor=[0, 0.96, -0.05], align=[0, -0.80, 0]) {
+          size: [1.5, 2.5, 3.5], material: ivory_bone, rotate: [20, 0, 0], blend_with: [tail_1_seg, pelvis_core, sacrum_shingle]
+        }
+        box tail_1_keel_l place(base_box=tail_1_seg, anchor=[0.98, 0.12, -0.10], align=[-0.68, 0, 0.30]) {
+          size: [2.0, 2.5, 7.0], material: deep_sapphire, rotate: [8, 16, -10], blend_with: [pelvis_core, haunch_muscle_l, tail_2_seg]
+        }
+        box tail_1_keel_r place(base_box=tail_1_seg, anchor=[-0.98, 0.12, -0.10], align=[0.68, 0, 0.30]) {
+          size: [2.0, 2.5, 7.0], material: deep_sapphire, rotate: [8, -16, 10], blend_with: [pelvis_core, haunch_muscle_r, tail_2_seg]
+        }
+        box tail_1_belly place(base_box=tail_1_seg, anchor=[0, -0.96, 0], align=[0, 0.45, 0]) {
+          size: [6.0, 1.5, 8.5], material: mist_cream, blend_with: [pelvis_belly, pelvis_core]
+        }
+
+        bone tail_2 attach(parent_box=tail_1_seg, anchor=[0, 0.04, -1], align=[0, 0, 1], seat=0.22) {
+          rest_euler: [5, 0, 0]
+          box tail_2_seg { size: [7.5, 7.0, 9.5], material: midnight_slate }
+          box tail_2_plate place(base_box=tail_2_seg, anchor=[0, 0.96, 0], align=[0, -0.52, 0]) {
+            size: [6.0, 2.0, 8.5], material: azure_cobalt, rotate: [6, 0, 0], blend_with: [tail_1_seg, tail_3_seg, tail_3_plate]
+          }
+          box tail_2_spine place(base_box=tail_2_plate, anchor=[0, 0.96, -0.05], align=[0, -0.80, 0]) {
+            size: [1.5, 2.5, 3.5], material: ivory_bone, rotate: [20, 0, 0], blend_with: [tail_2_seg, tail_1_plate]
+          }
+          box tail_2_keel_l place(base_box=tail_2_seg, anchor=[0.98, 0.10, -0.10], align=[-0.68, 0, 0.30]) {
+            size: [2.0, 2.0, 7.0], material: deep_sapphire, rotate: [8, 16, -10], blend_with: [tail_1_seg, tail_1_keel_l, tail_3_seg]
+          }
+          box tail_2_keel_r place(base_box=tail_2_seg, anchor=[-0.98, 0.10, -0.10], align=[0.68, 0, 0.30]) {
+            size: [2.0, 2.0, 7.0], material: deep_sapphire, rotate: [8, -16, 10], blend_with: [tail_1_seg, tail_1_keel_r, tail_3_seg]
+          }
+          box tail_2_belly place(base_box=tail_2_seg, anchor=[0, -0.96, 0], align=[0, 0.45, 0]) {
+            size: [5.0, 1.5, 8.5], material: mist_cream, blend_with: [tail_1_belly, tail_1_seg]
+          }
+
+          bone tail_3 attach(parent_box=tail_2_seg, anchor=[0, 0.04, -1], align=[0, 0, 1], seat=0.22) {
+            rest_euler: [7, 0, 0]
+            box tail_3_seg { size: [6.0, 6.0, 9.5], material: midnight_slate }
+            box tail_3_plate place(base_box=tail_3_seg, anchor=[0, 0.96, 0], align=[0, -0.52, 0]) {
+              size: [5.0, 2.0, 8.5], material: azure_cobalt, rotate: [8, 0, 0], blend_with: [tail_2_seg, tail_4_seg, tail_4_plate]
+            }
+            box tail_3_spine place(base_box=tail_3_plate, anchor=[0, 0.96, -0.05], align=[0, -0.80, 0]) {
+              size: [1.5, 2.5, 3.0], material: ivory_bone, rotate: [20, 0, 0], blend_with: [tail_3_seg, tail_2_plate]
+            }
+            box tail_3_keel_l place(base_box=tail_3_seg, anchor=[0.98, 0.08, -0.10], align=[-0.72, 0, 0.30]) {
+              size: [1.5, 2.0, 7.0], material: cerulean_rim, rotate: [8, 16, -8], blend_with: [tail_2_seg, tail_2_keel_l, tail_4_seg]
+            }
+            box tail_3_keel_r place(base_box=tail_3_seg, anchor=[-0.98, 0.08, -0.10], align=[0.72, 0, 0.30]) {
+              size: [1.5, 2.0, 7.0], material: cerulean_rim, rotate: [8, -16, 8], blend_with: [tail_2_seg, tail_2_keel_r, tail_4_seg]
+            }
+            box tail_3_belly place(base_box=tail_3_seg, anchor=[0, -0.96, 0], align=[0, 0.48, 0]) {
+              size: [4.0, 1.5, 8.5], material: mist_cream, blend_with: [tail_2_belly, tail_2_seg]
+            }
+
+            bone tail_4 attach(parent_box=tail_3_seg, anchor=[0, 0.04, -1], align=[0, 0, 1], seat=0.22) {
+              rest_euler: [9, 0, 0]
+              box tail_4_seg { size: [5.0, 5.0, 9.0], material: midnight_slate }
+              box tail_4_plate place(base_box=tail_4_seg, anchor=[0, 0.96, 0], align=[0, -0.55, 0]) {
+                size: [4.0, 2.0, 8.0], material: azure_cobalt, rotate: [8, 0, 0], blend_with: [tail_3_seg, diamond_mace_core, mace_dorsal_crest]
+              }
+              box tail_4_spine place(base_box=tail_4_plate, anchor=[0, 0.96, -0.05], align=[0, -0.80, 0]) {
+                size: [1.5, 2.0, 3.0], material: ivory_bone, rotate: [20, 0, 0], blend_with: [tail_4_seg, tail_3_plate]
+              }
+              box tail_4_belly place(base_box=tail_4_seg, anchor=[0, -0.96, 0], align=[0, 0.52, 0]) {
+                size: [3.5, 1.0, 8.0], material: mist_cream, blend_with: [tail_3_belly, tail_3_seg, diamond_mace_core]
+              }
+
+              bone tail_5 attach(parent_box=tail_4_seg, anchor=[0, 0.04, -1], align=[0, 0, 1], seat=0.20) {
+                rest_euler: [8, 0, 0]
+                box diamond_mace_core { size: [8.0, 5.0, 10.5], material: azure_cobalt }
+                box mace_dorsal_crest place(base_box=diamond_mace_core, anchor=[0, 0.96, 0], align=[0, -0.58, 0]) {
+                  size: [6.0, 2.0, 9.5], material: deep_sapphire, rotate: [8, 0, 0], blend_with: [tail_4_seg, tail_lance_tip]
+                }
+                box mace_top_blade_1 place(base_box=mace_dorsal_crest, anchor=[0, 0.96, 0.30], align=[0, -0.82, 0]) {
+                  size: [1.5, 2.5, 3.0], material: ivory_bone, rotate: [22, 0, 0], blend_with: [diamond_mace_core, tail_4_plate]
+                }
+                box mace_top_blade_2 place(base_box=mace_dorsal_crest, anchor=[0, 0.96, -0.34], align=[0, -0.82, 0]) {
+                  size: [1.5, 3.0, 3.0], material: ivory_bone, rotate: [24, 0, 0], blend_with: [diamond_mace_core, mace_top_blade_1, tail_lance_tip]
+                }
+                box diamond_wing_l place(base_box=diamond_mace_core, anchor=[0.96, 0.05, -0.05], align=[-0.52, 0, 0]) {
+                  size: [4.0, 3.5, 9.5], material: deep_sapphire, rotate: [6, 24, -8], blend_with: [tail_4_seg, tail_lance_tip]
+                }
+                box diamond_wing_r place(base_box=diamond_mace_core, anchor=[-0.96, 0.05, -0.05], align=[0.52, 0, 0]) {
+                  size: [4.0, 3.5, 9.5], material: deep_sapphire, rotate: [6, -24, 8], blend_with: [tail_4_seg, tail_lance_tip]
+                }
+                box diamond_blade_l_1 place(base_box=diamond_wing_l, anchor=[0.94, 0.14, 0.56], align=[-0.82, 0, 0.35]) {
+                  size: [5.0, 1.5, 2.5], material: ivory_bone, rotate: [6, 36, -8], blend_with: [diamond_mace_core, tail_4_seg]
+                }
+                box diamond_blade_r_1 place(base_box=diamond_wing_r, anchor=[-0.94, 0.14, 0.56], align=[0.82, 0, 0.35]) {
+                  size: [5.0, 1.5, 2.5], material: ivory_bone, rotate: [6, -36, 8], blend_with: [diamond_mace_core, tail_4_seg]
+                }
+                box diamond_blade_l_2 place(base_box=diamond_wing_l, anchor=[0.96, 0.08, -0.02], align=[-0.84, 0, 0.35]) {
+                  size: [6.0, 1.5, 2.5], material: ivory_bone, rotate: [6, 42, -8], blend_with: [diamond_mace_core, diamond_blade_l_1]
+                }
+                box diamond_blade_r_2 place(base_box=diamond_wing_r, anchor=[-0.96, 0.08, -0.02], align=[0.84, 0, 0.35]) {
+                  size: [6.0, 1.5, 2.5], material: ivory_bone, rotate: [6, -42, 8], blend_with: [diamond_mace_core, diamond_blade_r_1]
+                }
+                box diamond_blade_l_3 place(base_box=diamond_wing_l, anchor=[0.94, 0.04, -0.58], align=[-0.82, 0, 0.35]) {
+                  size: [5.0, 1.5, 2.5], material: ivory_bone, rotate: [6, 48, -8], blend_with: [diamond_mace_core, diamond_blade_l_2, tail_lance_tip]
+                }
+                box diamond_blade_r_3 place(base_box=diamond_wing_r, anchor=[-0.94, 0.04, -0.58], align=[0.82, 0, 0.35]) {
+                  size: [5.0, 1.5, 2.5], material: ivory_bone, rotate: [6, -48, 8], blend_with: [diamond_mace_core, diamond_blade_r_2, tail_lance_tip]
+                }
+                box mace_ventral_spur_l place(base_box=diamond_mace_core, anchor=[0.72, -0.88, -0.10], align=[-0.65, 0.65, 0]) {
+                  size: [2.5, 2.0, 6.0], material: midnight_slate, rotate: [-12, 24, 18], blend_with: [diamond_wing_l, tail_4_seg, tail_lance_tip]
+                }
+                box mace_ventral_spur_r place(base_box=diamond_mace_core, anchor=[-0.72, -0.88, -0.10], align=[0.65, 0.65, 0]) {
+                  size: [2.5, 2.0, 6.0], material: midnight_slate, rotate: [-12, -24, -18], blend_with: [diamond_wing_r, tail_4_seg, tail_lance_tip]
+                }
+                plane mace_aero_fin_l place(base_box=diamond_wing_l, anchor=[0.85, 0.72, 0], align=[-0.85, -0.5, 0]) {
+                  size: [3.5, 8.5], normal: x, material: emerald_sail, rotate: [8, 22, -28],
+                  edge: spikes(width=2, min_len=2, max_len=6, side=top, seed=67), layer: 1,
+                  blend_with: [diamond_mace_core, mace_dorsal_crest, diamond_blade_l_1, diamond_blade_l_2, diamond_blade_l_3]
+                }
+                plane mace_aero_fin_r place(base_box=diamond_wing_r, anchor=[-0.85, 0.72, 0], align=[0.85, -0.5, 0]) {
+                  size: [3.5, 8.5], normal: x, material: emerald_sail, rotate: [8, -22, 28],
+                  edge: spikes(width=2, min_len=2, max_len=6, side=top, seed=67), layer: 2,
+                  blend_with: [diamond_mace_core, mace_dorsal_crest, diamond_blade_r_1, diamond_blade_r_2, diamond_blade_r_3]
+                }
+
+                bone tail_6 attach(parent_box=diamond_mace_core, anchor=[0, 0.02, -1], align=[0, 0, 1], seat=0.20) {
+                  rest_euler: [6, 0, 0]
+                  box tail_lance_tip { size: [3.5, 3.0, 7.5], material: deep_sapphire }
+                  box lance_side_barb_l place(base_box=tail_lance_tip, anchor=[0.96, 0.05, 0.12], align=[-0.78, 0, 0]) {
+                    size: [2.5, 1.5, 5.0], material: ivory_bone, rotate: [6, 28, -8], blend_with: [diamond_mace_core, diamond_wing_l, diamond_blade_l_3]
+                  }
+                  box lance_side_barb_r place(base_box=tail_lance_tip, anchor=[-0.96, 0.05, 0.12], align=[0.78, 0, 0]) {
+                    size: [2.5, 1.5, 5.0], material: ivory_bone, rotate: [6, -28, 8], blend_with: [diamond_mace_core, diamond_wing_r, diamond_blade_r_3]
+                  }
+                  box lance_ivory_spear place(base_box=tail_lance_tip, anchor=[0, 0.05, -0.96], align=[0, 0, 0.82]) {
+                    size: [2.0, 2.0, 6.5], material: ivory_bone, rotate: [6, 0, 0]
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+@materials {
+  azure_cobalt: process(family=keratin_scales, coat=scale_rows, roughness=0.42)
+  cerulean_rim: process(family=keratin_scales, coat=striped, roughness=0.38)
+  deep_sapphire: process(family=keratin_scales, coat=scale_rows, roughness=0.48)
+  midnight_slate: process(family=keratin_scales, coat=banded_limb, roughness=0.60)
+  emerald_sail: process(family=patterned_skin, coat=mottled, roughness=0.56)
+  jade_patagium: process(family=patterned_skin, coat=mottled, roughness=0.60)
+  ivory_bone: process(family=polymer_dielectric, coat=striped, roughness=0.30)
+  mist_cream: process(family=patterned_skin, coat=plain, roughness=0.66)
+  mouth_crimson: process(family=patterned_skin, coat=plain, roughness=0.44, emissive=0.40)
+  napalm_amber: process(family=thin_film_iridescence, coat=plain, roughness=0.16, emissive=0.95)
+}
+@style {
+  target_encoding: vanilla,
+  shade: banded(steps=5, direction=down, cluster=diagonal),
+  glow_bleed: 2
+}
+@stamps {
+  stamp azure_eye_glint on skull_core.east { at: [0.74, 0.36], size: [1.5, 1.0], color: napalm_amber, emissive: 0.95, mirror: true }
+  stamp jaw_napalm_spark on jaw_core.east { at: [0.58, 0.25], size: [2.0, 1.0], color: napalm_amber, emissive: 0.85, mirror: true }
+  stamp sapphire_keel_crest on withers_carapace_c.up { at: [0.50, 0.50], size: [3.0, 6.5], color: midnight_slate, emissive: 0.0 }
+}
+@behavior {
+  spring temporal_lance_l { stiffness: 48, damping: 6 }
+  spring temporal_lance_r { stiffness: 48, damping: 6 }
+  spring tail_6 { stiffness: 40, damping: 5 }
+
+  // 1. High-Altitude Peregrine Pursuit Poise — alert falcon head scan, arched emerald wings & whip-mace sway
+  clip idle {
+    duration_s: 3.0, loop: true
+    key root.position { 0.0: [0, 0, 0], 0.75: [0, -0.5, 0], 1.50: [0, 0.5, 0], 2.25: [0, -0.5, 0], 3.0: [0, 0, 0], catmullrom }
+    key chest.rotation { 0.0: [0, 0, 0], 0.75: [2.5, 2.0, 0], 1.50: [-2.5, 0, 0], 2.25: [2.5, -2.0, 0], 3.0: [0, 0, 0], catmullrom }
+    key neck_1.rotation { 0.0: [0, 0, 0], 0.75: [-3, 8, 2], 1.50: [2, 0, 0], 2.25: [-3, -8, -2], 3.0: [0, 0, 0], catmullrom }
+    key head.rotation { 0.0: [0, 0, 0], 0.75: [4, 14, -5], 1.50: [-3, 0, 0], 2.25: [4, -14, 5], 3.0: [0, 0, 0], catmullrom }
+    key jaw.rotation { 0.0: [0, 0, 0], 1.50: [8, 0, 0], 3.0: [0, 0, 0], catmullrom }
+    key wing_arm_l.rotation { 0.0: [0, 0, 0], 1.50: [-2, -5, 7], 3.0: [0, 0, 0], catmullrom }
+    key wing_arm_r.rotation { 0.0: [0, 0, 0], 1.50: [-2, 5, -7], 3.0: [0, 0, 0], catmullrom }
+    track tail_1: wave(axis=y, amp_deg=8, freq_hz=0.3333, phase_deg=0)
+    track tail_2: wave(axis=y, amp_deg=11, freq_hz=0.3333, phase_deg=-35)
+    track tail_3: wave(axis=y, amp_deg=14, freq_hz=0.3333, phase_deg=-70)
+    track tail_4: wave(axis=y, amp_deg=17, freq_hz=0.3333, phase_deg=-105)
+    track tail_5: wave(axis=y, amp_deg=20, freq_hz=0.3333, phase_deg=-140)
+  }
+
+  // 2. Agile Wide-Splayed Raptor Stalk
+  clip walk {
+    duration_s: 1.5, loop: true
+    key root.position { 0.0: [0, 0, 0], 0.375: [0, 1.5, 0], 0.75: [0, 0, 0], 1.125: [0, 1.5, 0], 1.5: [0, 0, 0], catmullrom }
+    key pelvis.rotation { 0.0: [0, -8, 4], 0.375: [3, 0, 0], 0.75: [0, 8, -4], 1.125: [3, 0, 0], 1.5: [0, -8, 4], catmullrom }
+    key chest.rotation { 0.0: [2, 9, -5], 0.375: [-2, 0, 0], 0.75: [2, -9, 5], 1.125: [-2, 0, 0], 1.5: [2, 9, -5], catmullrom }
+    key neck_1.rotation { 0.0: [0, -7, 3], 0.75: [0, 7, -3], 1.5: [0, -7, 3], catmullrom }
+    key head.rotation { 0.0: [3, -6, 3], 0.75: [3, 6, -3], 1.5: [3, -6, 3], catmullrom }
+    key wing_arm_l.rotation { 0.0: [0, 6, -4], 0.75: [0, -6, 6], 1.5: [0, 6, -4], catmullrom }
+    key wing_arm_r.rotation { 0.0: [0, 6, -6], 0.75: [0, -6, 4], 1.5: [0, 6, -6], catmullrom }
+    key hind_thigh_l.rotation { 0.0: [-26, 0, 0], 0.375: [6, 0, 4], 0.75: [26, 0, 0], 1.125: [-10, 0, 4], 1.5: [-26, 0, 0], catmullrom }
+    key hind_shin_l.rotation { 0.0: [12, 0, 0], 0.375: [-8, 0, 0], 0.75: [-16, 0, 0], 1.125: [28, 0, 0], 1.5: [12, 0, 0], catmullrom }
+    key hind_foot_l.rotation { 0.0: [14, 0, 0], 0.375: [2, 0, 0], 0.75: [-8, 0, 0], 1.125: [-16, 0, 0], 1.5: [14, 0, 0], catmullrom }
+    key hind_thigh_r.rotation { 0.0: [26, 0, 0], 0.375: [-10, 0, 4], 0.75: [-26, 0, 0], 1.125: [6, 0, 4], 1.5: [26, 0, 0], catmullrom }
+    key hind_thigh_r__hind_shin_l.rotation { 0.0: [-16, 0, 0], 0.375: [28, 0, 0], 0.75: [12, 0, 0], 1.125: [-8, 0, 0], 1.5: [-16, 0, 0], catmullrom }
+    key hind_thigh_r__hind_foot_l.rotation { 0.0: [-8, 0, 0], 0.375: [-16, 0, 0], 0.75: [14, 0, 0], 1.125: [2, 0, 0], 1.5: [-8, 0, 0], catmullrom }
+    track tail_1: wave(axis=y, amp_deg=13, freq_hz=0.6667, phase_deg=0)
+    track tail_3: wave(axis=y, amp_deg=19, freq_hz=0.6667, phase_deg=-60)
+    track tail_5: wave(axis=y, amp_deg=24, freq_hz=0.6667, phase_deg=-120)
+  }
+
+  // 3. Supersonic Low-Slung Falcon Wing-Rush
+  clip run {
+    duration_s: 0.92, loop: true
+    key root.position { 0.0: [0, 0.8, 0], 0.23: [0, 4.2, 2.0], 0.46: [0, 0.4, 0], 0.69: [0, 4.2, 2.0], 0.92: [0, 0.8, 0], catmullrom }
+    key pelvis.rotation { 0.0: [10, -8, 4], 0.46: [10, 8, -4], 0.92: [10, -8, 4], catmullrom }
+    key chest.rotation { 0.0: [14, 10, -6], 0.46: [14, -10, 6], 0.92: [14, 10, -6], catmullrom }
+    key neck_1.rotation { 0.0: [16, -8, 0], 0.46: [16, 8, 0], 0.92: [16, -8, 0], catmullrom }
+    key head.rotation { 0.0: [-12, 6, 0], 0.46: [-12, -6, 0], 0.92: [-12, 6, 0], catmullrom }
+    key jaw.rotation { 0.0: [26, 0, 0], 0.46: [30, 0, 0], 0.92: [26, 0, 0], catmullrom }
+    key wing_arm_l.rotation { 0.0: [-6, -14, 14], 0.46: [-6, -6, 24], 0.92: [-6, -14, 14], catmullrom }
+    key wing_arm_r.rotation { 0.0: [-6, 14, -14], 0.46: [-6, 6, -24], 0.92: [-6, 14, -14], catmullrom }
+    key hind_thigh_l.rotation { 0.0: [-40, 0, 0], 0.23: [12, 0, 4], 0.46: [38, 0, 0], 0.69: [-14, 0, 4], 0.92: [-40, 0, 0], catmullrom }
+    key hind_shin_l.rotation { 0.0: [14, 0, 0], 0.46: [-22, 0, 0], 0.69: [34, 0, 0], 0.92: [14, 0, 0], catmullrom }
+    key hind_thigh_r.rotation { 0.0: [38, 0, 0], 0.23: [-14, 0, 4], 0.46: [-40, 0, 0], 0.69: [12, 0, 4], 0.92: [38, 0, 0], catmullrom }
+    key hind_thigh_r__hind_shin_l.rotation { 0.0: [-22, 0, 0], 0.23: [34, 0, 0], 0.46: [14, 0, 0], 0.92: [-22, 0, 0], catmullrom }
+    track tail_1: wave(axis=y, amp_deg=16, freq_hz=1.087, phase_deg=0)
+    track tail_3: wave(axis=y, amp_deg=22, freq_hz=1.087, phase_deg=-55)
+    track tail_5: wave(axis=y, amp_deg=28, freq_hz=1.087, phase_deg=-110)
+  }
+
+  // 4. Cerulean Sky Sovereign Roar — rears high & spreads full emerald-scroll wingspan!
+  clip roar {
+    duration_s: 2.4, loop: false
+    key root.position { 0.0: [0, 0, 0], 0.42: [0, -2.5, -2.0], 0.92: [0, 3.0, 1.2], 1.70: [0, 2.5, 1.0], 2.4: [0, 0, 0], catmullrom }
+    key pelvis.rotation { 0.0: [0, 0, 0], 0.42: [12, 0, 0], 0.92: [-18, 0, 0], 1.70: [-16, 0, 0], 2.4: [0, 0, 0], catmullrom }
+    key waist.rotation { 0.0: [0, 0, 0], 0.42: [10, 0, 0], 0.92: [-14, 0, 0], 1.70: [-12, 0, 0], 2.4: [0, 0, 0], catmullrom }
+    key chest.rotation { 0.0: [0, 0, 0], 0.42: [14, 0, 0], 0.92: [-24, 0, 0], 1.30: [-22, 6, 0], 1.70: [-24, -6, 0], 2.4: [0, 0, 0], catmullrom }
+    key neck_1.rotation { 0.0: [0, 0, 0], 0.42: [18, 0, 0], 0.92: [-26, 0, 0], 1.30: [-24, 10, 0], 1.70: [-26, -10, 0], 2.4: [0, 0, 0], catmullrom }
+    key neck_2.rotation { 0.0: [0, 0, 0], 0.42: [14, 0, 0], 0.92: [-22, 0, 0], 1.70: [-20, 0, 0], 2.4: [0, 0, 0], catmullrom }
+    key head.rotation { 0.0: [0, 0, 0], 0.42: [18, 0, 0], 0.92: [-30, 0, 0], 1.30: [-28, 12, -6], 1.70: [-30, -12, 6], 2.4: [0, 0, 0], catmullrom }
+    key jaw.rotation { 0.0: [0, 0, 0], 0.42: [-4, 0, 0], 0.88: [44, 0, 0], 1.75: [42, 0, 0], 2.4: [0, 0, 0], catmullrom }
+    key wing_arm_l.rotation { 0.0: [0, 0, 0], 0.42: [8, 16, -14], 0.92: [-10, -16, 24], 1.70: [-8, -14, 22], 2.4: [0, 0, 0], catmullrom }
+    key wing_arm_r.rotation { 0.0: [0, 0, 0], 0.42: [8, -16, 14], 0.92: [-10, 16, -24], 1.70: [-8, 14, -22], 2.4: [0, 0, 0], catmullrom }
+    key wing_forearm_l.rotation { 0.0: [0, 0, 0], 0.42: [0, 22, -8], 0.92: [0, -14, 14], 1.70: [0, -12, 12], 2.4: [0, 0, 0], catmullrom }
+    key wing_arm_r__wing_forearm_l.rotation { 0.0: [0, 0, 0], 0.42: [0, -22, 8], 0.92: [0, 14, -14], 1.70: [0, 12, -12], 2.4: [0, 0, 0], catmullrom }
+    key hind_thigh_l.rotation { 0.0: [0, 0, 0], 0.42: [-14, 0, 0], 0.92: [18, 0, 6], 1.70: [16, 0, 6], 2.4: [0, 0, 0], catmullrom }
+    key hind_thigh_r.rotation { 0.0: [0, 0, 0], 0.42: [-14, 0, 0], 0.92: [18, 0, -6], 1.70: [16, 0, -6], 2.4: [0, 0, 0], catmullrom }
+    key tail_2.rotation { 0.0: [0, 0, 0], 0.92: [18, 0, 0], 1.70: [22, 14, 0], 2.4: [0, 0, 0], catmullrom }
+    key tail_4.rotation { 0.0: [0, 0, 0], 0.92: [22, 0, 0], 1.70: [26, -16, 0], 2.4: [0, 0, 0], catmullrom }
+  }
+
+  // 5. SIGNATURE GIF CLIP: High-Altitude Banking Peregrine Venom-Talon Dive Swoop!
+  clip aerial_venom_talon_swoop {
+    duration_s: 2.1, loop: false
+    key root.position { 0.0: [0, 0, 0], 0.26: [0, -2.5, -2.0], 0.72: [-3.5, 29.0, -7.0], 1.12: [2.0, 24.0, 3.0], 1.50: [0, 14.0, 18.0], 1.82: [0, 2.5, 10.0], 2.1: [0, 0, 0], catmullrom }
+    key pelvis.rotation { 0.0: [0, 0, 0], 0.26: [14, 0, 0], 0.72: [-16, 12, -14], 1.12: [-22, -8, 10], 1.50: [-18, 0, 0], 1.82: [8, 0, 0], 2.1: [0, 0, 0], catmullrom }
+    key chest.rotation { 0.0: [0, 0, 0], 0.26: [16, 0, 0], 0.72: [-14, 10, -10], 1.12: [-18, -6, 8], 1.50: [-12, 0, 0], 2.1: [0, 0, 0], catmullrom }
+    key neck_1.rotation { 0.0: [0, 0, 0], 0.72: [-12, 0, 0], 1.12: [14, 0, 0], 1.50: [18, 0, 0], 2.1: [0, 0, 0], catmullrom }
+    key head.rotation { 0.0: [0, 0, 0], 0.72: [10, 0, 0], 1.12: [16, 0, 0], 1.50: [12, 0, 0], 2.1: [0, 0, 0], catmullrom }
+    key jaw.rotation { 0.0: [0, 0, 0], 0.72: [24, 0, 0], 1.12: [38, 0, 0], 1.50: [44, 0, 0], 2.1: [0, 0, 0], catmullrom }
+    key wing_arm_l.rotation { 0.0: [0, 0, 0], 0.26: [-8, -10, 28], 0.54: [8, -8, -32], 0.92: [-10, -16, 28], 1.50: [-10, -18, 26], 1.82: [8, -10, -20], 2.1: [0, 0, 0], catmullrom }
+    key wing_arm_r.rotation { 0.0: [0, 0, 0], 0.26: [-8, 10, -28], 0.54: [8, 8, 32], 0.92: [-10, 16, -28], 1.50: [-10, 18, -26], 1.82: [8, 10, 20], 2.1: [0, 0, 0], catmullrom }
+    key wing_forearm_l.rotation { 0.0: [0, 0, 0], 0.26: [0, -10, 14], 0.54: [0, 12, -18], 0.92: [0, -14, 16], 1.50: [0, -16, 14], 1.82: [0, 10, -10], 2.1: [0, 0, 0], catmullrom }
+    key wing_arm_r__wing_forearm_l.rotation { 0.0: [0, 0, 0], 0.26: [0, 10, -14], 0.54: [0, -12, 18], 0.92: [0, 14, -16], 1.50: [0, 16, -14], 1.82: [0, -10, 10], 2.1: [0, 0, 0], catmullrom }
+    key hind_thigh_l.rotation { 0.0: [0, 0, 0], 0.72: [16, 0, 8], 1.12: [-18, 0, 12], 1.50: [-24, -8, 16], 1.82: [-10, 0, 4], 2.1: [0, 0, 0], catmullrom }
+    key hind_shin_l.rotation { 0.0: [0, 0, 0], 0.72: [18, 0, 0], 1.12: [-14, 0, 0], 1.50: [-42, 0, 0], 1.82: [8, 0, 0], 2.1: [0, 0, 0], catmullrom }
+    key hind_foot_l.rotation { 0.0: [0, 0, 0], 1.12: [18, 0, 0], 1.50: [28, 0, 0], 2.1: [0, 0, 0], catmullrom }
+    key hind_thigh_r.rotation { 0.0: [0, 0, 0], 0.72: [16, 0, -8], 1.12: [-18, 0, -12], 1.50: [-24, 8, -16], 1.82: [-10, 0, -4], 2.1: [0, 0, 0], catmullrom }
+    key hind_thigh_r__hind_shin_l.rotation { 0.0: [0, 0, 0], 0.72: [18, 0, 0], 1.12: [-14, 0, 0], 1.50: [-42, 0, 0], 1.82: [8, 0, 0], 2.1: [0, 0, 0], catmullrom }
+    key hind_thigh_r__hind_foot_l.rotation { 0.0: [0, 0, 0], 1.12: [18, 0, 0], 1.50: [28, 0, 0], 2.1: [0, 0, 0], catmullrom }
+    key tail_1.rotation { 0.0: [0, 0, 0], 0.72: [-14, 0, 0], 1.50: [-22, 0, 0], 2.1: [0, 0, 0], catmullrom }
+    key tail_3.rotation { 0.0: [0, 0, 0], 0.72: [-16, 0, 0], 1.50: [-20, 0, 0], 2.1: [0, 0, 0], catmullrom }
+  }
+
+  // 6. Signature Azure Rathalos Combo: Airborne Napalm Fireball Chained Directly into Talon Swoop!
+  clip supersonic_fireball_into_talon_combo {
+    duration_s: 2.5, loop: false
+    key root.position { 0.0: [0, 0, 0], 0.45: [0, 26.0, -5.0], 0.90: [0, 28.0, -3.0], 1.55: [0, 14.0, 16.0], 2.00: [0, 2.5, 10.0], 2.5: [0, 0, 0], catmullrom }
+    key pelvis.rotation { 0.0: [0, 0, 0], 0.45: [-12, 0, 0], 0.90: [22, 0, 0], 1.55: [-18, 0, 0], 2.5: [0, 0, 0], catmullrom }
+    key chest.rotation { 0.0: [0, 0, 0], 0.45: [-10, 0, 0], 0.90: [26, 0, 0], 1.55: [-12, 0, 0], 2.5: [0, 0, 0], catmullrom }
+    key neck_1.rotation { 0.0: [0, 0, 0], 0.90: [28, 0, 0], 1.55: [16, 0, 0], 2.5: [0, 0, 0], catmullrom }
+    key head.rotation { 0.0: [0, 0, 0], 0.90: [22, 0, 0], 1.55: [12, 0, 0], 2.5: [0, 0, 0], catmullrom }
+    key jaw.rotation { 0.0: [0, 0, 0], 0.70: [12, 0, 0], 0.92: [44, 0, 0], 1.55: [38, 0, 0], 2.5: [0, 0, 0], catmullrom }
+    key wing_arm_l.rotation { 0.0: [0, 0, 0], 0.45: [-10, -14, 28], 0.90: [8, -8, -24], 1.55: [-10, -18, 28], 2.5: [0, 0, 0], catmullrom }
+    key wing_arm_r.rotation { 0.0: [0, 0, 0], 0.45: [-10, 14, -28], 0.90: [8, 8, 24], 1.55: [-10, 18, -28], 2.5: [0, 0, 0], catmullrom }
+    key hind_thigh_l.rotation { 0.0: [0, 0, 0], 0.90: [18, 0, 8], 1.55: [-24, -8, 16], 2.5: [0, 0, 0], catmullrom }
+    key hind_shin_l.rotation { 0.0: [0, 0, 0], 0.90: [16, 0, 0], 1.55: [-42, 0, 0], 2.5: [0, 0, 0], catmullrom }
+    key hind_thigh_r.rotation { 0.0: [0, 0, 0], 0.90: [18, 0, -8], 1.55: [-24, 8, -16], 2.5: [0, 0, 0], catmullrom }
+    key hind_thigh_r__hind_shin_l.rotation { 0.0: [0, 0, 0], 0.90: [16, 0, 0], 1.55: [-42, 0, 0], 2.5: [0, 0, 0], catmullrom }
+  }
+
+  // 7. High-Altitude Napalm Carpet Sweep (sustained rapid wingbeats sweeping fire across arena!)
+  clip high_altitude_napalm_carpet_sweep {
+    duration_s: 2.4, loop: false
+    key root.position { 0.0: [0, 0, 0], 0.45: [0, 24.0, -2.0], 0.95: [-4.5, 26.0, 1.0], 1.50: [4.5, 25.0, 1.0], 1.98: [0, 18.0, -1.0], 2.4: [0, 0, 0], catmullrom }
+    key pelvis.rotation { 0.0: [0, 0, 0], 0.45: [-14, 0, 0], 0.95: [-12, -20, 0], 1.50: [-12, 20, 0], 2.4: [0, 0, 0], catmullrom }
+    key chest.rotation { 0.0: [0, 0, 0], 0.45: [8, -18, 0], 0.98: [14, -28, -8], 1.55: [14, 28, 8], 2.4: [0, 0, 0], catmullrom }
+    key neck_1.rotation { 0.0: [0, 0, 0], 0.55: [22, -20, 0], 1.00: [28, -26, 0], 1.58: [28, 26, 0], 2.4: [0, 0, 0], catmullrom }
+    key jaw.rotation { 0.0: [0, 0, 0], 0.55: [40, 0, 0], 1.75: [42, 0, 0], 2.4: [0, 0, 0], catmullrom }
+    key wing_arm_l.rotation { 0.0: [0, 0, 0], 0.30: [-8, -10, 28], 0.60: [8, -6, -30], 0.95: [-8, -10, 30], 1.30: [8, -6, -30], 1.65: [-8, -10, 30], 2.00: [6, -6, -22], 2.4: [0, 0, 0], catmullrom }
+    key wing_arm_r.rotation { 0.0: [0, 0, 0], 0.30: [-8, 10, -28], 0.60: [8, 6, 30], 0.95: [-8, 10, -30], 1.30: [8, 6, 30], 1.65: [-8, 10, -30], 2.00: [6, 6, 22], 2.4: [0, 0, 0], catmullrom }
+  }
+
+  // 8. Banking Aerial Corkscrew Wing-Scythe Slash!
+  clip corkscrew_sky_barrel_roll {
+    duration_s: 1.8, loop: false
+    key root.position { 0.0: [0, 0, 0], 0.38: [-4.0, 14.0, 2.0], 0.85: [3.5, 18.0, 16.0], 1.32: [0, 4.0, 12.0], 1.8: [0, 0, 0], catmullrom }
+    key pelvis.rotation { 0.0: [0, 0, 0], 0.38: [8, -18, -55], 0.85: [-6, 18, 95], 1.32: [8, 0, 14], 1.8: [0, 0, 0], catmullrom }
+    key chest.rotation { 0.0: [0, 0, 0], 0.38: [12, -22, -28], 0.85: [-8, 22, 42], 1.32: [10, 0, 6], 1.8: [0, 0, 0], catmullrom }
+    key wing_arm_l.rotation { 0.0: [0, 0, 0], 0.38: [-8, -18, 26], 0.85: [8, -12, -22], 1.8: [0, 0, 0], catmullrom }
+    key wing_arm_r.rotation { 0.0: [0, 0, 0], 0.38: [8, 12, 22], 0.85: [-8, 18, -26], 1.8: [0, 0, 0], catmullrom }
+  }
+
+  // 9. Acrobatic Airborne Backflip Diamond-Mace Somersault!
+  clip diamond_mace_overhead_somersault {
+    duration_s: 2.0, loop: false
+    key root.position { 0.0: [0, 0, 0], 0.30: [0, -3.0, -2.0], 0.78: [0, 27.0, 2.0], 1.25: [0, 19.0, -4.0], 1.65: [0, 2.0, -2.0], 2.0: [0, 0, 0], catmullrom }
+    key pelvis.rotation { 0.0: [0, 0, 0], 0.30: [16, 0, 0], 0.78: [-92, 0, 0], 1.22: [-128, 0, 0], 1.65: [-18, 0, 0], 2.0: [0, 0, 0], catmullrom }
+    key waist.rotation { 0.0: [0, 0, 0], 0.30: [12, 0, 0], 0.78: [-28, 0, 0], 1.22: [-22, 0, 0], 2.0: [0, 0, 0], catmullrom }
+    key chest.rotation { 0.0: [0, 0, 0], 0.30: [14, 0, 0], 0.78: [-28, 0, 0], 1.22: [-20, 0, 0], 2.0: [0, 0, 0], catmullrom }
+    key wing_arm_l.rotation { 0.0: [0, 0, 0], 0.30: [-10, -12, 26], 0.78: [8, -8, -26], 1.25: [-12, -14, 28], 2.0: [0, 0, 0], catmullrom }
+    key wing_arm_r.rotation { 0.0: [0, 0, 0], 0.30: [-10, 12, -26], 0.78: [8, 8, 26], 1.25: [-12, 14, -28], 2.0: [0, 0, 0], catmullrom }
+    key tail_1.rotation { 0.0: [0, 0, 0], 0.30: [-20, 0, 0], 0.78: [38, 0, 0], 1.22: [28, 0, 0], 2.0: [0, 0, 0], catmullrom }
+    key tail_2.rotation { 0.0: [0, 0, 0], 0.30: [-18, 0, 0], 0.78: [36, 0, 0], 1.22: [26, 0, 0], 2.0: [0, 0, 0], catmullrom }
+    key tail_3.rotation { 0.0: [0, 0, 0], 0.30: [-16, 0, 0], 0.78: [34, 0, 0], 1.22: [24, 0, 0], 2.0: [0, 0, 0], catmullrom }
+    key tail_4.rotation { 0.0: [0, 0, 0], 0.30: [-14, 0, 0], 0.78: [32, 0, 0], 1.22: [22, 0, 0], 2.0: [0, 0, 0], catmullrom }
+  }
+
+  // 10. High-Speed 2-Hit Rotational Diamond-Mace Tail Cleave
+  clip double_rotational_tail_lance_cleave {
+    duration_s: 1.9, loop: false
+    key root.position { 0.0: [0, 0, 0], 0.32: [-2.0, -1.5, -1.5], 0.76: [3.2, 2.2, 2.5], 1.30: [-3.2, 2.2, 2.5], 1.9: [0, 0, 0], catmullrom }
+    key pelvis.rotation { 0.0: [0, 0, 0], 0.32: [6, -54, 0], 0.76: [-6, 82, 8], 1.30: [-6, -82, -8], 1.9: [0, 0, 0], catmullrom }
+    key waist.rotation { 0.0: [0, 0, 0], 0.32: [0, -24, 0], 0.76: [0, 34, 0], 1.30: [0, -34, 0], 1.9: [0, 0, 0], catmullrom }
+    key chest.rotation { 0.0: [0, 0, 0], 0.32: [6, -18, 0], 0.76: [8, 24, 0], 1.30: [8, -24, 0], 1.9: [0, 0, 0], catmullrom }
+    key tail_1.rotation { 0.0: [0, 0, 0], 0.32: [-8, -34, 0], 0.76: [-10, 44, 0], 1.30: [-10, -44, 0], 1.9: [0, 0, 0], catmullrom }
+    key tail_2.rotation { 0.0: [0, 0, 0], 0.32: [-6, -32, 0], 0.78: [-8, 42, 0], 1.32: [-8, -42, 0], 1.9: [0, 0, 0], catmullrom }
+    key tail_3.rotation { 0.0: [0, 0, 0], 0.32: [-6, -30, 0], 0.80: [-8, 40, 0], 1.34: [-8, -40, 0], 1.9: [0, 0, 0], catmullrom }
+    key tail_4.rotation { 0.0: [0, 0, 0], 0.32: [-4, -28, 0], 0.82: [-6, 38, 0], 1.36: [-6, -38, 0], 1.9: [0, 0, 0], catmullrom }
+  }
+
+  // 11. Gale-Wing Gust Back-Leap & Snap Napalm Counter!
+  clip gale_wing_backhop_counter_blast {
+    duration_s: 1.8, loop: false
+    key root.position { 0.0: [0, 0, 0], 0.26: [0, -2.0, 2.0], 0.66: [0, 16.0, -16.0], 1.25: [0, 1.5, -18.0], 1.8: [0, 0, 0], catmullrom }
+    key pelvis.rotation { 0.0: [0, 0, 0], 0.26: [12, 0, 0], 0.66: [-18, 0, 0], 1.25: [10, 0, 0], 1.8: [0, 0, 0], catmullrom }
+    key chest.rotation { 0.0: [0, 0, 0], 0.26: [-14, 0, 0], 0.66: [18, 0, 0], 1.25: [12, 0, 0], 1.8: [0, 0, 0], catmullrom }
+    key jaw.rotation { 0.0: [0, 0, 0], 0.66: [42, 0, 0], 1.25: [18, 0, 0], 1.8: [0, 0, 0], catmullrom }
+    key wing_arm_l.rotation { 0.0: [0, 0, 0], 0.26: [-12, 16, 28], 0.64: [14, -28, -28], 1.25: [-8, -10, 22], 1.8: [0, 0, 0], catmullrom }
+    key wing_arm_r.rotation { 0.0: [0, 0, 0], 0.26: [-12, -16, -28], 0.64: [14, 28, 28], 1.25: [-8, 10, -22], 1.8: [0, 0, 0], catmullrom }
+  }
+
+  // 12. Cerulean Predator Threat Display — low falcon crouch, flaring emerald wing sails & temporal lances!
+  clip cerulean_predator_threat_display {
+    duration_s: 2.0, loop: false
+    key root.position { 0.0: [0, 0, 0], 0.50: [2.2, -1.5, 1.5], 1.25: [-2.2, -1.2, 1.0], 2.0: [0, 0, 0], catmullrom }
+    key chest.rotation { 0.0: [0, 0, 0], 0.50: [10, 16, -6], 1.25: [10, -16, 6], 2.0: [0, 0, 0], catmullrom }
+    key neck_1.rotation { 0.0: [0, 0, 0], 0.50: [16, 18, 8], 1.25: [16, -18, -8], 2.0: [0, 0, 0], catmullrom }
+    key head.rotation { 0.0: [0, 0, 0], 0.50: [-14, 16, -20], 1.25: [-14, -16, 20], 2.0: [0, 0, 0], catmullrom }
+    key jaw.rotation { 0.0: [0, 0, 0], 0.45: [32, 0, 0], 0.75: [6, 0, 0], 1.20: [36, 0, 0], 1.55: [8, 0, 0], 2.0: [0, 0, 0], catmullrom }
+    key wing_arm_l.rotation { 0.0: [0, 0, 0], 0.50: [-8, -16, 20], 1.25: [-6, -10, 16], 2.0: [0, 0, 0], catmullrom }
+    key wing_arm_r.rotation { 0.0: [0, 0, 0], 0.50: [-6, 10, -16], 1.25: [-8, 16, -20], 2.0: [0, 0, 0], catmullrom }
+  }
+}
+@controller {
+  initial: idle
+  idle -> walk when speed > 0.15, blend 0.20
+  walk -> run when speed > 0.55, blend 0.18
+  run -> walk when speed <= 0.45, blend 0.22
+  walk -> idle when speed <= 0.08, blend 0.25
+  idle -> roar when enraged > 0.5, blend 0.15
+  roar -> idle when enraged <= 0.5, blend 0.25
+}

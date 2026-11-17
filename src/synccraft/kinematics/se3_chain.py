@@ -157,6 +157,9 @@ class WorldBox:
     component_rest_pos: np.ndarray | None = None
     component_rest_rot: np.ndarray | None = None
     instance_name: str | None = None
+    edge: Any = None
+    layer: int = 0
+    prism_group: str | None = None
 
     @property
     def half_extents(self) -> np.ndarray:
@@ -258,6 +261,7 @@ class Scene:
     adjacency_reasons: dict[tuple[str, str], str] = field(default_factory=dict)
     locators: tuple[WorldLocator, ...] = ()
     blend_pairs: frozenset[tuple[str, str]] = frozenset()
+    layout_contracts: Any = None
 
     @property
     def box_by_name(self) -> dict[str, WorldBox]:
@@ -390,6 +394,7 @@ def compile_geometry(
     pose_position_deltas: dict[str, Any] | None = None,
     pose_scale_factors: dict[str, Any] | None = None,
     clamp_joint_limits: bool = True,
+    validate: bool = True,
 ) -> Scene:
     """Expand validated boxes, planes, locators, placements, child bones, mirrors, and radials.
 
@@ -399,7 +404,8 @@ def compile_geometry(
     the parent axis. Per-box ``rotate`` and ``pivot`` compile directly into ``WorldBox``
     orientations without synthesizing extra bones.
     """
-    validate_program(program)
+    if validate:
+        validate_program(program)
     size_step = float(getattr(program.meta, "size_step", 1.0))
     boxes: list[WorldBox] = []
     bones: list[WorldBone] = []
@@ -477,8 +483,9 @@ def compile_geometry(
             if spec.parent_box in parent_local_boxes:
                 attachment_base = parent_local_boxes[spec.parent_box]
                 r_parent_box = euler_xyz_matrix(attachment_base.local_euler)
+                seat_scale = 1.0 - float(getattr(spec, "seat", 0.0))
                 rel_attach = (
-                    r_parent_box @ (0.5 * attachment_base.size * (_vec(spec.anchor) * sign))
+                    r_parent_box @ (0.5 * attachment_base.size * (_vec(spec.anchor) * sign * seat_scale))
                     + _vec(spec.offset) * sign * parent_scale
                 )
                 if radial_rot is not None:
@@ -571,6 +578,17 @@ def compile_geometry(
                     box_local_pivot = None
                     local_center = unrot_local_center
 
+                item_layer = int(getattr(item, "layer", 0))
+                if item.plane_normal is not None and item_layer != 0:
+                    n_idx = {"x": 0, "y": 1, "z": 2}[item.plane_normal]
+                    layer_vec = np.zeros(3, dtype=np.float64)
+                    layer_vec[n_idx] = 0.25 * float(item_layer) * float(sign[n_idx])
+                    local_center = local_center + (r_box_local @ layer_vec) * cumulative_scale
+                    if item.pivot is not None:
+                        unrot_local_center = unrot_local_center + layer_vec * cumulative_scale
+                    else:
+                        unrot_local_center = local_center
+
                 box_world_center = world_pivot + world_rotation @ local_center
                 box_world_rot = world_rotation @ r_box_local
                 comp_rest_pos = (
@@ -610,6 +628,9 @@ def compile_geometry(
                     component_rest_pos=comp_rest_pos,
                     component_rest_rot=comp_rest_rot,
                     instance_name=f"{prefix}__{item.instance_name}" if (prefix and item.instance_name) else item.instance_name,
+                    edge=getattr(item, "edge", None),
+                    layer=item_layer,
+                    prism_group=f"{prefix}__{item.prism_group}" if (prefix and getattr(item, "prism_group", None)) else getattr(item, "prism_group", None),
                 )
                 box_idx = len(boxes)
                 boxes.append(compiled_box)
@@ -780,6 +801,11 @@ def compile_geometry(
                 cand = f"{pref}__{tgt}" if (pref and f"{pref}__{tgt}" in box_names_set) else tgt
                 if cand in box_names_set and cand != src_box.name:
                     edge(src_box.name, cand, "connect")
+    layout_contracts = (
+        getattr(program.assembly_spec, "layout", None)
+        if getattr(program, "assembly_spec", None) is not None
+        else None
+    )
     return Scene(
         tuple(boxes),
         tuple(bones),
@@ -788,6 +814,7 @@ def compile_geometry(
         adjacency,
         tuple(locators),
         frozenset(blend_pairs),
+        layout_contracts=layout_contracts,
     )
 
 
@@ -800,9 +827,10 @@ def compile_posed_geometry(
     pose_position_deltas: dict[str, Any] | None = None,
     pose_scale_factors: dict[str, Any] | None = None,
     clamp_joint_limits: bool = True,
+    validate: bool = True,
 ) -> Scene:
     """Compile a posed Scene sharing the exact SE(3) chain with rest compilation."""
-    if pose_euler_deltas or box_inflate_deltas or pose_position_deltas or pose_scale_factors:
+    if validate and (pose_euler_deltas or box_inflate_deltas or pose_position_deltas or pose_scale_factors):
         valid_bones: set[str] = set()
         valid_boxes: set[str] = set()
 
@@ -853,4 +881,5 @@ def compile_posed_geometry(
         pose_position_deltas=pose_position_deltas,
         pose_scale_factors=pose_scale_factors,
         clamp_joint_limits=clamp_joint_limits,
+        validate=validate,
     )

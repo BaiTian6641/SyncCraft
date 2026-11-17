@@ -1,0 +1,157 @@
+// Ivory Lagiacrus (White Conqueror of Land & Surf) — Stage 1 Primary Masses & Terrestrial Leviathan Blockout
+// Verified right-handed SE(3): athletic semi-sprawled land-striding posture (Y ~ 11.6u), counter-coiled S-wave, grounded Y = 0.
+@meta {
+  dsl_version: "4.1",
+  archetype: entity,
+  target_profile: bbmodel_5,
+  texel_density: 32,
+  size_step: 0.5,
+  audit_profile: sculpted
+}
+@layout {
+  budget max_boxes = 128
+  budget max_bones = 64
+  envelope grounded = true
+  envelope ground_y = 0.0
+  envelope ground_tol = 0.25
+}
+@palette {
+  pearl_ivory: ramp(base_lch=[0.85, 0.042, 88], steps=6, hue_shift=[24, -12])
+  royal_azure: ramp(base_lch=[0.48, 0.145, 252], steps=6, hue_shift=[22, -16])
+  slate_amethyst: ramp(base_lch=[0.37, 0.118, 284], steps=6, hue_shift=[20, -14])
+  sand_gold: ramp(base_lch=[0.82, 0.088, 84], steps=6, hue_shift=[18, -12])
+}
+@rig {
+  root bone root {
+    pivot_local: [0, 0, 0]
+    locator ground_origin { offset: [0, 0, 0] }
+
+    // Slightly higher terrestrial-adapted Leviathan pelvis in a counter-coiled land-prowl S-wave
+    bone pelvis joint(parent=ground_origin, at=[0, 12.42, -11.0]) {
+      rest_euler: [3, 10, 0]
+      box pelvis_core { size: [13.0, 10.0, 14.0], material: pearl_ivory }
+
+      bone waist attach(parent_box=pelvis_core, anchor=[0, 0.04, 1], align=[0, 0, -1], seat=0.26) {
+        rest_euler: [-3, -15, 0]
+        box waist_core { size: [14.5, 11.0, 14.0], material: pearl_ivory }
+
+        bone chest attach(parent_box=waist_core, anchor=[0, 0.06, 1], align=[0, 0, -1], seat=0.26) {
+          rest_euler: [-3, -8, 0]
+          box chest_core { size: [17.5, 12.5, 16.5], material: pearl_ivory }
+
+          // Enlarged terrestrial twin-pronged thoracic shock-spire blockout
+          bone shock_spire_2_l attach(parent_box=chest_core, anchor=[0.48, 0.96, -0.20], align=[0, -0.88, 0]) mirror_x(shock_spire_2_r) {
+            rest_euler: [-24, -14, -22]
+            box spire_2_shaft { size: [3.5, 12.5, 5.0], material: slate_amethyst }
+          }
+
+          // Forward-poised muscular 3-segment terrestrial S-neck
+          bone neck_1 attach(parent_box=chest_core, anchor=[0, 0.22, 1], align=[0, 0, -1], seat=0.26) {
+            rest_euler: [-36, 8, 0]
+            box neck_1_core { size: [12.5, 11.0, 11.0], material: pearl_ivory }
+
+            bone neck_2 attach(parent_box=neck_1_core, anchor=[0, 0.08, 1], align=[0, 0, -1], seat=0.25) {
+              rest_euler: [-22, 6, 0]
+              box neck_2_core { size: [10.5, 9.5, 10.5], material: pearl_ivory }
+
+              bone neck_3 attach(parent_box=neck_2_core, anchor=[0, 0.06, 1], align=[0, 0, -1], seat=0.25) {
+                rest_euler: [18, 4, 0]
+                box neck_3_core { size: [9.0, 8.5, 9.5], material: pearl_ivory }
+
+                bone hood_l attach(parent_box=neck_3_core, anchor=[0.96, 0.14, 0.45], align=[-0.84, 0, 0], seat=0.10) mirror_x(hood_r) {
+                  rest_euler: [-6, 16, 8]
+                  box hood_rib_main { size: [10.5, 2.0, 8.5], material: royal_azure, blend_with: [skull_core, neck_2_core] }
+                }
+
+                bone head attach(parent_box=neck_3_core, anchor=[0, 0.06, 1], align=[0, 0, -1], seat=0.24) {
+                  rest_euler: [44, 0, 0]
+                  box skull_core { size: [10.0, 6.5, 8.5], material: pearl_ivory }
+                  box snout_base place(base_box=skull_core, anchor=[0, -0.10, 1], align=[0, 0, -0.80]) {
+                    size: [6.0, 3.5, 6.5], material: pearl_ivory, rotate: [4, 0, 0]
+                  }
+                  box snout_distal place(base_box=snout_base, anchor=[0, -0.04, 1], align=[0, 0, -0.82]) {
+                    size: [3.5, 3.0, 6.0], material: pearl_ivory, rotate: [2, 0, 0]
+                  }
+
+                  // Elongated swept pearl-ivory & amethyst crown horns
+                  bone horn_l attach(parent_box=skull_core, anchor=[0.58, 0.90, -0.12], align=[0, -0.25, 0.90], seat=0.14) mirror_x(horn_r) {
+                    rest_euler: [34, -16, -14]
+                    box horn_seg_1 { size: [3.0, 2.5, 11.5], material: slate_amethyst }
+                  }
+
+                  bone jaw attach(parent_box=skull_core, anchor=[0, -0.44, 0.30], align=[0, 0, -1], seat=0.18) {
+                    rest_euler: [14, 0, 0]
+                    box jaw_base { size: [5.0, 2.5, 12.5], material: sand_gold, blend_with: [snout_base, neck_3_core] }
+                  }
+                }
+              }
+            }
+          }
+
+          // Reinforced semi-sprawled land-striding forelimbs (+Rz = +54 deg!)
+          bone fore_shoulder_l attach(parent_box=chest_core, anchor=[0.94, -0.22, 0.34], align=[-0.32, 0.86, 0], seat=0.14) mirror_x(fore_shoulder_r) {
+            rest_euler: [14, 8, 54]
+            box fore_bicep { size: [6.5, 10.0, 7.5], material: pearl_ivory }
+
+            bone fore_arm_l attach(parent_box=fore_bicep, anchor=[0.05, -1, 0], align=[0, 0.86, 0], seat=0.18) {
+              rest_euler: [-24, 0, -38]
+              box fore_bracer { size: [6.0, 6.5, 6.5], material: royal_azure, blend_with: [chest_core] }
+
+              bone fore_paddle_l attach(parent_box=fore_bracer, anchor=[0, -1, 0.14], align=[0, 0.86, -0.45], seat=0.16) {
+                rest_euler: [13, -10, -16]
+                box fore_paddle_pad { size: [8.0, 2.5, 8.5], material: slate_amethyst }
+              }
+            }
+          }
+        }
+      }
+
+      // Reinforced semi-sprawled land-striding hindlimbs (+Rz = +52 deg!)
+      bone hind_thigh_l attach(parent_box=pelvis_core, anchor=[0.94, -0.18, -0.05], align=[-0.32, 0.86, 0], seat=0.14) mirror_x(hind_thigh_r) {
+        rest_euler: [18, -10, 52]
+        box thigh_mass { size: [6.0, 9.5, 7.0], material: pearl_ivory, blend_with: [waist_core, tail_1_tail_seg] }
+
+        bone hind_shin_l attach(parent_box=thigh_mass, anchor=[0.05, -1, -0.05], align=[0, 0.86, 0], seat=0.18) {
+          rest_euler: [-26, 0, -36]
+          box shin_mass { size: [5.0, 6.0, 5.5], material: royal_azure }
+
+          bone hind_paddle_l attach(parent_box=shin_mass, anchor=[0, -1, 0.14], align=[0, 0.86, -0.45], seat=0.16) {
+            rest_euler: [5, 10, -16]
+            box hind_paddle_pad { size: [7.5, 2.5, 8.5], material: slate_amethyst }
+          }
+        }
+      }
+
+      // Counter-coiled heavy S-curve tail (`tail_1..tail_6`)
+      bone tail_1 attach(parent_box=pelvis_core, anchor=[0, 0.04, -1], align=[0, 0, 1], seat=0.25) {
+        rest_euler: [-2, 16, 0]
+        box tail_1_tail_seg { size: [11.0, 9.0, 11.5], material: pearl_ivory }
+
+        bone tail_2 attach(parent_box=tail_1_tail_seg, anchor=[0, 0.04, -1], align=[0, 0, 1], seat=0.25) {
+          rest_euler: [3, 20, 0]
+          box tail_2_seg { size: [9.5, 8.5, 11.5], material: pearl_ivory }
+
+          bone tail_3 attach(parent_box=tail_2_seg, anchor=[0, 0.04, -1], align=[0, 0, 1], seat=0.25) {
+            rest_euler: [6, 14, 0]
+            box tail_3_seg { size: [8.0, 7.5, 11.5], material: royal_azure }
+
+            bone tail_4 attach(parent_box=tail_3_seg, anchor=[0, 0.06, -1], align=[0, 0, 1], seat=0.24) {
+              rest_euler: [8, -20, 0]
+              box tail_4_seg { size: [5.5, 7.5, 11.5], material: royal_azure }
+
+              bone tail_5 attach(parent_box=tail_4_seg, anchor=[0, 0.06, -1], align=[0, 0, 1], seat=0.24) {
+                rest_euler: [9, -24, 0]
+                box tail_5_seg { size: [4.0, 7.0, 11.5], material: slate_amethyst }
+
+                bone tail_6 attach(parent_box=tail_5_seg, anchor=[0, 0.04, -1], align=[0, 0, 1], seat=0.22) {
+                  rest_euler: [6, -16, 0]
+                  box tail_6_tip { size: [2.5, 5.5, 11.5], material: slate_amethyst }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

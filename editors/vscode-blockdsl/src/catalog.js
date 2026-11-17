@@ -58,9 +58,15 @@ const TOP_SECTIONS = [
   },
   {
     name: "@style",
-    detail: "Optional optical encoding (`vanilla`, `labpbr_1_3`, `gltf_2_0`)",
-    insertText: "@style { target_encoding: ${1|vanilla,labpbr_1_3,gltf_2_0|}, quantize_ramp: ${2|true,false|}, bevel_highlight: ${3:0.08} }",
-    doc: "Selects Vanilla baked atlas, LabPBR 1.3 (`_n` + `_s`), or glTF 2.0 metallic-roughness output."
+    detail: "Optional optical & cel-band encoding (`vanilla`, `labpbr_1_3`, `gltf_2_0`, `shade: banded(...)`)",
+    insertText: "@style { target_encoding: ${1|vanilla,labpbr_1_3,gltf_2_0|}, shade: banded(steps=4, direction=down, cluster=diagonal), glow_bleed: ${2:2} }",
+    doc: "Selects Vanilla baked atlas (physical GGX or painterly `shade: banded(...)` + `glow_bleed`), LabPBR 1.3 (`_n` + `_s`), or glTF 2.0 metallic-roughness output."
+  },
+  {
+    name: "@stamps",
+    detail: "Optional v4.1 parametric surface markings (eyes, teeth rows, vents, decals)",
+    insertText: "@stamps {\n  stamp ${1:eye} on ${2:skull}.${3|side,front,north,south,east,west,up,down|} { at: [0.35, 0.42], size: [2, 1], color: ${4:accent}, emissive: ${5:0.9}, mirror: true }\n}",
+    doc: "Paints resolution-independent pixel-art features (`stamp <id> on <box>.<face> { at: [u, v], size: [w, h], color: <mat>, rows: N, mirror: true }`) directly into the surface atlas."
   },
   {
     name: "@muscles",
@@ -92,7 +98,7 @@ const ARCHETYPES = ["entity", "weapon_3d", "block_multipart", "item_extruded"];
 const PROFILES = ["bedrock_entity", "geckolib", "java_modern", "java_legacy", "bbmodel_5"];
 const ANIMATED_PROFILES = ["bedrock_entity", "geckolib", "bbmodel_5"];
 const AUDIT_PROFILES = ["strict", "sculpted", "authored"];
-const DSL_VERSIONS = ["\"4.0\"", "\"3.2\"", "\"3.1\"", "\"3.0\""];
+const DSL_VERSIONS = ["\"4.1\"", "\"4.0\"", "\"3.2\"", "\"3.1\"", "\"3.0\""];
 const ALLOWED_SIZE_STEPS = ["1.0", "0.5", "0.25", "0.125", "0.0625", "0.03125", "0.1", "0.05", "0.01", "0.001"];
 const FACES = ["north", "south", "east", "west", "up", "down"];
 const AXES_3D = ["x", "y", "z"];

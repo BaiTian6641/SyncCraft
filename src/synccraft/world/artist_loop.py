@@ -968,9 +968,12 @@ def _synthesize_muscles_kinematics_and_behavior(program: Program) -> Program:
                     )
                     cand_beh = replace(prog_with_ms.behavior, clips=(cand_cl,))
                     cand_p = replace(prog_with_ms, behavior=cand_beh)
-                    if audit_behavior_clip(cand_p, cand_cl.name, num_frames=10)["passed"]:
-                        scaled_cl = cand_cl
-                        break
+                    try:
+                        if audit_behavior_clip(cand_p, cand_cl.name, num_frames=10)["passed"]:
+                            scaled_cl = cand_cl
+                            break
+                    except DSLValidationError:
+                        continue
                 repaired_clips.append(scaled_cl)
         return validate_program(replace(prog_with_ms, behavior=replace(prog_with_ms.behavior, clips=tuple(repaired_clips))))
 
@@ -978,19 +981,48 @@ def _synthesize_muscles_kinematics_and_behavior(program: Program) -> Program:
     freq = round(1.0 / dur, 4)
 
     # Build idle/action clip and binary-scale amplitudes until 100% swept-SAT & stance-IK clean
+    from synccraft.kinematics.musculoskeletal import _collect_expanded_joint_limits
+    from synccraft.dsl.ast_nodes import _is_continuous_limit_pair
+
+    exp_limits = _collect_expanded_joint_limits(prog_with_ms)
+    ax_idx_map = {"x": 0, "y": 1, "z": 2}
+
+    def _safe_track(bone_n: str, law: str, ax: str, want_amp: float, phase_d: float = 0.0) -> TrackDecl:
+        jlim_entry = exp_limits.get(bone_n)
+        amp = float(want_amp)
+        if jlim_entry is not None and jlim_entry[0] is not None:
+            pair = jlim_entry[0][ax_idx_map[ax]]
+            asign = float(jlim_entry[1][ax_idx_map[ax]])
+            if not _is_continuous_limit_pair(pair):
+                lo_b, hi_b = float(pair[0]), float(pair[1])
+                if asign < 0.0:
+                    lo_b, hi_b = -hi_b, -lo_b
+                if law == "hinge":
+                    if amp >= 0.0:
+                        amp = max(0.0, min(amp, hi_b * 0.95))
+                    else:
+                        amp = min(0.0, max(amp, lo_b * 0.95))
+                elif law == "flap":
+                    cap = max(0.0, min(abs(lo_b), abs(hi_b)) / 1.22)
+                    amp = math.copysign(min(abs(amp), cap), amp)
+                else:
+                    cap = max(0.0, min(abs(lo_b), abs(hi_b)) * 0.95)
+                    amp = math.copysign(min(abs(amp), cap), amp)
+        return TrackDecl(bone=bone_n, law=law, axis=ax, amp_deg=round(amp, 3), freq_hz=freq, phase_deg=phase_d)
+
     tracks_cand: list[TrackDecl] = []
     for idx_b, b in enumerate(scene.bones[1:7]):
         low = b.name.lower()
         if "wing" in low:
             sgn = -1.0 if b.mirrored else 1.0
-            tracks_cand.append(TrackDecl(bone=b.name, law="flap", axis="z", amp_deg=18.0 * sgn, freq_hz=freq, phase_deg=0.0))
+            tracks_cand.append(_safe_track(b.name, "flap", "z", 18.0 * sgn, 0.0))
         elif "tail" in low or "spine" in low or "neck" in low:
             sgn = -1.0 if b.mirrored else 1.0
             tracks_cand.append(
-                TrackDecl(bone=b.name, law="wave", axis="y", amp_deg=10.0 * sgn, freq_hz=freq, phase_deg=round((idx_b * -35.0) % 360.0, 1))
+                _safe_track(b.name, "wave", "y", 10.0 * sgn, round((idx_b * -35.0) % 360.0, 1))
             )
         elif not any(ik.upper == b.name or ik.lower == b.name for ik in ik_chains):
-            tracks_cand.append(TrackDecl(bone=b.name, law="hinge", axis="x", amp_deg=8.0, freq_hz=freq, phase_deg=0.0))
+            tracks_cand.append(_safe_track(b.name, "hinge", "x", 8.0, 0.0))
 
     m_drives_cand = [
         MuscleDriveDecl(muscle=m.name, peak=0.75, freq_hz=freq, phase_deg=round((i * 90.0) % 360.0, 1), baseline=0.05)
@@ -1002,7 +1034,7 @@ def _synthesize_muscles_kinematics_and_behavior(program: Program) -> Program:
     ]
 
     if not tracks_cand and not m_drives_cand and not ik_drives_cand:
-        tracks_cand.append(TrackDecl(bone=scene.bones[1].name, law="hinge", axis="x", amp_deg=5.0, freq_hz=freq))
+        tracks_cand.append(_safe_track(scene.bones[1].name, "hinge", "x", 5.0, 0.0))
 
     clip_id = _claim_id("locomotion_cycle" if ik_drives_cand else "active_cycle")
     chosen_clip: ClipDecl | None = None
@@ -1016,9 +1048,12 @@ def _synthesize_muscles_kinematics_and_behavior(program: Program) -> Program:
             ik_drives=tuple(replace(ikd, stride=round(ikd.stride * scale, 3), lift=round(ikd.lift * scale, 3)) for ikd in ik_drives_cand),
         )
         test_prog = replace(prog_with_ms, behavior=BehaviorDecl(clips=(cand_clip,)))
-        if audit_behavior_clip(test_prog, clip_id, num_frames=12)["passed"]:
-            chosen_clip = cand_clip
-            break
+        try:
+            if audit_behavior_clip(test_prog, clip_id, num_frames=12)["passed"]:
+                chosen_clip = cand_clip
+                break
+        except DSLValidationError:
+            continue
     if chosen_clip is None:
         chosen_clip = ClipDecl(
             name=clip_id,

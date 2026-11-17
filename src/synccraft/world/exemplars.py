@@ -568,7 +568,7 @@ COLOSSAL_WALKING_CITADEL_DSL: str = """
 
 @rig {
   root bone chassis_hull {
-    pivot_local: [0, 20, 0]
+    pivot_local: [0, 20.73, 0]
     box main_hull { size: [18, 8, 24], material: riveted_armor }
     box underbelly_keel place(base_box=main_hull, anchor=[0, -1, 0], align=[0, 0.45, 0]) {
       size: [12, 4, 20], material: riveted_armor, rotate: [12, 0, 0]
@@ -652,7 +652,7 @@ COLOSSAL_WALKING_CITADEL_DSL: str = """
         }
 
         bone beacon_rotor attach(parent_box=cupola_crown, anchor=[0, 1, 0], align=[0, -1, 0]) {
-          joint_limits: [[-5, 5], [-180, 180], [-5, 5]]
+          joint_limits: [[-5, 5], continuous, [-5, 5]]
           box lantern_spindle { size: [2, 5, 2], material: forged_brass }
           box beacon_lens place(base_box=lantern_spindle, anchor=[0, 1, 0], align=[0, -1, 0]) {
             size: [4, 3, 4], material: boiler_firebox
@@ -671,7 +671,7 @@ COLOSSAL_WALKING_CITADEL_DSL: str = """
         }
 
         bone windmill_hub attach(parent_box=mast_boom, anchor=[0, 0, -1], align=[0, 0, 1]) {
-          joint_limits: [[-5, 5], [-5, 5], [-180, 180]]
+          joint_limits: [[-5, 5], [-5, 5], continuous]
           box hub_boss { size: [3, 3, 2], material: forged_brass }
 
           bone vane_arm joint(parent=hub_boss, at=[0, 1.5, -0.5], align=[0, -1, 0]) radial(count=4, axis=z) {
@@ -714,7 +714,7 @@ COLOSSAL_WALKING_CITADEL_DSL: str = """
     }
 
     bone flywheel_l attach(parent_box=main_hull, anchor=[-1, 0.35, -0.12], align=[1, 0, 0]) mirror_x(flywheel_r) {
-      joint_limits: [[-180, 180], [-5, 5], [-5, 5]]
+      joint_limits: [continuous, [-5, 5], [-5, 5]]
       box drive_wheel_l { size: [2, 6, 6], material: forged_brass }
       box wheel_rim_cross_l place(base_box=drive_wheel_l, anchor=[-1, 0, 0], align=[1, 0, 0]) {
         size: [1, 5, 5], material: riveted_armor, rotate: [45, 0, 0]
@@ -722,7 +722,7 @@ COLOSSAL_WALKING_CITADEL_DSL: str = """
     }
 
     bone pinion_gear_l attach(parent_box=main_hull, anchor=[-1, 0.35, 0.45], align=[1, 0, 0]) mirror_x(pinion_gear_r) {
-      joint_limits: [[-180, 180], [-5, 5], [-5, 5]]
+      joint_limits: [continuous, [-5, 5], [-5, 5]]
       box spur_gear_l { size: [2, 3, 3], material: forged_brass }
     }
 

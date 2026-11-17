@@ -34,13 +34,33 @@ AXES_3D = frozenset({"x", "y", "z"})
 MIRROR_AXES = frozenset({"x", "z"})
 ALLOWED_SIZE_STEPS = frozenset({1.0, 0.5, 0.25, 0.125, 0.0625, 0.03125, 0.1, 0.05, 0.01, 0.001})
 AUDIT_PROFILES = frozenset({"strict", "sculpted", "authored"})
-DSL_VERSIONS = frozenset({"3.0", "3.1", "3.2", "4.0"})
+DSL_VERSIONS = frozenset({"3.0", "3.1", "3.2", "4.0", "4.1"})
 LOCATOR_ROLES = frozenset({"socket", "ik_effector", "vfx_emitter", "camera_focus", "hitbox", "rider_seat"})
 TRACK_LAWS = frozenset({"wave", "flap", "hinge", "impulse", "spin"})
 SLIDE_LAWS = frozenset({"piston", "wave", "hinge", "impulse"})
 KEYFRAME_CHANNELS = frozenset({"rotation", "position", "scale"})
 KEYFRAME_INTERPOLATIONS = frozenset({"linear", "catmullrom"})
 CONTROLLER_OPS = frozenset({">", "<", ">=", "<=", "==", "!="})
+COAT_PATTERNS_DSL = frozenset({"plain", "mottled", "spotted", "striped", "banded_limb", "scale_rows"})
+SHADE_MODES_DSL = frozenset({"physical", "banded"})
+EDGE_CUTOUT_MODES = frozenset({"ragged", "spikes", "drip", "scallop", "triangle_bay"})
+IK_PLANES = frozenset({"free", "sagittal", "sprawled"})
+GAIT_PATTERNS = frozenset({
+    "lateral_sequence",
+    "diagonal_pairs",
+    "rotary_gallop",
+    "transverse_gallop",
+    "biped_alternate",
+    "sprawl_diagonal",
+    "hexapod_tripod",
+})
+STAMP_FACE_ALIASES = frozenset({"side", "front", "back", "top", "bottom"})
+CONTINUOUS_AXIS_LIMIT: tuple[float, float] = (-float("inf"), float("inf"))
+CONTINUOUS_JOINT_LIMITS: JointLimits = (
+    CONTINUOUS_AXIS_LIMIT,
+    CONTINUOUS_AXIS_LIMIT,
+    CONTINUOUS_AXIS_LIMIT,
+)
 MATERIAL_FAMILIES_DSL_LIST = (
     "painted_metal",
     "brushed_metal",
@@ -76,6 +96,7 @@ class Meta:
     size_step: float = 1.0
     audit_profile: str = "strict"
     units_per_block: int = 16
+    gravity: float | None = None
 
 
 @dataclass(frozen=True)
@@ -105,6 +126,7 @@ class Attach:
     offset: Vec3 = (0.0, 0.0, 0.0)
     detached: bool = False
     joint_mode: bool = False
+    seat: float = 0.0
 
 
 def Joint(
@@ -177,6 +199,51 @@ def _normalize_uv_faces(raw: Any) -> Any:
 
 
 @dataclass(frozen=True)
+class EdgeCutoutDecl:
+    """Parametric alpha cut-out silhouette specification for a zero-thickness ``plane`` (ADR 0011)."""
+
+    mode: str
+    depth: int = 2
+    holes: int = 0
+    width: int = 2
+    min_len: int = 1
+    max_len: int = 4
+    bays: int = 3
+    side: str = "right"
+    seed: int = 7
+    apex: tuple[float, float] = (0.0, 0.5)
+
+
+def format_edge_cutout(edge: EdgeCutoutDecl) -> str:
+    """Canonical Block-DSL formatting of an ``EdgeCutoutDecl``."""
+
+    def _fn(x: float) -> str:
+        f = float(x)
+        if f == 0.0:
+            return "0"
+        if f.is_integer() and abs(f) < 1e15:
+            return str(int(f))
+        return str(f)
+
+    if edge.mode == "ragged":
+        parts = [f"depth={edge.depth}"]
+        if edge.holes:
+            parts.append(f"holes={edge.holes}")
+        parts.append(f"side={edge.side}")
+        parts.append(f"seed={edge.seed}")
+        return f"ragged({', '.join(parts)})"
+    if edge.mode == "spikes":
+        return f"spikes(width={edge.width}, min_len={edge.min_len}, max_len={edge.max_len}, side={edge.side}, seed={edge.seed})"
+    if edge.mode == "drip":
+        return f"drip(width={edge.width}, min_len={edge.min_len}, max_len={edge.max_len}, side={edge.side}, seed={edge.seed})"
+    if edge.mode == "scallop":
+        return f"scallop(bays={edge.bays}, depth={edge.depth}, side={edge.side})"
+    if edge.mode == "triangle_bay":
+        return f"triangle_bay(apex=[{_fn(edge.apex[0])}, {_fn(edge.apex[1])}], side={edge.side})"
+    return f"{edge.mode}(depth={edge.depth}, side={edge.side}, seed={edge.seed})"
+
+
+@dataclass(frozen=True)
 class Box:
     name: str
     size: Vec3Size
@@ -197,6 +264,9 @@ class Box:
     explicit_local_center: Vec3 | None = None
     explicit_contact_with: tuple[str, ...] = ()
     instance_name: str | None = None
+    edge: EdgeCutoutDecl | None = None
+    layer: int = 0
+    prism_group: str | None = None
 
     def __post_init__(self) -> None:
         if isinstance(self.uv_faces, (dict, list)) or self.uv_faces is None:
@@ -225,8 +295,16 @@ def Plane(
     uv_faces: Any = (),
     texture: str | None = None,
     blend_with: tuple[str, ...] = (),
+    edge: EdgeCutoutDecl | None = None,
+    layer: int = 0,
 ) -> Box:
-    """Construct a zero-thickness planar quad Box with 0 physical thickness along ``normal``."""
+    """Construct a zero-thickness planar quad Box with 0 physical thickness along ``normal``.
+
+    Note on 2D ``size`` ordering:
+    - ``normal: "x"`` -> ``size = [Y_height, Z_length]``
+    - ``normal: "y"`` -> ``size = [X_width, Z_length]``
+    - ``normal: "z"`` -> ``size = [X_width, Y_height]``
+    """
     if len(size) == 2:
         w, h = size[0], size[1]
         zero: int | float = 0 if (type(w) is int and type(h) is int) else 0.0
@@ -256,6 +334,8 @@ def Plane(
         uv_faces=uv_faces,
         texture=texture,
         blend_with=blend_with,
+        edge=edge,
+        layer=layer,
     )
 
 
@@ -329,6 +409,18 @@ class MaterialDecl:
     oxidation: float = 0.25
     biofilm: float = 0.20
     weld_group: str | None = None
+    coat: str | None = None
+
+
+@dataclass(frozen=True)
+class BandedShadeDecl:
+    """Discrete painterly cel-shading configuration for sculpted pixel art (ADR 0011)."""
+
+    steps: int = 4
+    direction: str = "down"
+    cluster: str = "diagonal"
+    top_highlight: bool = True
+    contact_shadow: bool = True
 
 
 @dataclass(frozen=True)
@@ -339,6 +431,26 @@ class StyleDecl:
     quantize_ramp: bool = True
     bevel_highlight: float = 0.08
     view_deg: float = 20.0
+    shade_mode: str = "physical"
+    banded: BandedShadeDecl | None = None
+    glow_bleed: int = 0
+
+
+@dataclass(frozen=True)
+class StampDecl:
+    """First-class parametric surface feature stamp in @stamps (eyes, pupils, teeth, vents, markings)."""
+
+    name: str
+    target_box: str
+    face: str
+    at: tuple[float, float]
+    size: tuple[float, float]
+    color: str
+    shape: str = "rect"
+    emissive: float = 0.0
+    mirror: bool = False
+    rows: int = 1
+    spacing: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -375,6 +487,7 @@ class IKChainDecl:
     hinge_axis: str = "x"
     bones: tuple[str, ...] = ()
     pole: Vec3 | None = None
+    plane: str | None = None
 
     def __post_init__(self) -> None:
         if not self.bones and self.upper and self.lower:
@@ -484,8 +597,27 @@ class SlideDriveDecl:
 
 
 @dataclass(frozen=True)
+class GaitDecl:
+    """Dimensionless Froude-scaled locomotion statement binding to @morphology roles (ADR 0011)."""
+
+    name: str
+    pattern: str = "lateral_sequence"
+    froude: float = 0.25
+    duty: float = 0.65
+    phase: tuple[tuple[str, float], ...] = ()
+    lift_ratio: float = 0.12
+    heave_ratio: float = 0.03
+    pitch_deg: float = 1.5
+    spine_wave_deg: float = 3.0
+    tail_lag: float = 0.2
+    weight: float = 0.5
+    snap: float = 0.3
+    export_root_motion: bool = False
+
+
+@dataclass(frozen=True)
 class ClipDecl:
-    """Named multi-channel biomechanical/mechanical/keyframe animation clip in @behavior."""
+    """Named multi-channel biomechanical/mechanical/keyframe/gait animation clip in @behavior."""
 
     name: str
     duration_s: float
@@ -495,6 +627,7 @@ class ClipDecl:
     ik_drives: tuple[IKDriveDecl, ...] = ()
     keyframes: tuple[KeyframeTrackDecl, ...] = ()
     slide_drives: tuple[SlideDriveDecl, ...] = ()
+    gaits: tuple[GaitDecl, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -562,6 +695,7 @@ class Program:
     controller: ControllerDecl | None = None
     assembly_spec: Any = None
     source_map: Any = None
+    stamps: tuple[StampDecl, ...] = ()
 
 
 def _finite_number(value: object) -> bool:
@@ -584,17 +718,59 @@ def _vec(value: Any, label: str, length: int = 3, unit: bool = False) -> None:
         raise DSLValidationError(f"{label}: anchor/align components must lie in [-1, 1]")
 
 
+def _is_continuous_limit_pair(pair: Any) -> bool:
+    return (
+        isinstance(pair, tuple)
+        and len(pair) == 2
+        and type(pair[0]) in (int, float)
+        and type(pair[1]) in (int, float)
+        and math.isinf(float(pair[0]))
+        and math.isinf(float(pair[1]))
+        and float(pair[0]) < 0.0 < float(pair[1])
+    )
+
+
 def _validate_joint_limits(limits: JointLimits, label: str) -> None:
     if not isinstance(limits, tuple) or len(limits) != 3:
-        raise DSLValidationError(f"{label}: expected 3 [min_deg, max_deg] pairs")
+        raise DSLValidationError(f"{label}: expected 3 [min_deg, max_deg] pairs or 'continuous'")
     for idx, pair in enumerate(limits):
+        if _is_continuous_limit_pair(pair):
+            continue
         if not isinstance(pair, tuple) or len(pair) != 2 or any(not _finite_number(v) for v in pair):
-            raise DSLValidationError(f"{label}[{idx}]: expected (min_deg, max_deg) finite pair")
+            raise DSLValidationError(f"{label}[{idx}]: expected (min_deg, max_deg) finite pair or 'continuous'")
         lo, hi = float(pair[0]), float(pair[1])
         if lo < -180.0 or hi > 180.0 or lo > 0.0 or hi < 0.0 or lo > hi:
             raise DSLValidationError(
-                f"{label}[{idx}]: joint_limits must satisfy -180 <= min_deg <= 0 <= max_deg <= 180"
+                f"{label}[{idx}]: joint_limits must satisfy -180 <= min_deg <= 0 <= max_deg <= 180 (or 'continuous')"
             )
+
+
+def _eval_track_angle_for_validation(
+    law: str,
+    time_s: float,
+    duration_s: float,
+    amp_deg: float,
+    freq_hz: float,
+    phase_deg: float,
+    bias_deg: float,
+) -> float:
+    u = (time_s * freq_hz + phase_deg / 360.0) % 1.0
+    two_pi_u = 2.0 * math.pi * u
+    if law == "wave":
+        return bias_deg + amp_deg * math.sin(two_pi_u)
+    if law == "flap":
+        return bias_deg + amp_deg * (math.sin(two_pi_u) + 0.20 * math.sin(2.0 * two_pi_u))
+    if law == "hinge":
+        return bias_deg + amp_deg * (0.5 - 0.5 * math.cos(two_pi_u))
+    if law == "impulse":
+        norm_t = min(1.0, max(0.0, time_s / max(1e-6, duration_s)))
+        env = math.sin(math.pi * norm_t) ** 2
+        return bias_deg + amp_deg * env * math.sin(two_pi_u)
+    if law == "spin":
+        return bias_deg + amp_deg * (time_s * freq_hz + phase_deg / 360.0)
+    if law == "piston":
+        return bias_deg + amp_deg * math.sin(two_pi_u)
+    return bias_deg
 
 
 def _validate_size_component(val: object, size_step: float, box_name: str) -> None:
@@ -651,6 +827,20 @@ def validate_program(program: Program) -> Program:
         raise DSLValidationError("units_per_block must be a positive integer in [1, 512]")
     if not isinstance(meta.dsl_version, str) or meta.dsl_version not in DSL_VERSIONS:
         raise DSLValidationError(f"unsupported dsl_version {meta.dsl_version!r}; expected one of {sorted(DSL_VERSIONS)}")
+    if meta.gravity is not None and (not _finite_number(meta.gravity) or float(meta.gravity) <= 0.0):
+        raise DSLValidationError("meta.gravity must be a positive finite number when specified")
+
+    has_v4_constructs = (
+        program.assembly_spec is not None
+        or meta.units_per_block != 16
+        or bool(program.kinematics is not None and program.kinematics.prismatic_joints)
+        or bool(program.behavior is not None and any(c.slide_drives for c in program.behavior.clips))
+    )
+    if has_v4_constructs and meta.dsl_version not in ("4.0", "4.1"):
+        raise DSLValidationError(
+            f"Block-DSL v4.0 features (@layout, @component, @assembly, prismatic_joint, slide, units_per_block) "
+            f"require dsl_version: \"4.0\" (or \"4.1\") in @meta; got {meta.dsl_version!r}"
+        )
     if not _finite_number(meta.size_step) or float(meta.size_step) not in ALLOWED_SIZE_STEPS:
         raise DSLValidationError(f"meta.size_step must be one of {sorted(ALLOWED_SIZE_STEPS)}")
     size_step = float(meta.size_step)
@@ -808,6 +998,8 @@ def validate_program(program: Program) -> Program:
                 )
             if type(attach.detached) is not bool or type(attach.joint_mode) is not bool:
                 raise DSLValidationError("detached and joint_mode must be booleans")
+            if not _finite_number(attach.seat) or not (0.0 <= float(attach.seat) <= 0.65):
+                raise DSLValidationError(f"bone {bone.name}: attach seat must lie in [0.0, 0.65]")
             if not attach.detached and not attach.joint_mode and any(abs(float(x)) > 0.5 for x in attach.offset):
                 raise DSLValidationError("connected attach offset must lie in [-0.5,0.5] on every axis")
             if any(bone.pivot_local):
@@ -926,6 +1118,17 @@ def validate_program(program: Program) -> Program:
                 raise DSLValidationError(f"box {item.name}: blend_with must contain unique valid partner box identifiers")
             if item.explicit_local_center is not None:
                 _vec(item.explicit_local_center, f"{item.name}.explicit_local_center")
+            if type(item.layer) is not int or not (-8 <= item.layer <= 8):
+                raise DSLValidationError(f"box {item.name}: layer must be an integer in [-8, 8]")
+            if item.layer != 0 and item.plane_normal is None:
+                raise DSLValidationError(f"box {item.name}: layer offset is only supported on zero-thickness plane elements")
+            if item.edge is not None:
+                if item.plane_normal is None:
+                    raise DSLValidationError(f"box {item.name}: edge cut-out is only supported on zero-thickness plane elements")
+                if not isinstance(item.edge, EdgeCutoutDecl) or item.edge.mode not in EDGE_CUTOUT_MODES:
+                    raise DSLValidationError(f"plane {item.name}: unknown edge cut-out mode {getattr(item.edge, 'mode', None)!r}")
+                if type(item.edge.depth) is not int or item.edge.depth < 0 or type(item.edge.holes) is not int or item.edge.holes < 0:
+                    raise DSLValidationError(f"plane {item.name}: edge depth and holes must be nonnegative integers")
             if item.component_rest_pos is not None:
                 _vec(item.component_rest_pos, f"{item.name}.component_rest_pos")
             if item.component_rest_euler is not None:
@@ -962,20 +1165,27 @@ def validate_program(program: Program) -> Program:
     for name in generated:
         claim(name)
 
-    # Build expanded bone parent map & expanded box set for @muscles/@kinematics/@behavior validation
+    # Build expanded bone parent map, joint limits map & expanded box set for @muscles/@kinematics/@behavior validation
     expanded_bone_parent: dict[str, str | None] = {}
+    expanded_bone_limits: dict[str, tuple[JointLimits | None, tuple[float, float, float]]] = {}
     expanded_boxes: set[str] = set()
     expanded_radial_counts: dict[str, int] = {}
     expanded_blend_specs: list[tuple[str | None, str, tuple[str, ...]]] = []
+
+    def _angle_sign_tuple(sign_xyz: tuple[float, float, float]) -> tuple[float, float, float]:
+        det = sign_xyz[0] * sign_xyz[1] * sign_xyz[2]
+        return (det * sign_xyz[0], det * sign_xyz[1], det * sign_xyz[2])
 
     def _collect_expanded_graph(
         bone: Bone,
         parent_name: str | None,
         prefix: str | None = None,
         renamed_root: str | None = None,
+        sign_xyz: tuple[float, float, float] = (1.0, 1.0, 1.0),
     ) -> None:
         bname = renamed_root or (f"{prefix}__{bone.name}" if prefix else bone.name)
         expanded_bone_parent[bname] = parent_name
+        expanded_bone_limits[bname] = (bone.joint_limits, _angle_sign_tuple(sign_xyz))
         for it in bone.items:
             if isinstance(it, Box):
                 full_bname = f"{prefix}__{it.name}" if prefix else it.name
@@ -986,10 +1196,18 @@ def validate_program(program: Program) -> Program:
                 if isinstance(it.radial, RadialSpec):
                     base_r = f"{prefix}__{it.name}" if prefix else it.name
                     expanded_radial_counts[base_r] = it.radial.count
-                _collect_expanded_graph(it, bname, prefix=prefix)
+                _collect_expanded_graph(it, bname, prefix=prefix, sign_xyz=sign_xyz)
                 for cr in _clone_roots_for_bone(it):
                     c_root = f"{prefix}__{cr}" if prefix else cr
-                    _collect_expanded_graph(it, bname, prefix=c_root, renamed_root=c_root)
+                    is_mir = bool(it.mirror_name and (cr == it.mirror_name or cr.startswith(f"{it.mirror_name}_r")))
+                    child_sign = sign_xyz
+                    if is_mir:
+                        child_sign = (
+                            (-sign_xyz[0], sign_xyz[1], sign_xyz[2])
+                            if it.mirror_axis == "x"
+                            else (sign_xyz[0], sign_xyz[1], -sign_xyz[2])
+                        )
+                    _collect_expanded_graph(it, bname, prefix=c_root, renamed_root=c_root, sign_xyz=child_sign)
 
     _collect_expanded_graph(program.root, None)
     for pref, full_bname, bw_targets in expanded_blend_specs:
@@ -1071,6 +1289,8 @@ def validate_program(program: Program) -> Program:
             raise DSLValidationError("biofilm must be >= 0.0")
         if mdecl.weld_group is not None and not _valid_ident(mdecl.weld_group):
             raise DSLValidationError(f"invalid weld_group identifier {mdecl.weld_group!r}")
+        if mdecl.coat is not None and (not isinstance(mdecl.coat, str) or mdecl.coat not in COAT_PATTERNS_DSL):
+            raise DSLValidationError(f"unknown coat pattern {mdecl.coat!r}; expected one of {sorted(COAT_PATTERNS_DSL)}")
 
     # Validate @style
     if program.style is not None:
@@ -1085,6 +1305,36 @@ def validate_program(program: Program) -> Program:
             raise DSLValidationError("bevel_highlight must be >= 0.0")
         if not _finite_number(sdecl.view_deg) or not (0.0 <= sdecl.view_deg <= 89.0):
             raise DSLValidationError("view_deg must lie in [0.0, 89.0]")
+        if not isinstance(sdecl.shade_mode, str) or sdecl.shade_mode not in SHADE_MODES_DSL:
+            raise DSLValidationError(f"unknown shade_mode {sdecl.shade_mode!r}; expected 'physical' or 'banded'")
+        if sdecl.banded is not None:
+            if not isinstance(sdecl.banded, BandedShadeDecl) or not (2 <= int(sdecl.banded.steps) <= 8):
+                raise DSLValidationError("banded shading steps must be an integer in [2, 8]")
+        if type(sdecl.glow_bleed) is not int or not (0 <= sdecl.glow_bleed <= 6):
+            raise DSLValidationError("glow_bleed must be an integer in [0, 6]")
+
+    # Validate @stamps
+    if not isinstance(program.stamps, tuple):
+        raise DSLValidationError("stamps must be a tuple of StampDecl objects")
+    for stp in program.stamps:
+        if not isinstance(stp, StampDecl):
+            raise DSLValidationError("stamps must contain StampDecl objects")
+        if not _valid_ident(stp.name):
+            raise DSLValidationError(f"invalid stamp identifier {stp.name!r}")
+        if stp.target_box not in expanded_boxes:
+            raise DSLValidationError(f"stamp {stp.name}: unknown target_box {stp.target_box!r}")
+        if stp.face not in FACES and stp.face not in STAMP_FACE_ALIASES:
+            raise DSLValidationError(f"stamp {stp.name}: unknown face {stp.face!r}")
+        _vec(stp.at, f"stamp.{stp.name}.at", 2)
+        _vec(stp.size, f"stamp.{stp.name}.size", 2)
+        if float(stp.size[0]) <= 0.0 or float(stp.size[1]) <= 0.0:
+            raise DSLValidationError(f"stamp {stp.name}: size must be positive")
+        if stp.color not in materials:
+            raise DSLValidationError(f"stamp {stp.name}: unknown palette color {stp.color!r}")
+        if not _finite_number(stp.emissive) or not (0.0 <= float(stp.emissive) <= 3.0):
+            raise DSLValidationError(f"stamp {stp.name}: emissive must lie in [0, 3]")
+        if type(stp.rows) is not int or not (1 <= stp.rows <= 64):
+            raise DSLValidationError(f"stamp {stp.name}: rows must be in [1, 64]")
 
     # Validate @muscles
     if not isinstance(program.muscles, tuple):
@@ -1180,6 +1430,8 @@ def validate_program(program: Program) -> Program:
                 _vec(ikc.pole, f"{ikc.name}.pole")
                 if math.sqrt(sum(float(v) * float(v) for v in ikc.pole)) <= 1e-6:
                     raise DSLValidationError(f"ik_chain {ikc.name}: pole vector must be nonzero")
+            if ikc.plane is not None and (not isinstance(ikc.plane, str) or ikc.plane not in IK_PLANES):
+                raise DSLValidationError(f"ik_chain {ikc.name}: plane must be one of {sorted(IK_PLANES)}")
         for lkc in kdecl.look_chains:
             if not isinstance(lkc, LookChainDecl):
                 raise DSLValidationError("look_chains must contain LookChainDecl objects")
@@ -1224,10 +1476,49 @@ def validate_program(program: Program) -> Program:
                 and not clip.ik_drives
                 and not clip.keyframes
                 and not clip.slide_drives
+                and not clip.gaits
             ):
                 raise DSLValidationError(
-                    f"clip {clip.name}: must contain at least one track, slide, key, muscle_drive, or ik_drive"
+                    f"clip {clip.name}: must contain at least one gait, track, slide, key, muscle_drive, or ik_drive"
                 )
+            for gd in clip.gaits:
+                if not isinstance(gd, GaitDecl):
+                    raise DSLValidationError("gaits must contain GaitDecl objects")
+                if not _valid_ident(gd.name):
+                    raise DSLValidationError(f"clip {clip.name}: invalid gait name {gd.name!r}")
+                if gd.pattern not in GAIT_PATTERNS:
+                    raise DSLValidationError(f"clip {clip.name}: unknown gait pattern {gd.pattern!r}")
+                if not _finite_number(gd.froude) or not (0.01 <= float(gd.froude) <= 10.0):
+                    raise DSLValidationError(f"clip {clip.name}: gait froude must lie in [0.01, 10.0]")
+                if not _finite_number(gd.duty) or not (0.15 <= float(gd.duty) <= 0.92):
+                    raise DSLValidationError(f"clip {clip.name}: gait duty must lie in [0.15, 0.92]")
+                if not _finite_number(gd.lift_ratio) or not (0.0 <= float(gd.lift_ratio) <= 0.65):
+                    raise DSLValidationError(f"clip {clip.name}: gait lift_ratio must lie in [0.0, 0.65]")
+                if not _finite_number(gd.heave_ratio) or not (0.0 <= float(gd.heave_ratio) <= 0.35):
+                    raise DSLValidationError(f"clip {clip.name}: gait heave_ratio must lie in [0.0, 0.35]")
+
+            prismatic_limits_by_bone: dict[str, tuple[str, tuple[float, float]]] = {}
+            if program.kinematics is not None:
+                for pj_ref in program.kinematics.prismatic_joints:
+                    prismatic_limits_by_bone[pj_ref.bone] = (pj_ref.axis, pj_ref.limits)
+            axis_to_idx = {"x": 0, "y": 1, "z": 2}
+
+            def _check_bone_rot_limit(bone_id: str, ax_i: int, deg_val: float, context_label: str) -> None:
+                lim_info = expanded_bone_limits.get(bone_id)
+                if lim_info is None or lim_info[0] is None:
+                    return
+                raw_pair = lim_info[0][ax_i]
+                if _is_continuous_limit_pair(raw_pair):
+                    return
+                s_ax = lim_info[1][ax_i]
+                lo_b, hi_b = sorted((float(raw_pair[0]) * s_ax, float(raw_pair[1]) * s_ax))
+                if deg_val < lo_b - 1e-4 or deg_val > hi_b + 1e-4:
+                    ax_ch = ("x", "y", "z")[ax_i]
+                    raise DSLValidationError(
+                        f"{context_label}: requested rotation {deg_val:.3f} deg on bone {bone_id!r} axis {ax_ch!r} "
+                        f"exceeds declared joint_limits [{lo_b:.3f}, {hi_b:.3f}] (use 'continuous' for unbounded rotors)"
+                    )
+
             for sd in clip.slide_drives:
                 if not isinstance(sd, SlideDriveDecl):
                     raise DSLValidationError("slide_drives must contain SlideDriveDecl objects")
@@ -1243,6 +1534,22 @@ def validate_program(program: Program) -> Program:
                     raise DSLValidationError(f"clip {clip.name}: slide freq_hz must lie in (0, 20]")
                 if not _finite_number(sd.phase_deg) or not _finite_number(sd.bias_units) or abs(float(sd.bias_units)) > 64.0:
                     raise DSLValidationError(f"clip {clip.name}: invalid slide phase_deg or bias_units")
+                if sd.bone in prismatic_limits_by_bone:
+                    p_ax, (p_lo, p_hi) = prismatic_limits_by_bone[sd.bone]
+                    if p_ax == sd.axis:
+                        for k_s in range(49):
+                            t_s = float(clip.duration_s) * (k_s / 48.0)
+                            u_sd = (t_s * float(sd.freq_hz) + float(sd.phase_deg) / 360.0) % 1.0
+                            if sd.law in ("piston", "wave"):
+                                u_val = float(sd.bias_units) + float(sd.amp_units) * math.sin(2.0 * math.pi * u_sd)
+                            elif sd.law == "hinge":
+                                u_val = float(sd.bias_units) + float(sd.amp_units) * (0.5 - 0.5 * math.cos(2.0 * math.pi * u_sd))
+                            else:
+                                u_val = float(sd.bias_units) + float(sd.amp_units) * (math.sin(math.pi * u_sd) ** 4)
+                            if u_val < p_lo - 1e-4 or u_val > p_hi + 1e-4:
+                                raise DSLValidationError(
+                                    f"clip {clip.name}: slide on {sd.bone!r} reaches {u_val:.3f}u, exceeding prismatic limits [{p_lo:.3f}, {p_hi:.3f}]"
+                                )
             for tr in clip.tracks:
                 if not isinstance(tr, TrackDecl):
                     raise DSLValidationError("tracks must contain TrackDecl objects")
@@ -1261,6 +1568,13 @@ def validate_program(program: Program) -> Program:
                     raise DSLValidationError(f"clip {clip.name}: track freq_hz must lie in (0, 20]")
                 if not _finite_number(tr.phase_deg) or not _finite_number(tr.bias_deg) or abs(tr.bias_deg) > 90.0:
                     raise DSLValidationError(f"clip {clip.name}: invalid phase_deg or bias_deg")
+                ax_i = axis_to_idx[tr.axis]
+                for k_s in range(49):
+                    t_s = float(clip.duration_s) * (k_s / 48.0)
+                    deg_v = _eval_track_angle_for_validation(
+                        tr.law, t_s, float(clip.duration_s), float(tr.amp_deg), float(tr.freq_hz), float(tr.phase_deg), float(tr.bias_deg)
+                    )
+                    _check_bone_rot_limit(tr.bone, ax_i, deg_v, f"clip {clip.name} track")
             for kf in clip.keyframes:
                 if not isinstance(kf, KeyframeTrackDecl):
                     raise DSLValidationError("keyframes must contain KeyframeTrackDecl objects")
@@ -1285,6 +1599,37 @@ def validate_program(program: Program) -> Program:
                     _vec(k_entry[1], f"{clip.name}.{kf.bone}.{kf.channel}[{t_val}]")
                     if kf.channel == "scale" and any(float(s) <= 0.0 for s in k_entry[1]):
                         raise DSLValidationError(f"clip {clip.name}: scale keyframes must be positive")
+                    if kf.channel == "rotation" and kf.bone != root_bone_name:
+                        for ax_k in range(3):
+                            _check_bone_rot_limit(kf.bone, ax_k, float(k_entry[1][ax_k]), f"clip {clip.name} keyframe[{t_val}]")
+                    if kf.channel == "position" and kf.bone in prismatic_limits_by_bone:
+                        p_ax, (p_lo, p_hi) = prismatic_limits_by_bone[kf.bone]
+                        pv = float(k_entry[1][axis_to_idx[p_ax]])
+                        if pv < p_lo - 1e-4 or pv > p_hi + 1e-4:
+                            raise DSLValidationError(
+                                f"clip {clip.name}: position keyframe[{t_val}] on {kf.bone!r} ({pv:.3f}u) exceeds prismatic limits [{p_lo:.3f}, {p_hi:.3f}]"
+                            )
+                if kf.interpolation == "catmullrom" and len(kf.keys) >= 3 and kf.channel == "rotation" and kf.bone != root_bone_name:
+                    for seg_idx in range(len(kf.keys) - 1):
+                        p0 = kf.keys[max(0, seg_idx - 1)][1]
+                        p1 = kf.keys[seg_idx][1]
+                        p2 = kf.keys[seg_idx + 1][1]
+                        p3 = kf.keys[min(len(kf.keys) - 1, seg_idx + 2)][1]
+                        t_seg0 = float(kf.keys[seg_idx][0])
+                        t_seg1 = float(kf.keys[seg_idx + 1][0])
+                        for sub_u_i in range(1, 8):
+                            u_cr = sub_u_i / 8.0
+                            u2 = u_cr * u_cr
+                            u3 = u2 * u_cr
+                            t_mid = t_seg0 + u_cr * (t_seg1 - t_seg0)
+                            for ax_k in range(3):
+                                v_cr = 0.5 * (
+                                    2.0 * float(p1[ax_k])
+                                    + (-float(p0[ax_k]) + float(p2[ax_k])) * u_cr
+                                    + (2.0 * float(p0[ax_k]) - 5.0 * float(p1[ax_k]) + 4.0 * float(p2[ax_k]) - float(p3[ax_k])) * u2
+                                    + (-float(p0[ax_k]) + 3.0 * float(p1[ax_k]) - 3.0 * float(p2[ax_k]) + float(p3[ax_k])) * u3
+                                )
+                                _check_bone_rot_limit(kf.bone, ax_k, v_cr, f"clip {clip.name} catmullrom[{t_mid:.3f}]")
             for md in clip.muscle_drives:
                 if not isinstance(md, MuscleDriveDecl):
                     raise DSLValidationError("muscle_drives must contain MuscleDriveDecl objects")
@@ -1316,6 +1661,18 @@ def validate_program(program: Program) -> Program:
                 if bname not in expanded_bone_parent or bname == root_bone_name:
                     raise DSLValidationError(f"state {st.name}: pose_bias references unknown or root bone {bname!r}")
                 _vec(pb, f"{st.name}.pose_bias.{bname}")
+                lim_st = expanded_bone_limits.get(bname)
+                if lim_st is not None and lim_st[0] is not None:
+                    for ax_st in range(3):
+                        raw_p = lim_st[0][ax_st]
+                        if _is_continuous_limit_pair(raw_p):
+                            continue
+                        s_st = lim_st[1][ax_st]
+                        lo_s, hi_s = sorted((float(raw_p[0]) * s_st, float(raw_p[1]) * s_st))
+                        if float(pb[ax_st]) < lo_s - 1e-4 or float(pb[ax_st]) > hi_s + 1e-4:
+                            raise DSLValidationError(
+                                f"state {st.name}: pose_bias on {bname!r} axis {('x','y','z')[ax_st]} ({pb[ax_st]}) exceeds joint_limits [{lo_s}, {hi_s}]"
+                            )
             for mname, tone in st.muscle_tones:
                 if mname not in declared_muscles:
                     raise DSLValidationError(f"state {st.name}: muscle_tone references undeclared muscle {mname!r}")

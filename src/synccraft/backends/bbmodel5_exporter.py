@@ -37,9 +37,11 @@ def _serialize_bbmodel_animations(
     asset_name: str,
     num_animation_frames: int,
 ) -> list[dict[str, Any]]:
+    from synccraft.dsl.ast_nodes import validate_program
     from synccraft.kinematics.musculoskeletal import evaluate_behavior_clip
     from .bedrock_gecko_exporter import _extract_so3_euler_keyframe_deltas
 
+    validate_program(program)
     n_frames = max(4, int(num_animation_frames))
     root_bone_name = scene.bones[0].name
     animations_out: list[dict[str, Any]] = []
@@ -89,7 +91,7 @@ def _serialize_bbmodel_animations(
                     "color": -1,
                     "interpolation": "linear",
                 })
-            if clip.loop and not any(abs(d.stride) > 1e-6 for d in clip.ik_drives):
+            if clip.loop and not any(abs(d.stride) > 1e-6 for d in clip.ik_drives) and not getattr(clip, "gaits", ()):
                 tx0, ty0, tz0 = samples[0].root_translation_delta
                 pos_kfs.append({
                     "channel": "position",
@@ -104,6 +106,10 @@ def _serialize_bbmodel_animations(
                 {"name": root_bone_name, "type": "bone", "keyframes": []},
             )["keyframes"].extend(pos_kfs)
 
+        tracks_by_bone: dict[str, list[Any]] = {}
+        for tr in clip.tracks:
+            tracks_by_bone.setdefault(tr.bone, []).append(tr)
+
         for bone in scene.bones:
             bname = bone.name
             if (bname, "rotation") in explicit_kf_channels:
@@ -112,6 +118,7 @@ def _serialize_bbmodel_animations(
             if max(max(abs(v[0]), abs(v[1]), abs(v[2])) for v in frame_vecs) < 1e-4:
                 continue
             b_uid = stable_uuid("bone", bname, asset_name)
+            b_tracks = tracks_by_bone.get(bname, [])
             rot_kfs: list[dict[str, Any]] = []
             for k_i, (s, vec_d) in enumerate(zip(samples, frame_vecs)):
                 rot_kfs.append({
@@ -128,8 +135,11 @@ def _serialize_bbmodel_animations(
                 })
             if clip.loop:
                 v_last = np.asarray(frame_vecs[-1], dtype=np.float64)
-                v0_arr = np.asarray(frame_vecs[0], dtype=np.float64)
-                v_wrap = v_last + (((v0_arr - v_last) + 180.0) % 360.0 - 180.0)
+                if any(tr.law == "spin" for tr in b_tracks) and len(frame_vecs) >= 2:
+                    v_wrap = v_last + (v_last - np.asarray(frame_vecs[-2], dtype=np.float64))
+                else:
+                    v0_arr = np.asarray(frame_vecs[0], dtype=np.float64)
+                    v_wrap = v_last + (((v0_arr - v_last) + 180.0) % 360.0 - 180.0)
                 rot_kfs.append({
                     "channel": "rotation",
                     "data_points": [{
@@ -186,7 +196,7 @@ def _serialize_bbmodel_animations(
                 {"name": bname, "type": "bone", "keyframes": []},
             )["keyframes"].extend(p_kfs)
 
-        animations_out.append({
+        anim_dict_bb: dict[str, Any] = {
             "uuid": stable_uuid("animation", clip.name, asset_name),
             "name": clip.name,
             "loop": "loop" if clip.loop else "once",
@@ -195,7 +205,17 @@ def _serialize_bbmodel_animations(
             "snapping": 24,
             "selected": False,
             "animators": animators,
-        })
+        }
+        if samples and any(abs(float(c)) > 1e-6 for c in getattr(samples[0], "root_motion_velocity", (0.0, 0.0, 0.0))):
+            rm_v = samples[0].root_motion_velocity
+            upb = float(getattr(program.meta, "units_per_block", 16))
+            spd_u = float(np.linalg.norm(np.asarray(rm_v, dtype=np.float64)))
+            anim_dict_bb["synccraft_root_motion"] = {
+                "speed_units_per_s": round(spd_u, 4),
+                "speed_blocks_per_s": round(spd_u / max(1.0, upb), 4),
+                "velocity_vec": [round(float(rm_v[0]), 4), round(float(rm_v[1]), 4), round(float(rm_v[2]), 4)],
+            }
+        animations_out.append(anim_dict_bb)
 
     return animations_out
 

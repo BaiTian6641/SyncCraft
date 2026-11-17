@@ -479,16 +479,20 @@ def evaluate_posed_surface_kinematics(
 
     # Precompute world AABBs for fast OBB neighbor culling
     box_list = list(posed_scene.boxes)
-    aabbs_lo = np.zeros((len(box_list), 3), dtype=np.float64)
-    aabbs_hi = np.zeros((len(box_list), 3), dtype=np.float64)
+    n_boxes = len(box_list)
+    aabbs_lo = np.zeros((n_boxes, 3), dtype=np.float64)
+    aabbs_hi = np.zeros((n_boxes, 3), dtype=np.float64)
+    box_idx_map: dict[str, int] = {}
     for idx, b in enumerate(box_list):
-        corners = b.corners(include_inflate=True)
-        aabbs_lo[idx] = corners.min(axis=0)
-        aabbs_hi[idx] = corners.max(axis=0)
+        box_idx_map[b.name] = idx
+        world_half = np.abs(b.rotation) @ b.half_extents
+        aabbs_lo[idx] = b.center - world_half
+        aabbs_hi[idx] = b.center + world_half
 
     results: dict[FaceKey, PosedFaceKinematics] = {}
     for fk, grid in domain.faces.items():
         pbox: WorldBox = posed_boxes[grid.box_name]
+        self_idx = box_idx_map[pbox.name]
         rot = np.asarray(pbox.rotation, dtype=np.float64)
         ctr = np.asarray(pbox.center, dtype=np.float64)
 
@@ -502,11 +506,10 @@ def evaluate_posed_surface_kinematics(
         p_lo = w_pos.reshape(-1, 3).min(axis=0) - ao_radius
         p_hi = w_pos.reshape(-1, 3).max(axis=0) + ao_radius
 
-        for idx, other in enumerate(box_list):
-            if other.name == pbox.name:
-                continue
-            if np.any(aabbs_hi[idx] < p_lo) or np.any(aabbs_lo[idx] > p_hi):
-                continue
+        cand_mask = np.all((aabbs_hi >= p_lo) & (aabbs_lo <= p_hi), axis=-1)
+        cand_mask[self_idx] = False
+        for idx in np.nonzero(cand_mask)[0].tolist():
+            other = box_list[idx]
 
             o_rot = np.asarray(other.rotation, dtype=np.float64)
             o_ctr = np.asarray(other.center, dtype=np.float64)

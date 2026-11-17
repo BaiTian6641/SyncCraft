@@ -259,6 +259,9 @@ def _serialize_behavior_animations(
 ) -> dict[str, Any] | None:
     if program is None or getattr(program, "behavior", None) is None or not program.behavior.clips:
         return None
+    from synccraft.dsl.ast_nodes import validate_program
+
+    validate_program(program)
     if animation_mode not in ("keyframes", "molang"):
         raise ExportError(f"Unsupported animation_mode {animation_mode!r}; expected 'keyframes' or 'molang'")
 
@@ -319,6 +322,7 @@ def _serialize_behavior_animations(
                 bones_payload.setdefault(kf_tr.bone, {})[kf_tr.channel] = ch_dict
 
         # Root translation keyframes when forward gait / heave is non-zero (Bedrock negates position X!)
+        has_forward_locomotion = any(abs(d.stride) > 1e-6 for d in clip.ik_drives) or bool(getattr(clip, "gaits", ()))
         if (root_bone_name, "position") not in explicit_kf_channels and any(
             math.hypot(s.root_translation_delta[0], math.hypot(s.root_translation_delta[1], s.root_translation_delta[2])) > 1e-5
             for s in samples
@@ -327,7 +331,7 @@ def _serialize_behavior_animations(
             for s in samples:
                 p_bed = sync_point_to_bedrock(s.root_translation_delta)
                 pos_kfs[_fmt_time_key(s.time_s)] = vector([round(float(x), 4) for x in p_bed])
-            if clip.loop and not any(abs(d.stride) > 1e-6 for d in clip.ik_drives):
+            if clip.loop and not has_forward_locomotion:
                 p0_bed = sync_point_to_bedrock(samples[0].root_translation_delta)
                 pos_kfs[_fmt_time_key(clip.duration_s)] = vector([round(float(x), 4) for x in p0_bed])
             bones_payload.setdefault(root_bone_name, {})["position"] = pos_kfs
@@ -432,11 +436,26 @@ def _serialize_behavior_animations(
             bones_payload.setdefault(bname, {})["position"] = pos_kfs_b
 
         full_clip_key = clip.name if clip.name.startswith("animation.") else f"animation.{short_asset_id}.{clip.name}"
-        animations_dict[full_clip_key] = {
+        clip_entry: dict[str, Any] = {
             "loop": bool(clip.loop),
             "animation_length": round(float(clip.duration_s), 4),
             "bones": bones_payload,
         }
+        if samples and any(abs(float(c)) > 1e-6 for c in getattr(samples[0], "root_motion_velocity", (0.0, 0.0, 0.0))):
+            rm_v = samples[0].root_motion_velocity
+            upb = float(getattr(program.meta, "units_per_block", 16))
+            spd_u = math.hypot(rm_v[0], math.hypot(rm_v[1], rm_v[2]))
+            clip_entry["synccraft_root_motion"] = {
+                "speed_units_per_s": round(spd_u, 4),
+                "speed_blocks_per_s": round(spd_u / max(1.0, upb), 4),
+                "velocity_vec": [round(float(rm_v[0]), 4), round(float(rm_v[1]), 4), round(float(rm_v[2]), 4)],
+                "displacement_per_cycle": [
+                    round(float(rm_v[0]) * float(clip.duration_s), 4),
+                    round(float(rm_v[1]) * float(clip.duration_s), 4),
+                    round(float(rm_v[2]) * float(clip.duration_s), 4),
+                ],
+            }
+        animations_dict[full_clip_key] = clip_entry
 
     return {
         "format_version": "1.8.0",
@@ -545,6 +564,11 @@ def _export_bedrock_or_gecko_common(
                 uv_faces: dict[str, dict[str, list[float]]] = {}
                 for face in FACES:
                     u0, v0, u1, v1 = face_uv(atlas, box.name, face, normalized=False)
+                    # Native per-face UVs use the Blockbench convention. Bedrock
+                    # reverses both chart axes on up/down faces; preserve the
+                    # painted image when the emitted geometry is imported.
+                    if face in ("up", "down"):
+                        u0, v0, u1, v1 = u1, v1, u0, v0
                     uv_faces[face] = {
                         "uv": vector([u0, v0]),
                         "uv_size": vector([u1 - u0, v1 - v0]),
@@ -554,6 +578,8 @@ def _export_bedrock_or_gecko_common(
                 uv_faces_ast: dict[str, dict[str, Any]] = {}
                 for face, rect in box.uv_faces.items():
                     u0, v0, u1, v1 = rect[:4]
+                    if face in ("up", "down"):
+                        u0, v0, u1, v1 = u1, v1, u0, v0
                     f_spec: dict[str, Any] = {
                         "uv": vector([u0, v0]),
                         "uv_size": vector([u1 - u0, v1 - v0]),

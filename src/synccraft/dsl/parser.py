@@ -26,12 +26,16 @@ from typing import Any
 from .ast_nodes import (
     ALLOWED_SIZE_STEPS,
     AXES_3D,
+    CONTINUOUS_AXIS_LIMIT,
+    CONTINUOUS_JOINT_LIMITS,
     CONTROLLER_OPS,
     DSLValidationError,
+    EDGE_CUTOUT_MODES,
     FACE_ORDER,
     FACES,
     KEYFRAME_INTERPOLATIONS,
     Attach,
+    BandedShadeDecl,
     BehaviorDecl,
     BehaviorStateDecl,
     Bone,
@@ -39,6 +43,8 @@ from .ast_nodes import (
     ClipDecl,
     ControllerDecl,
     ControllerTransitionDecl,
+    EdgeCutoutDecl,
+    GaitDecl,
     IKChainDecl,
     IKDriveDecl,
     Joint,
@@ -60,6 +66,7 @@ from .ast_nodes import (
     RadialSpec,
     SlideDriveDecl,
     SpringDecl,
+    StampDecl,
     StyleDecl,
     TendonCoupling,
     TextureDecl,
@@ -67,6 +74,8 @@ from .ast_nodes import (
     UVRect,
     UnsupportedFeature,
     Vec3,
+    _is_continuous_limit_pair,
+    format_edge_cutout,
     validate_program,
 )
 from .assembly_ir import (
@@ -119,15 +128,21 @@ class _MacroDef:
 _LEXER = re.compile(
     r"(?P<SPACE>\s+)|(?P<COMMENT>//[^\n]*|\#[^\n]*)|"
     r'(?P<STRING>"(?:[^"\\]|\\.)*")|'
-    r"(?P<ARROW>->)|(?P<CMP>>=|<=|==|!=|>|<)|"
-    r"(?P<NUMBER>(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)|"
+    r"(?P<ARROW>->)|(?P<RANGE>\.\.)|(?P<CMP>>=|<=|==|!=|>|<)|"
+    r"(?P<NUMBER>(?:\d+\.\d+|\d+\.(?!\.)|\.\d+|\d+)(?:[eE][+-]?\d+)?)|"
     r"(?P<IDENT>[A-Za-z_][A-Za-z0-9_]*)|(?P<PUNCT>[@{}()\[\]:,=.;*/+-])"
 )
 
 
+MAX_SOURCE_BYTES = 16_000_000
+MAX_LEXICAL_TOKENS = 2_000_000
+
+
 def _tokens(text: str) -> list[_Token]:
-    if len(text.encode("utf-8")) > 2_000_000:
-        raise DSLParseError("input exceeds 2 MB starter limit", 1, 1)
+    # The experimental dataset budget applies only to UTF-8 Block-DSL source.
+    # Whitespace/comments consume bytes, but not lexical tokens; EOF is synthetic.
+    if len(text.encode("utf-8")) > MAX_SOURCE_BYTES:
+        raise DSLParseError(f"input exceeds {MAX_SOURCE_BYTES:,}-byte Block-DSL limit", 1, 1)
     result: list[_Token] = []
     pos, line, column = 0, 1, 1
     while pos < len(text):
@@ -144,8 +159,8 @@ def _tokens(text: str) -> list[_Token]:
         else:
             column += len(word)
         pos = match.end()
-        if len(result) > 200_000:
-            raise DSLParseError("input exceeds 200,000-token starter limit", line, column)
+        if len(result) > MAX_LEXICAL_TOKENS:
+            raise DSLParseError(f"input exceeds {MAX_LEXICAL_TOKENS:,}-token Block-DSL limit", line, column)
     result.append(_Token("<EOF>", "EOF", line, column))
     return result
 
@@ -429,6 +444,8 @@ class _Parser:
             "uv_policy",
             "box",
             "plane",
+            "octagon",
+            "prism",
             "locator",
             "bone",
             "frame",
@@ -503,15 +520,25 @@ class _Parser:
         self.take("]")
         return tuple(items)
 
+    def _axis_limit_pair(self) -> tuple[float, float]:
+        if self.at("continuous"):
+            self.take("continuous")
+            return CONTINUOUS_AXIS_LIMIT
+        pair = self.vector(2)
+        return (float(pair[0]), float(pair[1]))
+
     def joint_limits_matrix(self) -> JointLimits:
+        if self.at("continuous"):
+            self.take("continuous")
+            return CONTINUOUS_JOINT_LIMITS
         self.take("[")
-        rx = self.vector(2)
+        rx = self._axis_limit_pair()
         self.take(",")
-        ry = self.vector(2)
+        ry = self._axis_limit_pair()
         self.take(",")
-        rz = self.vector(2)
+        rz = self._axis_limit_pair()
         self.take("]")
-        return ((float(rx[0]), float(rx[1])), (float(ry[0]), float(ry[1])), (float(rz[0]), float(rz[1])))
+        return (rx, ry, rz)
 
     def field(self, name: str, separator: str = ":") -> None:
         self.take(name)
@@ -592,6 +619,7 @@ class _Parser:
         size_step = 1.0
         audit_profile = "strict"
         units_per_block = 16
+        gravity: float | None = None
         seen_fields: set[str] = set()
         while not self.at("}"):
             key = self.ident()
@@ -607,6 +635,8 @@ class _Parser:
                 density = int(self.number(integer=True))
             elif key == "units_per_block":
                 units_per_block = int(self.number(integer=True))
+            elif key == "gravity":
+                gravity = float(self.number())
             elif key == "dsl_version":
                 if self.token.kind == "STRING":
                     dsl_version = self.string_literal()
@@ -642,6 +672,7 @@ class _Parser:
             size_step=size_step,
             audit_profile=audit_profile,
             units_per_block=units_per_block,
+            gravity=gravity,
         )
 
     def textures_decl(self) -> list[TextureDecl]:
@@ -672,6 +703,9 @@ class _Parser:
         max_atlas_px: int | None = None
         max_span: Vec3 | None = None
         min_ground_y: float | None = None
+        grounded = False
+        ground_y = 0.0
+        ground_tol = 0.15
 
         while not self.at("}"):
             if self.at("param"):
@@ -727,6 +761,12 @@ class _Parser:
                     max_span = (float(sv[0]), float(sv[1]), float(sv[2]))
                 elif ekey == "min_ground_y":
                     min_ground_y = float(self.number())
+                elif ekey == "grounded":
+                    grounded = self.boolean()
+                elif ekey == "ground_y":
+                    ground_y = float(self.number())
+                elif ekey == "ground_tol":
+                    ground_tol = float(self.number())
                 else:
                     self.fail(f"unknown @layout envelope key {ekey!r}")
                 self.maybe_take(";")
@@ -738,12 +778,81 @@ class _Parser:
             params=tuple(params),
             lets=tuple(lets),
             budget=BudgetSpec(max_boxes=max_boxes, max_bones=max_bones, max_atlas_px=max_atlas_px),
-            envelope=EnvelopeSpec(max_span=max_span, min_ground_y=min_ground_y),
+            envelope=EnvelopeSpec(
+                max_span=max_span,
+                min_ground_y=min_ground_y,
+                grounded=grounded,
+                ground_y=ground_y,
+                ground_tol=ground_tol,
+            ),
         )
         # Bind evaluated layout values into `self.env` so @palette/@kinematics/@behavior expressions can read them too!
         for k, v in evaluate_layout_dag(layout_decl).items():
             self.env[k] = v
         return layout_decl
+
+    def _parse_edge_cutout(self) -> EdgeCutoutDecl:
+        mode = self.ident()
+        if mode not in EDGE_CUTOUT_MODES:
+            self.fail(f"unknown plane edge mode {mode!r}; expected one of {sorted(EDGE_CUTOUT_MODES)}")
+        depth = 2
+        holes = 0
+        width = 2
+        min_len = 1
+        max_len = 4
+        bays = 3
+        side = "right"
+        seed = 7
+        apex: tuple[float, float] = (0.0, 0.5)
+        if self.maybe_take("("):
+            while not self.at(")"):
+                ek = self.ident()
+                self.take("=")
+                if ek == "depth":
+                    dv = float(self.number())
+                    depth = max(1, int(round(dv * 8.0))) if (0.0 < dv < 1.0) else int(round(dv))
+                elif ek == "holes":
+                    holes = int(self.number(integer=True))
+                elif ek == "width":
+                    width = int(self.number(integer=True))
+                elif ek in ("bays", "count"):
+                    bays = int(self.number(integer=True))
+                elif ek == "min_len":
+                    min_len = int(self.number(integer=True))
+                elif ek == "max_len":
+                    max_len = int(self.number(integer=True))
+                elif ek == "length":
+                    lo_l = int(round(float(self.number())))
+                    if self.token.kind == "RANGE":
+                        self.index += 1
+                        hi_l = int(round(float(self.number())))
+                        min_len, max_len = lo_l, hi_l
+                    else:
+                        min_len, max_len = max(1, lo_l // 2), max(1, lo_l)
+                elif ek in ("side", "base"):
+                    side = self.ident()
+                elif ek == "seed":
+                    seed = int(self.number(integer=True))
+                elif ek == "apex":
+                    av = self.vector(2)
+                    apex = (float(av[0]), float(av[1]))
+                else:
+                    self.fail(f"unexpected edge({mode}) argument {ek!r}")
+                if not self.maybe_take(","):
+                    break
+            self.take(")")
+        return EdgeCutoutDecl(
+            mode=mode,
+            depth=depth,
+            holes=holes,
+            width=width,
+            min_len=min_len,
+            max_len=max_len,
+            bays=bays,
+            side=side,
+            seed=seed,
+            apex=apex,
+        )
 
     def _parse_component_box_or_plane(self, is_plane_kw: bool) -> ComponentBoxTemplate:
         self.take("plane" if is_plane_kw else "box")
@@ -782,6 +891,12 @@ class _Parser:
         piv_e: tuple[str, str, str] | None = None
         cull: tuple[str, ...] = ()
         blend_w: tuple[str, ...] = ()
+        uv: tuple[float, float] | None = None
+        uv_faces: tuple[tuple[str, UVRect], ...] = ()
+        texture: str | None = None
+        edge_decl: EdgeCutoutDecl | None = None
+        layer_v = 0
+        prism_grp: str | None = None
         while not self.at("}"):
             fk = self.ident()
             self.take(":")
@@ -801,6 +916,24 @@ class _Parser:
                 cull = self.ident_list()
             elif fk == "blend_with":
                 blend_w = self.ident_list()
+            elif fk == "texture":
+                texture = self.ident()
+            elif fk == "uv_faces":
+                uv_faces = self._parse_uv_faces_dict()
+            elif fk == "uv":
+                self.take("box")
+                self.take("(")
+                u = float(self.number())
+                self.take(",")
+                v = float(self.number())
+                self.take(")")
+                uv = (u, v)
+            elif fk == "edge":
+                edge_decl = self._parse_edge_cutout()
+            elif fk == "layer":
+                layer_v = int(self.number(integer=True))
+            elif fk == "prism_group":
+                prism_grp = self.string_literal() if self.token.kind == "STRING" else self.ident()
             else:
                 self.fail(f"unexpected @component box/plane field {fk!r}")
             self.maybe_take(",")
@@ -823,7 +956,114 @@ class _Parser:
             cullface=cull,
             blend_with=blend_w,
             plane_normal=p_norm,
+            uv=uv,
+            uv_faces=uv_faces,
+            texture=texture,
+            edge=edge_decl,
+            layer=layer_v,
+            prism_group=prism_grp,
         )
+
+    def _parse_component_octagon_or_prism(self, is_prism: bool) -> list[ComponentBoxTemplate]:
+        self.take("prism" if is_prism else "octagon")
+        sides = 8
+        if is_prism and self.maybe_take("("):
+            sides = int(self.number(integer=True))
+            self.take(")")
+        bname = self.ident()
+        has_place = False
+        p_base: str | None = None
+        p_anc: tuple[str, str, str] = ("0", "0", "0")
+        p_alg: tuple[str, str, str] = ("0", "0", "0")
+        p_off: tuple[str, str, str] = ("0", "0", "0")
+        if self.at("place"):
+            has_place = True
+            self.take("place")
+            self.take("(")
+            while not self.at(")"):
+                pk = self.ident()
+                self.take("=")
+                if pk == "base_box":
+                    p_base = self.ident()
+                elif pk == "anchor":
+                    p_anc = self._capture_symbolic_vec(3)  # type: ignore[assignment]
+                elif pk == "align":
+                    p_alg = self._capture_symbolic_vec(3)  # type: ignore[assignment]
+                elif pk == "offset":
+                    p_off = self._capture_symbolic_vec(3)  # type: ignore[assignment]
+                else:
+                    self.fail(f"unexpected place argument {pk!r}")
+                if not self.maybe_take(","):
+                    break
+            self.take(")")
+        self.take("{")
+        sz_exprs: tuple[str, ...] | None = None
+        mat_slot: str | None = None
+        axis = "z"
+        inf_expr = "0"
+        rot_e: tuple[str, str, str] = ("0", "0", "0")
+        piv_e: tuple[str, str, str] | None = None
+        cull: tuple[str, ...] = ()
+        blend_w: tuple[str, ...] = ()
+        while not self.at("}"):
+            fk = self.ident()
+            self.take(":")
+            if fk == "size":
+                sz_exprs = self._capture_symbolic_vec(3)
+            elif fk in ("material", "mat"):
+                mat_slot = self.ident()
+            elif fk == "axis":
+                axis = self.ident()
+            elif fk == "sides":
+                sides = int(self.number(integer=True))
+            elif fk == "inflate":
+                inf_expr = self._capture_symbolic_expr()
+            elif fk == "rotate":
+                rot_e = self._capture_symbolic_vec(3)  # type: ignore[assignment]
+            elif fk == "pivot":
+                piv_e = self._capture_symbolic_vec(3)  # type: ignore[assignment]
+            elif fk == "cullface":
+                cull = self.ident_list()
+            elif fk == "blend_with":
+                blend_w = self.ident_list()
+            else:
+                self.fail(f"unexpected @component octagon/prism field {fk!r}")
+            self.maybe_take(",")
+        self.take("}")
+        if sz_exprs is None or mat_slot is None or axis not in AXES_3D:
+            self.fail(f"@component prism/octagon {bname!r} requires size, material, and valid axis")
+        if sides < 6 or sides % 2 != 0:
+            raise DSLValidationError(f"prism {bname!r}: sides must be an even integer >= 6, got {sides}")
+        n_boxes = max(2, sides // 4) if sides % 4 == 0 else sides // 2
+        step_deg = (90.0 / n_boxes) if sides % 4 == 0 else (180.0 / n_boxes)
+        ax_idx = {"x": 0, "y": 1, "z": 2}[axis]
+        grp = f"prism_{bname}"
+        out: list[ComponentBoxTemplate] = []
+        for k in range(n_boxes):
+            delta = round(k * step_deg, 6)
+            cur_rot = list(rot_e)
+            if delta != 0.0:
+                cur_rot[ax_idx] = f"({cur_rot[ax_idx]}) + {delta:g}" if cur_rot[ax_idx].strip() not in ("0", "0.0") else f"{delta:g}"
+            out.append(
+                ComponentBoxTemplate(
+                    name=bname if k == 0 else f"{bname}_facet_{k}",
+                    is_plane=False,
+                    size_exprs=sz_exprs,  # type: ignore[arg-type]
+                    material_slot=mat_slot,
+                    place_base=p_base if k == 0 else bname,
+                    place_anchor=p_anc if k == 0 else ("0", "0", "0"),
+                    place_align=p_alg if k == 0 else ("0", "0", "0"),
+                    place_offset=p_off if k == 0 else ("0", "0", "0"),
+                    has_place=has_place if k == 0 else True,
+                    inflate_expr=inf_expr,
+                    rotate_exprs=(cur_rot[0], cur_rot[1], cur_rot[2]),
+                    pivot_exprs=piv_e if k == 0 else None,
+                    cullface=cull,
+                    blend_with=blend_w if k == 0 else (),
+                    prism_group=grp,
+                )
+            )
+        return out
 
     def _parse_component_locator(self) -> ComponentLocatorTemplate:
         self.take("locator")
@@ -858,6 +1098,7 @@ class _Parser:
         a_alg: tuple[str, str, str] = ("0", "0", "0")
         a_off: tuple[str, str, str] = ("0", "0", "0")
         a_det = False
+        a_seat = 0.0
         if self.at("attach"):
             self.take("attach")
             self.take("(")
@@ -874,6 +1115,8 @@ class _Parser:
                     a_off = self._capture_symbolic_vec(3)  # type: ignore[assignment]
                 elif ak == "detached":
                     a_det = self.boolean()
+                elif ak == "seat":
+                    a_seat = float(self.number())
                 else:
                     self.fail(f"unexpected attach argument {ak!r}")
                 if not self.maybe_take(","):
@@ -924,6 +1167,10 @@ class _Parser:
                 boxes.append(self._parse_component_box_or_plane(False))
             elif self.at("plane"):
                 boxes.append(self._parse_component_box_or_plane(True))
+            elif self.at("octagon"):
+                boxes.extend(self._parse_component_octagon_or_prism(False))
+            elif self.at("prism"):
+                boxes.extend(self._parse_component_octagon_or_prism(True))
             elif self.at("locator"):
                 locs.append(self._parse_component_locator())
             elif self.at("bone"):
@@ -939,6 +1186,7 @@ class _Parser:
             attach_offset=a_off,
             attach_joint_mode=j_mode,
             attach_detached=a_det,
+            attach_seat=a_seat,
             rest_euler_exprs=rest_e,
             joint_limits=j_lims,
             boxes=tuple(boxes),
@@ -1006,6 +1254,10 @@ class _Parser:
                 r_boxes.append(self._parse_component_box_or_plane(False))
             elif self.at("plane"):
                 r_boxes.append(self._parse_component_box_or_plane(True))
+            elif self.at("octagon"):
+                r_boxes.extend(self._parse_component_octagon_or_prism(False))
+            elif self.at("prism"):
+                r_boxes.extend(self._parse_component_octagon_or_prism(True))
             elif self.at("locator"):
                 r_locs.append(self._parse_component_locator())
             elif self.at("bone"):
@@ -1214,8 +1466,12 @@ class _Parser:
                         elif ck == "axis":
                             caxis = self.ident()
                         elif ck in ("limits", "limits_deg", "limits_units"):
-                            lv = self.vector(2)
-                            clims = (float(lv[0]), float(lv[1]))
+                            if self.at("continuous"):
+                                self.take("continuous")
+                                clims = CONTINUOUS_AXIS_LIMIT
+                            else:
+                                lv = self.vector(2)
+                                clims = (float(lv[0]), float(lv[1]))
                         elif ck == "mode":
                             cmode = self.ident()
                         elif ck == "offset_pos":
@@ -1356,6 +1612,7 @@ class _Parser:
 
         materials: list[MaterialDecl] | None = None
         style: StyleDecl | None = None
+        stamps: list[StampDecl] | None = None
         muscles: list[MuscleDecl] | None = None
         kinematics: KinematicsDecl | None = None
         behavior: BehaviorDecl | None = None
@@ -1393,6 +1650,10 @@ class _Parser:
                 if style is not None:
                     self.fail("duplicate @style section")
                 style = self.style_decl()
+            elif feature == "stamps":
+                if stamps is not None:
+                    self.fail("duplicate @stamps section")
+                stamps = self.stamps_decl()
             elif feature == "muscles":
                 if muscles is not None:
                     self.fail("duplicate @muscles section")
@@ -1438,6 +1699,7 @@ class _Parser:
                 kinematics=kinematics,
                 behavior=behavior,
                 controller=controller,
+                stamps=tuple(stamps) if stamps else (),
             )
 
         assert root is not None
@@ -1453,6 +1715,7 @@ class _Parser:
                 behavior=behavior,
                 textures=tuple(textures) if textures else (),
                 controller=controller,
+                stamps=tuple(stamps) if stamps else (),
             )
         )
 
@@ -1482,6 +1745,7 @@ class _Parser:
             "oxidation",
             "biofilm",
             "weld_group",
+            "coat",
         }
         while self.at(","):
             self.take(",")
@@ -1492,6 +1756,8 @@ class _Parser:
             if key == "weld_group":
                 wg = self.ident()
                 kwargs[key] = None if wg == "none" else wg
+            elif key == "coat":
+                kwargs[key] = self.ident()
             else:
                 kwargs[key] = self.number(integer=(key == "seed"))
         self.take(")")
@@ -1515,22 +1781,69 @@ class _Parser:
             oxidation=float(kwargs.get("oxidation", 0.25)),  # type: ignore[arg-type]
             biofilm=float(kwargs.get("biofilm", 0.20)),  # type: ignore[arg-type]
             weld_group=kwargs.get("weld_group"),  # type: ignore[arg-type]
+            coat=kwargs.get("coat"),  # type: ignore[arg-type]
         )
 
     def style_decl(self) -> StyleDecl:
         self.take("{")
-        self.field("target_encoding")
-        target_enc = self.ident()
+        target_enc = "vanilla"
         kwargs: dict[str, object] = {}
-        allowed = {"quantize_ramp", "bevel_highlight", "view_deg"}
-        while self.at(","):
-            self.take(",")
+        shade_mode = "physical"
+        banded_decl: BandedShadeDecl | None = None
+        glow_bleed = 0
+        allowed = {"target_encoding", "quantize_ramp", "bevel_highlight", "view_deg", "shade", "glow_bleed"}
+        seen_s: set[str] = set()
+        while not self.at("}"):
+            if seen_s:
+                self.maybe_take(",")
+                if self.at("}"):
+                    break
             key = self.ident()
-            if key not in allowed or key in kwargs:
+            if key not in allowed or key in seen_s:
                 self.fail(f"unexpected or duplicate @style field {key!r}")
+            seen_s.add(key)
             self.take(":")
-            if key == "quantize_ramp":
+            if key == "target_encoding":
+                target_enc = self.ident()
+            elif key == "quantize_ramp":
                 kwargs[key] = self.boolean()
+            elif key == "glow_bleed":
+                glow_bleed = int(self.number(integer=True))
+            elif key == "shade":
+                sm = self.ident()
+                shade_mode = sm
+                if sm == "banded":
+                    b_steps = 4
+                    b_dir = "down"
+                    b_cluster = "diagonal"
+                    b_top = True
+                    b_shadow = True
+                    if self.maybe_take("("):
+                        while not self.at(")"):
+                            bk = self.ident()
+                            self.take("=")
+                            if bk == "steps":
+                                b_steps = int(self.number(integer=True))
+                            elif bk == "direction":
+                                b_dir = self.ident()
+                            elif bk == "cluster":
+                                b_cluster = self.ident()
+                            elif bk == "top_highlight":
+                                b_top = self.boolean()
+                            elif bk == "contact_shadow":
+                                b_shadow = self.boolean()
+                            else:
+                                self.fail(f"unexpected banded(...) option {bk!r}")
+                            if not self.maybe_take(","):
+                                break
+                        self.take(")")
+                    banded_decl = BandedShadeDecl(
+                        steps=b_steps,
+                        direction=b_dir,
+                        cluster=b_cluster,
+                        top_highlight=b_top,
+                        contact_shadow=b_shadow,
+                    )
             else:
                 kwargs[key] = self.number()
         self.take("}")
@@ -1539,7 +1852,116 @@ class _Parser:
             quantize_ramp=bool(kwargs.get("quantize_ramp", True)),
             bevel_highlight=float(kwargs.get("bevel_highlight", 0.08)),  # type: ignore[arg-type]
             view_deg=float(kwargs.get("view_deg", 20.0)),  # type: ignore[arg-type]
+            shade_mode=shade_mode,
+            banded=banded_decl,
+            glow_bleed=glow_bleed,
         )
+
+    def stamps_decl(self) -> list[StampDecl]:
+        self.take("{")
+        decls: list[StampDecl] = []
+        while not self.at("}"):
+            if self.at("let"):
+                self.let_decl()
+                continue
+            self.take("stamp")
+            sname = self.ident()
+            self.take("on")
+            parts = [self.ident()]
+            while self.at("."):
+                self.take(".")
+                parts.append(self.ident())
+            if len(parts) < 2:
+                self.fail(f"stamp {sname}: expected <box>.<face> after 'on'")
+            target_box = ".".join(parts[:-1])
+            face = parts[-1]
+            at_uv = (0.5, 0.5)
+            sz_wh = (2.0, 1.0)
+            color: str | None = None
+            shape = "rect"
+            emissive = 0.0
+            mirror = False
+            rows = 1
+            spacing = 0.0
+            if self.maybe_take("{"):
+                while not self.at("}"):
+                    sk = self.ident()
+                    self.take(":")
+                    if sk == "at":
+                        v = self.vector(2)
+                        at_uv = (float(v[0]), float(v[1]))
+                    elif sk == "size":
+                        v = self.vector(2)
+                        sz_wh = (float(v[0]), float(v[1]))
+                    elif sk in ("color", "material"):
+                        color = self.ident()
+                    elif sk == "shape":
+                        shape = self.ident()
+                    elif sk == "emissive":
+                        emissive = float(self.number())
+                    elif sk == "mirror":
+                        mirror = self.boolean()
+                    elif sk == "rows":
+                        rows = int(self.number(integer=True))
+                    elif sk == "spacing":
+                        spacing = float(self.number())
+                    else:
+                        self.fail(f"unexpected stamp field {sk!r}")
+                    self.maybe_take(",")
+                self.take("}")
+            else:
+                while not self.at("stamp") and not self.at("}") and not self.at("let"):
+                    if self.at("mirror"):
+                        self.take("mirror")
+                        if self.at(":") or self.at("="):
+                            self.index += 1
+                            mirror = self.boolean()
+                        else:
+                            mirror = True
+                        self.maybe_take(",")
+                        continue
+                    sk = self.ident()
+                    if self.at(":") or self.at("="):
+                        self.index += 1
+                    if sk == "at":
+                        v = self.vector(2)
+                        at_uv = (float(v[0]), float(v[1]))
+                    elif sk == "size":
+                        v = self.vector(2)
+                        sz_wh = (float(v[0]), float(v[1]))
+                    elif sk in ("color", "material"):
+                        color = self.ident()
+                    elif sk == "shape":
+                        shape = self.ident()
+                    elif sk == "emissive":
+                        emissive = float(self.number())
+                    elif sk == "rows":
+                        rows = int(self.number(integer=True))
+                    elif sk == "spacing":
+                        spacing = float(self.number())
+                    else:
+                        self.fail(f"unexpected stamp clause {sk!r}")
+                    self.maybe_take(",")
+                self.maybe_take(";")
+            if color is None:
+                self.fail(f"stamp {sname}: requires color/material")
+            decls.append(
+                StampDecl(
+                    name=sname,
+                    target_box=target_box,
+                    face=face,
+                    at=at_uv,
+                    size=sz_wh,
+                    color=color,
+                    shape=shape,
+                    emissive=emissive,
+                    mirror=mirror,
+                    rows=rows,
+                    spacing=spacing,
+                )
+            )
+        self.take("}")
+        return decls
 
     def muscle_decl(self) -> MuscleDecl:
         self.take("muscle")
@@ -1640,6 +2062,7 @@ class _Parser:
                 effector: Vec3 | None = None
                 hinge_axis = "x"
                 pole: Vec3 | None = None
+                ik_plane: str | None = None
                 seen_k: set[str] = set()
                 while not self.at("}"):
                     if seen_k:
@@ -1661,6 +2084,8 @@ class _Parser:
                         hinge_axis = self.ident()
                     elif k == "pole":
                         pole = self.vector(3)
+                    elif k == "plane":
+                        ik_plane = self.ident()
                     else:
                         self.fail(f"unexpected ik_chain field {k!r}")
                 self.take("}")
@@ -1677,6 +2102,7 @@ class _Parser:
                         hinge_axis=hinge_axis,
                         bones=bones,
                         pole=pole,
+                        plane=ik_plane,
                     )
                 )
             elif self.at("look_chain"):
@@ -1734,12 +2160,15 @@ class _Parser:
                 continue
             if self.at("clip"):
                 clips.append(self.clip_decl())
+            elif self.at("gait"):
+                gd, g_dur, g_loop = self.gait_decl_with_meta()
+                clips.append(ClipDecl(name=gd.name, duration_s=g_dur, loop=g_loop, gaits=(gd,)))
             elif self.at("state"):
                 states.append(self.behavior_state_decl())
             elif self.at("spring"):
                 springs.append(self.spring_decl())
             else:
-                self.fail("expected clip, state, spring, or closing brace in @behavior")
+                self.fail("expected clip, gait, state, spring, or closing brace in @behavior")
         self.take("}")
         return BehaviorDecl(clips=tuple(clips), states=tuple(states), springs=tuple(springs))
 
@@ -1769,24 +2198,127 @@ class _Parser:
         self.take("}")
         return KeyframeTrackDecl(bone=bone, channel=channel, keys=tuple(keys), interpolation=interp)
 
+    def gait_decl_with_meta(self) -> tuple[GaitDecl, float, bool]:
+        self.take("gait")
+        gname = self.ident()
+        self.take("{")
+        pattern = "lateral_sequence"
+        froude = 0.25
+        duty = 0.65
+        phase_entries: list[tuple[str, float]] = []
+        lift_ratio = 0.12
+        heave_ratio = 0.03
+        pitch_deg = 1.5
+        spine_wave_deg = 3.0
+        tail_lag = 0.2
+        weight = 0.5
+        snap = 0.3
+        export_rm = True
+        dur_override: float | None = None
+        loop_override = True
+        while not self.at("}"):
+            gk = self.ident()
+            self.take(":")
+            if gk == "pattern":
+                pattern = self.ident()
+            elif gk == "froude":
+                froude = float(self.number())
+            elif gk == "duty":
+                duty = float(self.number())
+            elif gk == "phase":
+                self.take("{")
+                while not self.at("}"):
+                    rk = self.ident()
+                    self.take(":")
+                    rv = float(self.number())
+                    phase_entries.append((rk, rv))
+                    self.maybe_take(",")
+                self.take("}")
+            elif gk == "lift_ratio":
+                lift_ratio = float(self.number())
+            elif gk == "heave_ratio":
+                heave_ratio = float(self.number())
+            elif gk == "pitch_deg":
+                pitch_deg = float(self.number())
+            elif gk == "spine_wave_deg":
+                spine_wave_deg = float(self.number())
+            elif gk == "tail_lag":
+                tail_lag = float(self.number())
+            elif gk == "weight":
+                weight = float(self.number())
+            elif gk == "snap":
+                snap = float(self.number())
+            elif gk == "export_root_motion":
+                export_rm = self.boolean()
+            elif gk == "duration_s":
+                dur_override = float(self.number())
+            elif gk == "loop":
+                loop_override = self.boolean()
+            elif gk == "style":
+                self.take("{")
+                while not self.at("}"):
+                    sk = self.ident()
+                    self.take(":")
+                    if sk == "weight":
+                        weight = float(self.number())
+                    elif sk == "snap":
+                        snap = float(self.number())
+                    else:
+                        self.fail(f"unexpected gait style field {sk!r}")
+                    self.maybe_take(",")
+                self.take("}")
+            else:
+                self.fail(f"unexpected gait field {gk!r}")
+            self.maybe_take(",")
+            self.maybe_take(";")
+        self.take("}")
+        gd = GaitDecl(
+            name=gname,
+            pattern=pattern,
+            froude=froude,
+            duty=duty,
+            phase=tuple(phase_entries),
+            lift_ratio=lift_ratio,
+            heave_ratio=heave_ratio,
+            pitch_deg=pitch_deg,
+            spine_wave_deg=spine_wave_deg,
+            tail_lag=tail_lag,
+            weight=weight,
+            snap=snap,
+            export_root_motion=export_rm,
+        )
+        # Default cycle duration scales cleanly with inverse sqrt(Froude) when omitted
+        eff_dur = dur_override if dur_override is not None else round(max(0.4, min(3.2, 0.8 / math.sqrt(max(froude, 0.04)))), 4)
+        return gd, eff_dur, loop_override
+
     def clip_decl(self) -> ClipDecl:
         self.take("clip")
         name = self.ident()
         self.take("{")
-        self.field("duration_s")
-        duration_s = float(self.number())
+        duration_s: float | None = None
         loop = True
-        if self.at(","):
-            self.take(",")
-            self.field("loop")
-            loop = self.boolean()
+        if self.at("duration_s"):
+            self.field("duration_s")
+            duration_s = float(self.number())
+            if self.at(","):
+                self.take(",")
+                if self.at("loop"):
+                    self.field("loop")
+                    loop = self.boolean()
         tracks: list[TrackDecl] = []
         slide_drives: list[SlideDriveDecl] = []
         muscle_drives: list[MuscleDriveDecl] = []
         ik_drives: list[IKDriveDecl] = []
         keyframes: list[KeyframeTrackDecl] = []
+        gaits: list[GaitDecl] = []
+        gait_default_dur: float | None = None
         while not self.at("}"):
-            if self.at("track"):
+            if self.at("gait"):
+                gd, g_dur, _ = self.gait_decl_with_meta()
+                gaits.append(gd)
+                if gait_default_dur is None:
+                    gait_default_dur = g_dur
+            elif self.at("track"):
                 self.take("track")
                 bone = self.ident_or_dotted()
                 self.take(":")
@@ -1924,17 +2456,21 @@ class _Parser:
                 self.take(")")
                 ik_drives.append(IKDriveDecl(chain=chain, stride=stride, lift=lift, phase_deg=phase_deg))
             else:
-                self.fail("expected track, slide, key, muscle_drive, ik_drive, or closing brace in clip")
+                self.fail("expected gait, track, slide, key, muscle_drive, ik_drive, or closing brace in clip")
         self.take("}")
+        final_dur = duration_s if duration_s is not None else (gait_default_dur if gait_default_dur is not None else None)
+        if final_dur is None:
+            self.fail(f"clip {name}: missing required duration_s")
         return ClipDecl(
             name=name,
-            duration_s=duration_s,
+            duration_s=final_dur,
             loop=loop,
             tracks=tuple(tracks),
             muscle_drives=tuple(muscle_drives),
             ik_drives=tuple(ik_drives),
             keyframes=tuple(keyframes),
             slide_drives=tuple(slide_drives),
+            gaits=tuple(gaits),
         )
 
     def behavior_state_decl(self) -> BehaviorStateDecl:
@@ -2098,21 +2634,26 @@ class _Parser:
         self.take(",")
         self.field("align", "=")
         align = self.vector()
-        offset, detached = (0.0, 0.0, 0.0), False
-        if self.at(","):
-            self.take(",")
-            if self.at("offset"):
-                self.field("offset", "=")
+        offset: Vec3 = (0.0, 0.0, 0.0)
+        detached = False
+        seat = 0.0
+        seen_a: set[str] = set()
+        while self.maybe_take(","):
+            ak = self.ident()
+            if ak in seen_a:
+                self.fail(f"duplicate attach(...) field {ak!r}")
+            seen_a.add(ak)
+            self.take("=")
+            if ak == "offset":
                 offset = self.vector()
-                if self.at(","):
-                    self.take(",")
-                    self.field("detached", "=")
-                    detached = self.boolean()
-            else:
-                self.field("detached", "=")
+            elif ak == "detached":
                 detached = self.boolean()
+            elif ak == "seat":
+                seat = float(self.number())
+            else:
+                self.fail(f"unexpected attach(...) field {ak!r}")
         self.take(")")
-        return Attach(parent_box, anchor, align, offset, detached)
+        return Attach(parent_box, anchor, align, offset, detached, seat=seat)
 
     def _parse_bone_symmetry_modifiers(
         self, bone_name: str
@@ -2251,6 +2792,9 @@ class _Parser:
         uv_faces: tuple[tuple[str, UVRect], ...] = ()
         texture: str | None = None
         blend_with: tuple[str, ...] = ()
+        edge_decl: EdgeCutoutDecl | None = None
+        layer_v = 0
+        prism_grp: str | None = None
         seen_f: set[str] = set()
 
         while not self.at("}"):
@@ -2298,6 +2842,12 @@ class _Parser:
                 uv_faces = self._parse_uv_faces_dict()
             elif canon_key == "texture":
                 texture = self.ident()
+            elif canon_key == "edge":
+                edge_decl = self._parse_edge_cutout()
+            elif canon_key == "layer":
+                layer_v = int(self.number(integer=True))
+            elif canon_key == "prism_group":
+                prism_grp = self.string_literal() if self.token.kind == "STRING" else self.ident()
             elif canon_key == "place" and place is None:
                 place = self.place()
             else:
@@ -2323,6 +2873,8 @@ class _Parser:
                 uv_faces=uv_faces,
                 texture=texture,
                 blend_with=blend_with,
+                edge=edge_decl,
+                layer=layer_v,
             )
         if len(size_raw) != 3:
             self.fail(f"box {name}: size must have 3 components")
@@ -2340,6 +2892,9 @@ class _Parser:
             uv_faces=uv_faces,
             texture=texture,
             blend_with=blend_with,
+            edge=edge_decl,
+            layer=layer_v,
+            prism_group=prism_grp,
         )
 
     def box(self) -> Box:
@@ -2353,6 +2908,88 @@ class _Parser:
         name = self.ident()
         place = self.place() if self.at("place") else None
         return self._parse_box_or_plane_fields(name, place, is_plane_kw=True)
+
+    def octagon_or_prism(self, is_prism: bool) -> list[Box]:
+        self.take("prism" if is_prism else "octagon")
+        sides = 8
+        if is_prism and self.maybe_take("("):
+            sides = int(self.number(integer=True))
+            self.take(")")
+        name = self.ident()
+        place = self.place() if self.at("place") else None
+        self.take("{")
+        size_raw: tuple[int | float, ...] | None = None
+        material: str | None = None
+        axis = "z"
+        inflate = 0.0
+        cullface: tuple[str, ...] = ()
+        rotate: Vec3 = (0.0, 0.0, 0.0)
+        pivot: Vec3 | None = None
+        blend_with: tuple[str, ...] = ()
+        seen_f: set[str] = set()
+        while not self.at("}"):
+            if seen_f:
+                self.maybe_take(",")
+                if self.at("}"):
+                    break
+            key = self.ident()
+            canon_key = "material" if key == "mat" else key
+            if canon_key in seen_f:
+                self.fail(f"duplicate octagon/prism field {key!r}")
+            seen_f.add(canon_key)
+            self.take(":")
+            if canon_key == "size":
+                size_raw = self.size_vector(allow_2d=False)
+            elif canon_key == "material":
+                material = self.ident()
+            elif canon_key == "axis":
+                axis = self.ident()
+            elif canon_key == "sides":
+                sides = int(self.number(integer=True))
+            elif canon_key == "inflate":
+                inflate = float(self.number())
+            elif canon_key == "cullface":
+                cullface = self.ident_list()
+            elif canon_key == "blend_with":
+                blend_with = self.ident_list()
+            elif canon_key == "rotate":
+                rv = self.vector(3)
+                rotate = (float(rv[0]), float(rv[1]), float(rv[2]))
+            elif canon_key == "pivot":
+                pv = self.vector(3)
+                pivot = (float(pv[0]), float(pv[1]), float(pv[2]))
+            elif canon_key == "place" and place is None:
+                place = self.place()
+            else:
+                self.fail(f"unexpected octagon/prism field {key!r}")
+        self.take("}")
+        if size_raw is None or len(size_raw) != 3 or material is None or axis not in AXES_3D:
+            self.fail(f"{'prism' if is_prism else 'octagon'} {name}: size [3], material, and axis x|y|z are required")
+        if sides < 6 or sides % 2 != 0:
+            raise DSLValidationError(f"prism {name!r}: sides must be an even integer >= 6, got {sides}")
+        n_boxes = max(2, sides // 4) if sides % 4 == 0 else sides // 2
+        step_deg = (90.0 / n_boxes) if sides % 4 == 0 else (180.0 / n_boxes)
+        ax_idx = {"x": 0, "y": 1, "z": 2}[axis]
+        grp = f"prism_{name}"
+        out: list[Box] = []
+        for k in range(n_boxes):
+            r_list = [float(rotate[0]), float(rotate[1]), float(rotate[2])]
+            r_list[ax_idx] = round(r_list[ax_idx] + k * step_deg, 6)
+            out.append(
+                Box(
+                    name=name if k == 0 else f"{name}_facet_{k}",
+                    size=(size_raw[0], size_raw[1], size_raw[2]),
+                    material=material,
+                    place=place if k == 0 else Place(name, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0), (0.0, 0.0, 0.0)),
+                    inflate=inflate,
+                    cullface=cullface,
+                    rotate=(r_list[0], r_list[1], r_list[2]),
+                    pivot=pivot if k == 0 else None,
+                    blend_with=blend_with if k == 0 else (),
+                    prism_group=grp,
+                )
+            )
+        return out
 
     def locator(self) -> Locator:
         self.take("locator")
@@ -2474,6 +3111,9 @@ class _Parser:
         attach: Attach | None = None
         segments: int | None = None
         taper = 1.0
+        chain_seat = 0.0
+        bend_angles: list[Vec3] | None = None
+        bend_axis = "x"
         mirror_name: str | None = None
         mirror_axis = "x"
         radial: RadialSpec | None = None
@@ -2500,6 +3140,41 @@ class _Parser:
                 if self.at("=") or self.at(":"):
                     self.index += 1
                 taper = float(self.number())
+                self.maybe_take(",")
+            elif self.at("seat"):
+                self.take("seat")
+                if self.at("=") or self.at(":"):
+                    self.index += 1
+                chain_seat = float(self.number())
+                self.maybe_take(",")
+            elif self.at("bend_axis"):
+                self.take("bend_axis")
+                if self.at("=") or self.at(":"):
+                    self.index += 1
+                bend_axis = self.ident()
+                self.maybe_take(",")
+            elif self.at("bend"):
+                self.take("bend")
+                if self.at("=") or self.at(":"):
+                    self.index += 1
+                self.take("[")
+                bend_angles = []
+                while not self.at("]"):
+                    if self.at("["):
+                        bv = self.vector(3)
+                        bend_angles.append((float(bv[0]), float(bv[1]), float(bv[2])))
+                    else:
+                        ang = float(self.number())
+                        bend_angles.append(
+                            (
+                                ang if bend_axis == "x" else 0.0,
+                                ang if bend_axis == "y" else 0.0,
+                                ang if bend_axis == "z" else 0.0,
+                            )
+                        )
+                    if not self.maybe_take(","):
+                        break
+                self.take("]")
                 self.maybe_take(",")
             else:
                 self.fail(f"unexpected header token {self.token.value!r} in chain {name}")
@@ -2623,20 +3298,26 @@ class _Parser:
                 seg_items.append(built_next)
 
             if idx_s == 0:
-                seg_att = attach
+                seg_att = replace(attach, seat=chain_seat) if (chain_seat > 0.0 and attach.seat == 0.0) else attach
                 seg_mir = mirror_name
                 seg_mir_ax = mirror_axis
                 seg_rad = radial
             else:
                 prev_seg_primary = f"{name}_{seg_num - 1}_{tmpl_boxes[0].name}"
-                seg_att = Attach(parent_box=prev_seg_primary, anchor=step_anchor, align=step_align)
+                seg_att = Attach(parent_box=prev_seg_primary, anchor=step_anchor, align=step_align, seat=chain_seat)
                 seg_mir = None
                 seg_mir_ax = "x"
                 seg_rad = None
 
+            seg_rest = (
+                bend_angles[min(idx_s, len(bend_angles) - 1)]
+                if bend_angles
+                else rest
+            )
+
             built_next = Bone(
                 name=seg_bname,
-                rest_euler=rest,
+                rest_euler=seg_rest,
                 attach=seg_att,
                 mirror_name=seg_mir,
                 items=seg_items,
@@ -2685,6 +3366,10 @@ class _Parser:
                 items.append(self.box())
             elif self.at("plane"):
                 items.append(self.plane())
+            elif self.at("octagon"):
+                items.extend(self.octagon_or_prism(False))
+            elif self.at("prism"):
+                items.extend(self.octagon_or_prism(True))
             elif self.at("locator"):
                 items.append(self.locator())
             elif self.at("bone"):
@@ -2785,6 +3470,8 @@ def format_program(program: Program) -> str:
         meta_parts.append(f"audit_profile: {m.audit_profile}")
     if int(getattr(m, "units_per_block", 16)) != 16:
         meta_parts.append(f"units_per_block: {int(m.units_per_block)}")
+    if getattr(m, "gravity", None) is not None:
+        meta_parts.append(f"gravity: {fmt_num(m.gravity)}")
 
     lines = [
         f"@meta {{ {', '.join(meta_parts)} }}",
@@ -2835,6 +3522,8 @@ def format_program(program: Program) -> str:
                     a_args.append(f"offset={vector(a.offset)}")
                 if a.detached:
                     a_args.append("detached=true")
+                if float(getattr(a, "seat", 0.0)) != 0.0:
+                    a_args.append(f"seat={fmt_num(a.seat)}")
                 start += f" attach({', '.join(a_args)})"
         if bone.mirror_name:
             if bone.mirror_axis == "x" and bone.mirror_name != f"{bone.name}_mirror":
@@ -2856,8 +3545,11 @@ def format_program(program: Program) -> str:
                 lines.append(f"{pad}  rest_euler: {vector(bone.rest_euler)}")
             if bone.joint_limits is not None:
                 jl = bone.joint_limits
-                jl_str = "[" + ", ".join(vector(pair) for pair in jl) + "]"
-                lines.append(f"{pad}  joint_limits: {jl_str}")
+                if all(_is_continuous_limit_pair(pair) for pair in jl):
+                    lines.append(f"{pad}  joint_limits: continuous")
+                else:
+                    jl_str = "[" + ", ".join("continuous" if _is_continuous_limit_pair(pair) else vector(pair) for pair in jl) + "]"
+                    lines.append(f"{pad}  joint_limits: {jl_str}")
         for item in bone.items:
             if isinstance(item, Bone):
                 write_bone(item, indent + 2)
@@ -2907,6 +3599,12 @@ def format_program(program: Program) -> str:
                 b_fields.append(f"cullface: [{', '.join(item.cullface)}]")
             if item.blend_with:
                 b_fields.append(f"blend_with: [{', '.join(item.blend_with)}]")
+            if getattr(item, "edge", None) is not None:
+                b_fields.append(f"edge: {format_edge_cutout(item.edge)}")
+            if int(getattr(item, "layer", 0)) != 0:
+                b_fields.append(f"layer: {int(item.layer)}")
+            if getattr(item, "prism_group", None) is not None:
+                b_fields.append(f"prism_group: {item.prism_group}")
             lines.append(f"{b_start} {{ {', '.join(b_fields)} }}")
         lines.append(pad + "}")
 
@@ -2945,6 +3643,8 @@ def format_program(program: Program) -> str:
                     m_args.append(f"{attr}={fmt_num(cur_v)}")
             if md.weld_group is not None:
                 m_args.append(f"weld_group={md.weld_group}")
+            if getattr(md, "coat", None) is not None:
+                m_args.append(f"coat={md.coat}")
             lines.append(f"  {md.name}: process({', '.join(m_args)})")
         lines.append("}")
 
@@ -2957,6 +3657,20 @@ def format_program(program: Program) -> str:
             s_parts.append(f"bevel_highlight: {fmt_num(sd.bevel_highlight)}")
         if float(sd.view_deg) != 20.0:
             s_parts.append(f"view_deg: {fmt_num(sd.view_deg)}")
+        if getattr(sd, "shade_mode", "physical") == "banded":
+            bd = sd.banded or BandedShadeDecl()
+            b_args = [
+                f"steps={bd.steps}",
+                f"direction={bd.direction}",
+                f"cluster={bd.cluster}",
+            ]
+            if not bd.top_highlight:
+                b_args.append("top_highlight=false")
+            if not bd.contact_shadow:
+                b_args.append("contact_shadow=false")
+            s_parts.append(f"shade: banded({', '.join(b_args)})")
+        if int(getattr(sd, "glow_bleed", 0)) != 0:
+            s_parts.append(f"glow_bleed: {int(sd.glow_bleed)}")
         lines.append(f"@style {{ {', '.join(s_parts)} }}")
 
     inv_bone_fmt: dict[str, str] = {}
@@ -2973,6 +3687,27 @@ def format_program(program: Program) -> str:
 
     def _fx(xname: str) -> str:
         return inv_box_fmt.get(xname, xname)
+
+    if getattr(program, "stamps", ()):
+        lines.append("@stamps {")
+        for stp in program.stamps:
+            sp_parts = [
+                f"at: {vector(stp.at)}",
+                f"size: {vector(stp.size)}",
+                f"color: {stp.color}",
+            ]
+            if stp.shape != "rect":
+                sp_parts.append(f"shape: {stp.shape}")
+            if float(stp.emissive) != 0.0:
+                sp_parts.append(f"emissive: {fmt_num(stp.emissive)}")
+            if int(stp.rows) != 1:
+                sp_parts.append(f"rows: {int(stp.rows)}")
+            if float(stp.spacing) != 0.0:
+                sp_parts.append(f"spacing: {fmt_num(stp.spacing)}")
+            if stp.mirror:
+                sp_parts.append("mirror: true")
+            lines.append(f"  stamp {stp.name} on {_fx(stp.target_box)}.{stp.face} {{ {', '.join(sp_parts)} }}")
+        lines.append("}")
 
     if program.muscles:
         lines.append("@muscles {")
@@ -3028,6 +3763,8 @@ def format_program(program: Program) -> str:
                     ik_parts.append(f"hinge_axis: {ikc.hinge_axis}")
                 if ikc.pole is not None:
                     ik_parts.append(f"pole: {vector(ikc.pole)}")
+                if getattr(ikc, "plane", None) is not None:
+                    ik_parts.append(f"plane: {ikc.plane}")
                 lines.append(f"  ik_chain {ikc.name} {{ {', '.join(ik_parts)} }}")
             for lkc in program.kinematics.look_chains:
                 b_list = "[" + ", ".join(_fb(b) for b in lkc.bones) + "]"
@@ -3049,6 +3786,30 @@ def format_program(program: Program) -> str:
             lines.append(f"  clip {clip.name} {{")
             loop_part = f", loop: {boolstr(clip.loop)}" if not clip.loop else ""
             lines.append(f"    duration_s: {fmt_num(clip.duration_s)}{loop_part}")
+            for gd in getattr(clip, "gaits", ()):
+                g_parts = [
+                    f"pattern: {gd.pattern}",
+                    f"froude: {fmt_num(gd.froude)}",
+                    f"duty: {fmt_num(gd.duty)}",
+                ]
+                if gd.phase:
+                    ph_s = ", ".join(f"{rk}: {fmt_num(rv)}" for rk, rv in gd.phase)
+                    g_parts.append(f"phase: {{ {ph_s} }}")
+                if float(gd.lift_ratio) != 0.12:
+                    g_parts.append(f"lift_ratio: {fmt_num(gd.lift_ratio)}")
+                if float(gd.heave_ratio) != 0.03:
+                    g_parts.append(f"heave_ratio: {fmt_num(gd.heave_ratio)}")
+                if float(gd.pitch_deg) != 1.5:
+                    g_parts.append(f"pitch_deg: {fmt_num(gd.pitch_deg)}")
+                if float(gd.spine_wave_deg) != 3.0:
+                    g_parts.append(f"spine_wave_deg: {fmt_num(gd.spine_wave_deg)}")
+                if float(gd.tail_lag) != 0.2:
+                    g_parts.append(f"tail_lag: {fmt_num(gd.tail_lag)}")
+                if float(gd.weight) != 0.5 or float(gd.snap) != 0.3:
+                    g_parts.append(f"style: {{ weight: {fmt_num(gd.weight)}, snap: {fmt_num(gd.snap)} }}")
+                if not gd.export_root_motion:
+                    g_parts.append("export_root_motion: false")
+                lines.append(f"    gait {gd.name} {{ {', '.join(g_parts)} }}")
             for tr in clip.tracks:
                 tr_args = [
                     f"axis={tr.axis}",

@@ -1,0 +1,162 @@
+// Gore Magala (Black Eclipse Wyvern) — Stage 1 Primary Masses & 6-Limbed Reaper Cloak Blockout
+// Canonical blind Demi-Elder: eyeless wedged visor skull, folded Frenzy feelers, 4 grounded legs,
+// 2 massive dorsal prehensile wing-arms arching forward, and 3-column draped Reaper cloak spars.
+@meta {
+  dsl_version: "4.1",
+  archetype: entity,
+  target_profile: bbmodel_5,
+  texel_density: 32,
+  size_step: 0.5,
+  audit_profile: sculpted
+}
+@layout {
+  budget max_boxes = 128
+  budget max_bones = 64
+  envelope grounded = true
+  envelope ground_y = 0.0
+  envelope ground_tol = 0.25
+}
+@palette {
+  obsidian_indigo: ramp(base_lch=[0.32, 0.088, 282], steps=6, hue_shift=[24, -16])
+  eclipse_plum: ramp(base_lch=[0.38, 0.118, 296], steps=6, hue_shift=[26, -16])
+  shadow_slate: ramp(base_lch=[0.46, 0.076, 274], steps=6, hue_shift=[20, -14])
+  wing_talon_crimson: ramp(base_lch=[0.48, 0.138, 348], steps=6, hue_shift=[20, -14])
+  frenzy_violet: ramp(base_lch=[0.74, 0.215, 308], steps=6, hue_shift=[16, -18], emissive=true)
+}
+@rig {
+  root bone root {
+    pivot_local: [0, 0, 0]
+    locator ground_origin { offset: [0, 0, 0] }
+
+    bone pelvis joint(parent=ground_origin, at=[0, 20.35, -13.5]) {
+      rest_euler: [7, 0, 0]
+      box pelvis_core { size: [13.0, 11.5, 13.0], material: obsidian_indigo }
+
+      bone waist attach(parent_box=pelvis_core, anchor=[0, 0.16, 1], align=[0, 0, -1], seat=0.28) {
+        rest_euler: [-6, 0, 0]
+        box waist_core { size: [15.0, 13.5, 12.5], material: obsidian_indigo }
+
+        bone chest attach(parent_box=waist_core, anchor=[0, 0.22, 1], align=[0, 0, -1], seat=0.28) {
+          rest_euler: [-5, 0, 0]
+          box chest_core { size: [20.0, 17.5, 16.5], material: obsidian_indigo }
+          box withers_girdle place(base_box=chest_core, anchor=[0, 0.98, 0.05], align=[0, -0.45, 0]) {
+            size: [15.5, 6.0, 14.5], material: eclipse_plum, rotate: [-8, 0, 0]
+          }
+
+          bone neck_1 attach(parent_box=chest_core, anchor=[0, 0.28, 1], align=[0, 0, -1], seat=0.26) {
+            rest_euler: [-20, 0, 0]
+            box neck_base { size: [13.0, 12.0, 9.5], material: obsidian_indigo, blend_with: [withers_girdle] }
+
+            bone neck_2 attach(parent_box=neck_base, anchor=[0, 0.14, 1], align=[0, 0, -1], seat=0.26) {
+              rest_euler: [16, 0, 0]
+              box neck_upper { size: [10.0, 9.5, 8.5], material: eclipse_plum }
+
+              // Sinister BLIND Visor Skull (ZERO eyes!) + Erectile Frenzy Feelers
+              bone head attach(parent_box=neck_upper, anchor=[0, 0.05, 1], align=[0, 0, -1], seat=0.24) {
+                rest_euler: [18, 0, 0]
+                box skull_core { size: [10.0, 6.5, 8.0], material: obsidian_indigo }
+                box visor_snout_core place(base_box=skull_core, anchor=[0, -0.12, 1], align=[0, 0, -0.78]) {
+                  size: [5.0, 4.0, 7.0], material: shadow_slate, rotate: [12, 0, 0]
+                }
+                bone feeler_l attach(parent_box=skull_core, anchor=[0.62, 0.95, 0.22], align=[0, -0.55, 0.88], seat=0.10) mirror_x(feeler_r) {
+                  rest_euler: [24, -14, -10]
+                  box feeler_beam { size: [2.0, 2.0, 11.5], material: frenzy_violet, blend_with: [neck_upper] }
+                }
+                bone jaw attach(parent_box=skull_core, anchor=[0, -0.68, 0.22], align=[0, 0, -1], seat=0.16) {
+                  rest_euler: [8, 0, 0]
+                  box jaw_core { size: [4.5, 2.5, 8.5], material: shadow_slate, blend_with: [visor_snout_core] }
+                }
+              }
+            }
+          }
+
+          // 5th & 6th Limbs: Massive Dorsal Prehensile Wing-Arms + Draped 3-Column Reaper Cloak
+          bone wing_shoulder_l attach(parent_box=withers_girdle, anchor=[0.88, 0.62, 0.20], align=[-0.85, -0.25, 0], seat=0.16) mirror_x(wing_shoulder_r) {
+            rest_euler: [4, 14, 32]
+            box wing_humerus { size: [15.5, 7.0, 8.0], material: obsidian_indigo, blend_with: [chest_core] }
+
+            bone wing_arm_l attach(parent_box=wing_humerus, anchor=[0.92, 0.12, 0.25], align=[-0.25, 0, -0.88], seat=0.10) {
+              rest_euler: [18, -16, -16]
+              box wing_forearm { size: [6.5, 6.0, 17.5], material: eclipse_plum }
+
+              bone wing_claw_hand_l attach(parent_box=wing_forearm, anchor=[0, -0.12, 1], align=[0, 0, -0.85], seat=0.14) {
+                rest_euler: [28, -18, -14]
+                box wing_palm { size: [7.0, 4.5, 8.5], material: wing_talon_crimson }
+              }
+
+              // Outer Reaper cloak column fanning wide & draping down outside the flank
+              bone cloak_panel_1_l attach(parent_box=wing_forearm, anchor=[0.88, -0.10, -0.55], align=[-0.15, 0, 0.92], seat=0.12) {
+                rest_euler: [-32, -26, -12]
+                box cloak_spar_1 { size: [4.0, 3.5, 16.5], material: obsidian_indigo, blend_with: [wing_humerus, cloak_spar_2] }
+
+                bone cloak_drape_1_l attach(parent_box=cloak_spar_1, anchor=[0, -0.08, -1], align=[0, 0, 1], seat=0.18) {
+                  rest_euler: [-30, 4, 8]
+                  box cloak_lower_1 { size: [3.5, 3.0, 16.0], material: eclipse_plum, blend_with: [cloak_lower_2] }
+                }
+              }
+            }
+
+            // Middle Reaper cloak column arching back & draping down outside the haunches
+            bone cloak_panel_2_l attach(parent_box=wing_humerus, anchor=[0.84, -0.05, -0.86], align=[0, 0, 0.92], seat=0.12) {
+              rest_euler: [-22, -16, -16]
+              box cloak_spar_2 { size: [4.0, 3.5, 17.5], material: eclipse_plum, blend_with: [wing_forearm, cloak_spar_3] }
+
+              bone cloak_drape_2_l attach(parent_box=cloak_spar_2, anchor=[0, -0.08, -1], align=[0, 0, 1], seat=0.18) {
+                rest_euler: [-28, 2, 6]
+                box cloak_lower_2 { size: [3.5, 3.0, 16.5], material: obsidian_indigo, blend_with: [cloak_lower_3] }
+              }
+            }
+
+            // Inner dorsal Reaper mantle column hooding cleanly above the waist & pelvis
+            bone cloak_panel_3_l attach(parent_box=wing_humerus, anchor=[0.28, 0.32, -0.92], align=[0, 0, 0.92], seat=0.12) {
+              rest_euler: [-12, -5, -14]
+              box cloak_spar_3 { size: [4.5, 3.5, 17.0], material: obsidian_indigo, blend_with: [withers_girdle, waist_core, pelvis_core] }
+
+              bone cloak_drape_3_l attach(parent_box=cloak_spar_3, anchor=[0, -0.08, -1], align=[0, 0, 1], seat=0.18) {
+                rest_euler: [-20, 2, 4]
+                box cloak_lower_3 { size: [3.5, 3.0, 15.5], material: eclipse_plum }
+              }
+            }
+          }
+
+          // Terrestrial Forelimbs (Legs 1 & 2, planted wide on Y = 0)
+          bone fore_shoulder_l attach(parent_box=chest_core, anchor=[0.95, -0.18, 0.44], align=[-0.55, 0.82, 0], seat=0.12) mirror_x(fore_shoulder_r) {
+            rest_euler: [18, 6, 22]
+            box fore_bicep { size: [7.5, 11.5, 8.0], material: obsidian_indigo }
+
+            bone fore_arm_l attach(parent_box=fore_bicep, anchor=[0.10, -1, -0.05], align=[0, 0.88, 0], seat=0.18) {
+              rest_euler: [-30, 0, -14]
+              box fore_bracer { size: [7.0, 11.5, 7.5], material: shadow_slate, blend_with: [chest_core] }
+
+              bone fore_paw_l attach(parent_box=fore_bracer, anchor=[0, -1, 0.15], align=[0, 0.85, -0.45], seat=0.16) {
+                rest_euler: [15, 0, -8]
+                box fore_paw_pad { size: [8.0, 3.5, 8.5], material: obsidian_indigo }
+              }
+            }
+          }
+        }
+      }
+
+      // Terrestrial Digitigrade Hindlimbs (Legs 3 & 4, planted on Y = 0)
+      bone hind_thigh_l attach(parent_box=pelvis_core, anchor=[0.96, -0.10, -0.05], align=[-0.55, 0.85, 0], seat=0.12) mirror_x(hind_thigh_r) {
+        rest_euler: [-22, -6, 18]
+        box thigh_mass { size: [6.5, 11.5, 8.5], material: obsidian_indigo, blend_with: [waist_core, tail_1_tail_seg] }
+
+        bone hind_shin_l attach(parent_box=thigh_mass, anchor=[0.05, -1, -0.10], align=[0, 0.88, 0], seat=0.16) {
+          rest_euler: [40, 0, -10]
+          box shin_mass { size: [5.0, 10.5, 5.5], material: shadow_slate }
+
+          bone hind_paw_l attach(parent_box=shin_mass, anchor=[0, -1, 0.15], align=[0, 0.88, -0.42], seat=0.14) {
+            rest_euler: [-25, 0, -8]
+            box hind_paw_pad { size: [6.5, 3.0, 7.5], material: obsidian_indigo }
+          }
+        }
+      }
+
+      // S-Curved Spiny Eclipse Tail (dips under cloak hem, then curls upward!)
+      chain tail attach(parent_box=pelvis_core, anchor=[0, 0.18, -1], align=[0, 0, 1], seat=0.24) segments=6 taper=0.88 bend=[-10, -2, 12, 18, 20, 14] {
+        box tail_seg { size: [9.0, 8.0, 9.0], material: obsidian_indigo }
+      }
+    }
+  }
+}

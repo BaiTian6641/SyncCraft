@@ -73,6 +73,7 @@ MODULAR_SCULPTED_DRAGON_V4_DSL: str = """
   budget max_bones = 28
   envelope max_span = [56, 38, 60]
   envelope min_ground_y = -0.5
+  envelope grounded = true
 }
 
 @palette {
@@ -193,7 +194,7 @@ MODULAR_SCULPTED_DRAGON_V4_DSL: str = """
 }
 
 @assembly ModularElderDragon {
-  root_pivot: [0, 13.5, 0]
+  root_pivot: [0, 12, 0]
 
   instance pelvis : DragonPelvis(w=max(6, chest_width - 2), l=pelvis_len) {
     id: "pelvis_01"
@@ -339,6 +340,7 @@ MODULAR_ARTILLERY_WALKER_V4_DSL: str = """
   budget max_bones = 24
   envelope max_span = [44, 38, 48]
   envelope min_ground_y = -0.5
+  envelope grounded = true
 }
 
 @palette {
@@ -430,7 +432,7 @@ MODULAR_ARTILLERY_WALKER_V4_DSL: str = """
 }
 
 @assembly ModularArtilleryWalker {
-  root_pivot: [0, 16.25, 0]
+  root_pivot: [0, 15.164, 0]
 
   instance chassis : WalkerChassis(w=hull_width, l=hull_length) {
     id: "chassis_01"
@@ -472,7 +474,7 @@ MODULAR_ARTILLERY_WALKER_V4_DSL: str = """
 
     connect cyl_l.deck_mount to chassis.cyl_socket_l { type: fixed }
     connect piston_l.rod_base to cyl_l.bore_top { type: prismatic, axis: y, limits: [0, 2.5] }
-    connect gear_l.hub_mount to chassis.gear_axle_l { type: revolute, axis: x, limits: [-180, 180] }
+    connect gear_l.hub_mount to chassis.gear_axle_l { type: revolute, axis: x, limits: continuous }
   }
 
   subassembly walker_gait_rig {

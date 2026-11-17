@@ -55,7 +55,7 @@
       "patterns": [
         {
           "name": "keyword.control.directive.section.blockdsl",
-          "match": "@(?:meta|layout|textures|palette|component|assembly|rig|materials|style|muscles|kinematics|behavior|controller)\\b"
+          "match": "@(?:meta|layout|textures|palette|component|assembly|rig|materials|style|stamps|morphology|muscles|kinematics|behavior|controller)\\b"
         },
         {
           "name": "invalid.illegal.unknown-section.blockdsl",
@@ -177,7 +177,7 @@
           }
         },
         {
-          "match": "\\b(box|plane)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
+          "match": "\\b(box|plane|octagon|prism)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
           "captures": {
             "1": { "name": "keyword.declaration.element.blockdsl" },
             "2": { "name": "entity.name.tag.element.blockdsl" }
@@ -202,7 +202,7 @@
           }
         },
         {
-          "match": "\\b(clip|state)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
+          "match": "\\b(clip|gait|state|stamp)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
           "captures": {
             "1": { "name": "keyword.declaration.behavior.blockdsl" },
             "2": { "name": "entity.name.function.behavior.blockdsl" }
@@ -264,7 +264,7 @@
         },
         {
           "name": "support.function.surface.blockdsl",
-          "match": "\\b(?:ramp|image|process|box)\\s*(?=\\()"
+          "match": "\\b(?:ramp|image|process|box|banded|ragged|spikes|drip|scallop|triangle_bay)\\s*(?=\\()"
         },
         {
           "name": "support.function.motion-law.blockdsl",
@@ -275,7 +275,7 @@
     "named_arguments": {
       "patterns": [
         {
-          "match": "\\b(base_lch|steps|hue_shift|emissive|parent_box|parent|at|anchor|align|offset|detached|base_box|axis|as|name|count|segments|taper|family|roughness|metalness|coating|ior|scale|seed|anisotropy|subsurface|porosity|rd_feed|rd_kill|film_nm|wear|oxidation|biofilm|weld_group|amp_deg|amp_units|bias_units|freq_hz|phase_deg|bias_deg|peak|baseline|stride|lift)\\s*(=)",
+          "match": "\\b(base_lch|steps|hue_shift|emissive|parent_box|parent|at|anchor|align|offset|detached|seat|base_box|axis|as|name|count|segments|taper|bend|bend_axis|family|roughness|metalness|coating|coat|ior|scale|seed|anisotropy|subsurface|porosity|rd_feed|rd_kill|film_nm|wear|oxidation|biofilm|weld_group|direction|cluster|top_highlight|contact_shadow|depth|holes|width|min_len|max_len|length|bays|side|apex|amp_deg|amp_units|bias_units|freq_hz|phase_deg|bias_deg|peak|baseline|stride|lift)\\s*(=)",
           "captures": {
             "1": { "name": "variable.parameter.argument.blockdsl" },
             "2": { "name": "keyword.operator.assignment.blockdsl" }
@@ -286,7 +286,7 @@
     "property_keys": {
       "patterns": [
         {
-          "match": "\\b(archetype|target_profile|texel_density|units_per_block|dsl_version|size_step|audit_profile|material_slots|uv_policy|on_box|pos|rot|export_locator|root_pivot|root_instance|id|materials|type|limits|mode|offset_pos|offset_rot|sculpted_blend|preserve_bone|range|pivot_local|rest_euler|joint_limits|size|material|mat|inflate|rotate|pivot|cullface|blend_with|normal|plane_normal|uv|uv_faces|texture|offset|role|target_encoding|quantize_ramp|bevel_highlight|view_deg|origin_bone|insertion_bone|action_axis|moment_arm_deg|tendon_coupling|belly_box|bulge_inflate|upper|lower|bones|effector|hinge_axis|pole|weight_decay|stiffness|damping|duration_s|loop|emissive|moisture|wear_delta|initial|axis|segments|taper|north|south|east|west|up|down)\\s*(:)",
+          "match": "\\b(archetype|target_profile|texel_density|units_per_block|gravity|dsl_version|size_step|audit_profile|material_slots|uv_policy|on_box|pos|rot|export_locator|root_pivot|root_instance|id|materials|type|limits|mode|offset_pos|offset_rot|sculpted_blend|preserve_bone|range|pivot_local|rest_euler|joint_limits|size|sides|material|mat|inflate|rotate|pivot|cullface|blend_with|edge|layer|prism_group|normal|plane_normal|uv|uv_faces|texture|offset|role|target_encoding|quantize_ramp|bevel_highlight|view_deg|shade|glow_bleed|color|shape|rows|spacing|mirror|origin_bone|insertion_bone|action_axis|moment_arm_deg|tendon_coupling|belly_box|bulge_inflate|upper|lower|bones|effector|hinge_axis|pole|plane|weight_decay|stiffness|damping|duration_s|loop|pattern|froude|duty|phase|lift_ratio|heave_ratio|pitch_deg|spine_wave_deg|tail_lag|style|weight|snap|export_root_motion|emissive|moisture|wear_delta|initial|axis|segments|taper|north|south|east|west|up|down)\\s*(:)",
           "captures": {
             "1": { "name": "support.type.property-name.blockdsl" },
             "2": { "name": "punctuation.separator.key-value.blockdsl" }
@@ -310,7 +310,7 @@
         },
         {
           "name": "support.constant.connection-type.blockdsl",
-          "match": "\\b(?:fixed|revolute|prismatic|align|oppose|unique|shared)\\b"
+          "match": "\\b(?:fixed|revolute|prismatic|align|oppose|unique|shared|continuous|sagittal|sprawled|free|physical|banded|plain|mottled|spotted|striped|banded_limb|scale_rows|lateral_sequence|diagonal_pairs|rotary_gallop|transverse_gallop|biped_alternate|sprawl_diagonal|hexapod_tripod)\\b"
         },
         {
           "name": "support.constant.material-family.blockdsl",

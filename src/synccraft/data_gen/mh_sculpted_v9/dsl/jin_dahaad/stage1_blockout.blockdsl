@@ -1,0 +1,164 @@
+// Jin Dahaad (Iceshard Thermodynamic Behemoth) — Stage 1 Primary Masses & Cathedral Leviathan Blockout
+// Verified right-handed SE(3): heavy sprawled frost-grip pillar limbs on Y = 0, towering 3-bone rising neck,
+// T-hooded wedge skull with split `jaw_l/r` mandibles, thoracic radiator banks, and arched two-pronged rake tail!
+@meta {
+  dsl_version: "4.1",
+  archetype: entity,
+  target_profile: bbmodel_5,
+  texel_density: 32,
+  size_step: 0.5,
+  audit_profile: sculpted
+}
+@layout {
+  budget max_boxes = 128
+  budget max_bones = 64
+  envelope grounded = true
+  envelope ground_y = 0.0
+  envelope ground_tol = 0.25
+}
+@palette {
+  slate_iron: ramp(base_lch=[0.35, 0.040, 242], steps=6, hue_shift=[20, -14])
+  glacier_steel: ramp(base_lch=[0.63, 0.068, 230], steps=6, hue_shift=[18, -14])
+  copper_radiator: ramp(base_lch=[0.58, 0.128, 52], steps=6, hue_shift=[20, -14])
+  bronze_dark: ramp(base_lch=[0.44, 0.108, 42], steps=6, hue_shift=[18, -12])
+}
+@rig {
+  root bone root {
+    pivot_local: [0, 0, 0]
+    locator ground_origin { offset: [0, 0, 0] }
+
+    bone pelvis joint(parent=ground_origin, at=[0, 14.80, -15.0]) {
+      rest_euler: [5, 0, 0]
+      box pelvis_core { size: [15.5, 11.5, 15.0], material: slate_iron }
+
+      bone waist attach(parent_box=pelvis_core, anchor=[0, 0.06, 1], align=[0, 0, -1], seat=0.26) {
+        rest_euler: [-6, 0, 0]
+        box waist_core { size: [16.5, 12.5, 15.5], material: slate_iron }
+
+        bone chest attach(parent_box=waist_core, anchor=[0, 0.18, 1], align=[0, 0, -1], seat=0.26) {
+          rest_euler: [-12, 0, 0]
+          box chest_core { size: [21.0, 16.0, 17.5], material: slate_iron }
+          box chest_frost_keel place(base_box=chest_core, anchor=[0, -0.94, 0.20], align=[0, 0.45, 0]) {
+            size: [15.5, 3.0, 14.0], material: glacier_steel, rotate: [-8, 0, 0], blend_with: [waist_core]
+          }
+
+          // Cathedral Thoracic Heat-Sink Radiator Arches
+          bone radiator_chest_l attach(parent_box=chest_core, anchor=[0.52, 0.98, -0.05], align=[0, -0.88, 0.20]) mirror_x(radiator_chest_r) {
+            rest_euler: [20, -10, -16]
+            box chest_rad_arch { size: [3.0, 11.5, 11.5], material: copper_radiator, blend_with: [waist_core, neck_base, radiator_chest_r__chest_rad_arch] }
+          }
+
+          // Monumental Rising 3-Segment Armored Leviathan Neck
+          bone neck_1 attach(parent_box=chest_core, anchor=[0, 0.34, 1], align=[0, 0, -1], seat=0.26) {
+            rest_euler: [-30, 0, 0]
+            box neck_base { size: [14.5, 13.0, 11.0], material: slate_iron }
+
+            bone neck_2 attach(parent_box=neck_base, anchor=[0, 0.16, 1], align=[0, 0, -1], seat=0.26) {
+              rest_euler: [-8, 0, 0]
+              box neck_mid { size: [12.0, 11.0, 10.0], material: slate_iron }
+
+              bone neck_3 attach(parent_box=neck_mid, anchor=[0, 0.10, 1], align=[0, 0, -1], seat=0.24) {
+                rest_euler: [24, 0, 0]
+                box neck_upper { size: [10.0, 9.0, 9.0], material: slate_iron }
+
+                // T-Hooded Metallic Skull + Crown Radiator Comb + Split Lower Mandibles
+                bone head attach(parent_box=neck_upper, anchor=[0, 0.08, 1], align=[0, 0, -1], seat=0.22) {
+                  rest_euler: [34, 0, 0]
+                  box skull_core { size: [10.5, 6.5, 8.0], material: slate_iron }
+                  box t_hood_wing_l place(base_box=skull_core, anchor=[0.98, 0.55, -0.10], align=[-0.45, -0.35, 0]) {
+                    size: [3.5, 2.5, 7.0], material: copper_radiator, rotate: [6, -14, -12], blend_with: [neck_upper]
+                  }
+                  box t_hood_wing_r place(base_box=skull_core, anchor=[-0.98, 0.55, -0.10], align=[0.45, -0.35, 0]) {
+                    size: [3.5, 2.5, 7.0], material: copper_radiator, rotate: [6, 14, 12], blend_with: [neck_upper]
+                  }
+                  box snout_core place(base_box=skull_core, anchor=[0, -0.10, 1], align=[0, 0, -0.80]) {
+                    size: [6.0, 4.5, 7.5], material: slate_iron, rotate: [10, 0, 0]
+                  }
+                  box rostrum_prow place(base_box=snout_core, anchor=[0, -0.05, 0.96], align=[0, 0, -0.82]) {
+                    size: [4.0, 3.0, 4.0], material: glacier_steel, rotate: [12, 0, 0]
+                  }
+                  bone crown_crest_l attach(parent_box=skull_core, anchor=[0.36, 0.98, -0.25], align=[0, -0.88, 0.45]) mirror_x(crown_crest_r) {
+                    rest_euler: [32, -8, -12]
+                    box crown_rad_comb { size: [1.5, 11.0, 5.0], material: copper_radiator, blend_with: [t_hood_wing_l, neck_upper, crown_crest_r__crown_rad_comb] }
+                  }
+                  bone jaw_l attach(parent_box=skull_core, anchor=[0.42, -0.78, 0.25], align=[-0.35, 0, -0.92], seat=0.10) mirror_x(jaw_r) {
+                    rest_euler: [10, -4, 6]
+                    box jaw_mandible { size: [2.5, 2.5, 9.5], material: bronze_dark, blend_with: [snout_core, jaw_r__jaw_mandible] }
+                  }
+                }
+              }
+            }
+          }
+
+          // Massive Sprawled Frost-Grip Forelimbs (+Rz splays heavy pillar legs wide!)
+          bone fore_shoulder_l attach(parent_box=chest_core, anchor=[0.96, -0.12, 0.38], align=[-0.52, 0.82, 0], seat=0.14) mirror_x(fore_shoulder_r) {
+            rest_euler: [20, 10, 38]
+            box fore_bicep { size: [8.5, 10.5, 9.0], material: slate_iron, blend_with: [chest_frost_keel] }
+
+            bone fore_arm_l attach(parent_box=fore_bicep, anchor=[0.10, -1, -0.05], align=[0, 0.88, 0], seat=0.16) {
+              rest_euler: [-26, 0, -28]
+              box fore_bracer { size: [7.5, 10.5, 8.0], material: glacier_steel }
+
+              bone fore_foot_l attach(parent_box=fore_bracer, anchor=[0, -1, 0.15], align=[0, 0.86, -0.45], seat=0.14) {
+                rest_euler: [18, 0, -10]
+                box fore_foot_pad { size: [9.5, 3.5, 9.0], material: slate_iron }
+              }
+            }
+          }
+        }
+      }
+
+      // Massive Sprawled Frost-Grip Hindlimbs
+      bone hind_thigh_l attach(parent_box=pelvis_core, anchor=[0.96, -0.12, -0.05], align=[-0.52, 0.84, 0], seat=0.14) mirror_x(hind_thigh_r) {
+        rest_euler: [-18, -8, 36]
+        box thigh_mass { size: [7.5, 10.0, 8.5], material: slate_iron, blend_with: [waist_core, tail_1_seg] }
+
+        bone hind_shin_l attach(parent_box=thigh_mass, anchor=[0.08, -1, -0.08], align=[0, 0.88, 0], seat=0.16) {
+          rest_euler: [34, 0, -24]
+          box shin_mass { size: [6.0, 9.0, 6.5], material: glacier_steel }
+
+          bone hind_foot_l attach(parent_box=shin_mass, anchor=[0, -1, 0.14], align=[0, 0.86, -0.42], seat=0.14) {
+            rest_euler: [-21, 0, -12]
+            box hind_foot_pad { size: [8.0, 3.0, 8.0], material: slate_iron }
+          }
+        }
+      }
+
+      // Arched Leviathan Tail Bifurcating into a Broad Two-Pronged Metallic Rake (`tail_1..tail_6`)
+      bone tail_1 attach(parent_box=pelvis_core, anchor=[0, 0.12, -1], align=[0, 0, 1], seat=0.24) {
+        rest_euler: [12, 0, 0]
+        box tail_1_seg { size: [12.0, 9.5, 11.0], material: slate_iron }
+
+        bone tail_2 attach(parent_box=tail_1_seg, anchor=[0, 0.08, -1], align=[0, 0, 1], seat=0.24) {
+          rest_euler: [18, 0, 0]
+          box tail_2_seg { size: [10.5, 8.5, 11.0], material: slate_iron }
+
+          bone tail_3 attach(parent_box=tail_2_seg, anchor=[0, 0.08, -1], align=[0, 0, 1], seat=0.24) {
+            rest_euler: [8, 0, 0]
+            box tail_3_seg { size: [9.0, 7.5, 11.0], material: slate_iron }
+
+            bone tail_4 attach(parent_box=tail_3_seg, anchor=[0, 0.05, -1], align=[0, 0, 1], seat=0.24) {
+              rest_euler: [-18, 0, 0]
+              box tail_4_seg { size: [8.0, 6.5, 10.5], material: bronze_dark }
+
+              bone tail_5 attach(parent_box=tail_4_seg, anchor=[0, 0.02, -1], align=[0, 0, 1], seat=0.24) {
+                rest_euler: [-22, 0, 0]
+                box tail_5_seg { size: [7.5, 5.5, 10.0], material: copper_radiator }
+
+                bone tail_6 attach(parent_box=tail_5_seg, anchor=[0, 0.0, -1], align=[0, 0, 1], seat=0.22) {
+                  rest_euler: [-10, 0, 0]
+                  box tail_6_hub { size: [8.5, 4.5, 7.5], material: copper_radiator }
+
+                  bone tail_rake_l attach(parent_box=tail_6_hub, anchor=[0.62, 0.0, -0.94], align=[-0.35, 0, 0.88]) mirror_x(tail_rake_r) {
+                    rest_euler: [-6, -24, -8]
+                    box rake_prong_main { size: [4.5, 3.0, 11.5], material: copper_radiator, blend_with: [tail_rake_r__rake_prong_main] }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

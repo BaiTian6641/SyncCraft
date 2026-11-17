@@ -796,16 +796,38 @@ def evaluate_optical_fields(
             metal = np.zeros((rows, cols), dtype=np.float64)
 
         elif fam == "patterned_skin":
-            v_conc = st.rd_v
-            # Smooth threshold of morphogen V into pigment pattern
-            pigment = np.clip((v_conc - 0.10) / 0.14, 0.0, 1.0)
+            coat_mode = getattr(spec, "coat", None)
+            if coat_mode == "plain":
+                pigment = np.zeros((rows, cols), dtype=np.float64)
+            elif coat_mode == "banded_limb":
+                # Anatomical horizontal bands along limb/bone axial coordinate (`SKILL.md` §Limbs: 1 darker row in 5)
+                band_idx = np.floor(grid.bone_axial_coord * max(4.0, 5.0 * spec.feature_scale)).astype(np.int64)
+                pigment = np.where((band_idx % 5) == 2, 0.85, 0.0)
+            elif coat_mode == "scale_rows":
+                # Anatomical staggered scale rows following the body axis, thinning toward the belly
+                sc_r = 2.0 * spec.feature_scale
+                r_f = grid.dorsal_coord * 6.0 * sc_r
+                r_id = np.floor(r_f)
+                c_f = grid.bone_axial_coord * 8.0 * sc_r + 0.5 * (r_id % 2.0)
+                du_s = (c_f - np.floor(c_f)) - 0.5
+                dv_s = (r_f - r_id) - 0.5
+                rim = np.sqrt(du_s * du_s + dv_s * dv_s)
+                dorsal_weight = np.clip((grid.dorsal_coord - 0.25) / 0.55, 0.0, 1.0)
+                pigment = np.where(rim > 0.38, 0.72 * dorsal_weight, 0.0)
+            else:
+                v_conc = st.rd_v
+                pigment = np.clip((v_conc - 0.10) / 0.14, 0.0, 1.0)
             # Anatomical dorsal-ventral countershading & distal extremity darkening
             counter = 1.0 + spec.countershade_strength * (0.5 - grid.dorsal_coord) * 1.4
             extrem = 1.0 - spec.extremity_darkening * grid.bone_axial_coord
 
             skin_base = np.clip(c_sub * counter[..., None] * extrem[..., None], 0.0, 1.0)
             albedo = skin_base * (1.0 - pigment[..., None]) + c_sec * pigment[..., None]
-            pore = 0.012 * (value_noise_3d(p3 * 3.5, spec.seed) - 0.5)
+            pore = (
+                np.zeros((rows, cols), dtype=np.float64)
+                if coat_mode == "plain"
+                else 0.012 * (value_noise_3d(p3 * 3.5, spec.seed) - 0.5)
+            )
             height = pore + 0.014 * pigment
             rough = np.clip(spec.perceptual_roughness - 0.08 * pigment - 0.20 * st.moisture, 0.12, 1.0)
             subsurf = np.full((rows, cols), max(0.28, spec.subsurface), dtype=np.float64)

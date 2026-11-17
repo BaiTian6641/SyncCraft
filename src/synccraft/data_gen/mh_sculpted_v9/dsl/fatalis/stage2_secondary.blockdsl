@@ -1,0 +1,455 @@
+// Fatalis (The Black Dragon of Schrade) — Stage 2 Secondary Anatomy, 4-Horned Wedge Skull & Partitioned Bat Wings
+// Verified right-handed SE(3) rearing Elder Dragon posture, 5-bone S-neck, 18 wing bones, & 7-bone whip tail.
+@meta {
+  dsl_version: "4.1",
+  archetype: entity,
+  target_profile: bbmodel_5,
+  texel_density: 32,
+  size_step: 0.5,
+  audit_profile: sculpted
+}
+@layout {
+  budget max_boxes = 260
+  budget max_bones = 96
+  envelope grounded = true
+  envelope ground_y = 0.0
+  envelope ground_tol = 0.25
+}
+@palette {
+  obsidian_scale: ramp(base_lch=[0.22, 0.036, 302], steps=6, hue_shift=[22, -20])
+  slate_armor: ramp(base_lch=[0.30, 0.042, 294], steps=6, hue_shift=[20, -22])
+  deep_charcoal: ramp(base_lch=[0.17, 0.030, 308], steps=6, hue_shift=[18, -16])
+  bronze_wing: ramp(base_lch=[0.46, 0.086, 54], steps=6, hue_shift=[20, -14])
+  belly_bronze: ramp(base_lch=[0.71, 0.068, 76], steps=6, hue_shift=[18, -12])
+  bone_ivory: ramp(base_lch=[0.84, 0.054, 82], steps=6, hue_shift=[18, -12])
+  horn_ochre: ramp(base_lch=[0.58, 0.092, 68], steps=6, hue_shift=[18, -12])
+  hellfire_orange: ramp(base_lch=[0.76, 0.198, 44], steps=6, hue_shift=[14, -18], emissive=true)
+  eye_gold: ramp(base_lch=[0.85, 0.178, 78], steps=6, hue_shift=[12, -16], emissive=true)
+}
+@rig {
+  root bone root {
+    pivot_local: [0, 0, 0]
+    locator ground_origin { offset: [0, 0, 0] }
+
+    bone pelvis joint(parent=ground_origin, at=[0, 19.52, -14.0]) {
+      rest_euler: [-18, 0, 0]
+      box pelvis_core { size: [12.0, 10.5, 12.5], material: obsidian_scale }
+      box pelvis_belly place(base_box=pelvis_core, anchor=[0, -0.96, 0], align=[0, 0.40, 0]) {
+        size: [9.0, 2.0, 10.5], material: belly_bronze
+      }
+      box sacrum_armor place(base_box=pelvis_core, anchor=[0, 0.96, -0.05], align=[0, -0.55, 0]) {
+        size: [7.0, 2.5, 10.5], material: slate_armor, rotate: [4, 0, 0], blend_with: [waist_core, tail_1_seg]
+      }
+      box sacrum_spine place(base_box=sacrum_armor, anchor=[0, 0.96, -0.15], align=[0, -0.78, 0]) {
+        size: [2.0, 3.5, 3.5], material: bone_ivory, rotate: [22, 0, 0], blend_with: [pelvis_core, tail_1_seg]
+      }
+      box haunch_muscle_l place(base_box=pelvis_core, anchor=[0.98, 0.20, -0.05], align=[-0.48, 0, 0]) {
+        size: [3.5, 7.5, 9.0], material: slate_armor, rotate: [6, 6, -12], blend_with: [thigh_mass, waist_core]
+      }
+      box haunch_muscle_r place(base_box=pelvis_core, anchor=[-0.98, 0.20, -0.05], align=[0.48, 0, 0]) {
+        size: [3.5, 7.5, 9.0], material: slate_armor, rotate: [6, -6, 12], blend_with: [hind_thigh_r__thigh_mass, waist_core]
+      }
+
+      bone waist attach(parent_box=pelvis_core, anchor=[0, 0.12, 1], align=[0, 0, -1], seat=0.28) {
+        rest_euler: [-16, 0, 0]
+        box waist_core { size: [10.5, 9.5, 13.0], material: obsidian_scale }
+        box waist_belly place(base_box=waist_core, anchor=[0, -0.96, 0], align=[0, 0.40, 0]) {
+          size: [8.0, 2.0, 11.0], material: belly_bronze, blend_with: [pelvis_belly, thigh_mass, hind_thigh_r__thigh_mass]
+        }
+        box lumbar_armor place(base_box=waist_core, anchor=[0, 0.96, 0], align=[0, -0.55, 0]) {
+          size: [6.5, 2.5, 11.0], material: slate_armor, rotate: [-4, 0, 0], blend_with: [pelvis_core, sacrum_armor, chest_core]
+        }
+        box lumbar_spine place(base_box=lumbar_armor, anchor=[0, 0.96, 0.05], align=[0, -0.78, 0]) {
+          size: [2.0, 3.5, 3.5], material: bone_ivory, rotate: [20, 0, 0], blend_with: [waist_core, chest_core]
+        }
+
+        bone chest attach(parent_box=waist_core, anchor=[0, 0.15, 1], align=[0, 0, -1], seat=0.26) {
+          rest_euler: [-12, 0, 0]
+          box chest_core { size: [16.5, 13.5, 15.5], material: obsidian_scale }
+          box thoracic_ridge place(base_box=chest_core, anchor=[0, 0.96, 0.05], align=[0, -0.55, 0]) {
+            size: [9.5, 3.0, 13.5], material: slate_armor, rotate: [-6, 0, 0], blend_with: [waist_core, lumbar_armor, neck_1_core]
+          }
+          box thoracic_spine place(base_box=thoracic_ridge, anchor=[0, 0.96, -0.15], align=[0, -0.78, 0]) {
+            size: [2.0, 4.0, 4.0], material: bone_ivory, rotate: [22, 0, 0], blend_with: [chest_core]
+          }
+          // Molten Schrade Hellfire sternum fissure & flanking armored pectoral plates
+          box pectoral_hellfire_core place(base_box=chest_core, anchor=[0, -0.96, 0.12], align=[0, 0.50, 0]) {
+            size: [5.0, 2.0, 11.5], material: hellfire_orange, blend_with: [waist_belly]
+          }
+          box pectoral_hellfire_plate_l place(base_box=chest_core, anchor=[0.58, -0.94, 0.14], align=[-0.15, 0.48, 0]) {
+            size: [5.5, 2.5, 11.5], material: slate_armor, rotate: [0, 6, 14], blend_with: [pectoral_hellfire_core, waist_belly, fore_bicep, fore_bracer]
+          }
+          box pectoral_hellfire_plate_r place(base_box=chest_core, anchor=[-0.58, -0.94, 0.14], align=[0.15, 0.48, 0]) {
+            size: [5.5, 2.5, 11.5], material: slate_armor, rotate: [0, -6, -14], blend_with: [pectoral_hellfire_core, waist_belly, fore_shoulder_r__fore_bicep, fore_shoulder_r__fore_bracer]
+          }
+
+          // Long sinuous 5-bone serpentine S-neck (`neck_1..neck_5`)
+          bone neck_1 attach(parent_box=chest_core, anchor=[0, 0.25, 1], align=[0, 0, -1], seat=0.26) {
+            rest_euler: [-24, 0, 0]
+            box neck_1_core { size: [10.5, 9.5, 9.0], material: obsidian_scale }
+            box neck_1_scute place(base_box=neck_1_core, anchor=[0, -0.96, 0.05], align=[0, 0.45, 0]) {
+              size: [7.5, 2.0, 7.5], material: belly_bronze, blend_with: [chest_core, pectoral_hellfire_core, pectoral_hellfire_plate_l, pectoral_hellfire_plate_r]
+            }
+            box neck_1_spine place(base_box=neck_1_core, anchor=[0, 0.96, 0], align=[0, -0.78, 0]) {
+              size: [2.0, 4.0, 3.5], material: bone_ivory, rotate: [20, 0, 0], blend_with: [thoracic_ridge, chest_core]
+            }
+
+            bone neck_2 attach(parent_box=neck_1_core, anchor=[0, 0.08, 1], align=[0, 0, -1], seat=0.24) {
+              rest_euler: [-12, 0, 0]
+              box neck_2_core { size: [9.0, 8.5, 8.5], material: obsidian_scale }
+              box neck_2_scute place(base_box=neck_2_core, anchor=[0, -0.96, 0.05], align=[0, 0.45, 0]) {
+                size: [6.5, 1.5, 7.0], material: belly_bronze, blend_with: [neck_1_core, neck_1_scute]
+              }
+              box neck_2_spine place(base_box=neck_2_core, anchor=[0, 0.96, 0], align=[0, -0.78, 0]) {
+                size: [1.5, 4.0, 3.5], material: bone_ivory, rotate: [22, 0, 0], blend_with: [neck_1_core]
+              }
+
+              bone neck_3 attach(parent_box=neck_2_core, anchor=[0, 0.05, 1], align=[0, 0, -1], seat=0.24) {
+                rest_euler: [18, 0, 0]
+                box neck_3_core { size: [8.0, 7.5, 8.0], material: obsidian_scale }
+                box neck_3_scute place(base_box=neck_3_core, anchor=[0, -0.96, 0.05], align=[0, 0.45, 0]) {
+                  size: [5.5, 1.5, 6.5], material: belly_bronze, blend_with: [neck_2_core, neck_2_scute]
+                }
+                box neck_3_spine place(base_box=neck_3_core, anchor=[0, 0.96, 0], align=[0, -0.78, 0]) {
+                  size: [1.5, 4.0, 3.5], material: bone_ivory, rotate: [24, 0, 0], blend_with: [neck_2_core]
+                }
+
+                bone neck_4 attach(parent_box=neck_3_core, anchor=[0, 0.05, 1], align=[0, 0, -1], seat=0.24) {
+                  rest_euler: [28, 0, 0]
+                  box neck_4_core { size: [7.0, 6.5, 7.5], material: obsidian_scale }
+                  box neck_4_scute place(base_box=neck_4_core, anchor=[0, -0.96, 0.05], align=[0, 0.45, 0]) {
+                    size: [5.0, 1.5, 6.0], material: belly_bronze, blend_with: [neck_3_core, neck_3_scute]
+                  }
+                  box neck_4_spine place(base_box=neck_4_core, anchor=[0, 0.96, 0], align=[0, -0.78, 0]) {
+                    size: [1.5, 4.5, 3.0], material: bone_ivory, rotate: [24, 0, 0], blend_with: [neck_3_core]
+                  }
+
+                  bone neck_5 attach(parent_box=neck_4_core, anchor=[0, 0.05, 1], align=[0, 0, -1], seat=0.24) {
+                    rest_euler: [32, 0, 0]
+                    box neck_5_core { size: [6.5, 6.0, 7.0], material: obsidian_scale }
+                    box neck_5_scute place(base_box=neck_5_core, anchor=[0, -0.96, 0.05], align=[0, 0.45, 0]) {
+                      size: [4.5, 1.5, 5.5], material: belly_bronze, blend_with: [neck_4_core, neck_4_scute]
+                    }
+                    box neck_5_spine place(base_box=neck_5_core, anchor=[0, 0.96, 0], align=[0, -0.78, 0]) {
+                      size: [1.5, 4.5, 3.0], material: bone_ivory, rotate: [26, 0, 0], blend_with: [neck_4_core]
+                    }
+
+                    bone head attach(parent_box=neck_5_core, anchor=[0, 0.05, 1], align=[0, 0, -1], seat=0.22) {
+                      rest_euler: [20, 0, 0]
+                      box skull_core { size: [9.0, 6.0, 7.5], material: obsidian_scale }
+                      box skull_crown place(base_box=skull_core, anchor=[0, 0.96, -0.10], align=[0, -0.60, 0]) {
+                        size: [5.5, 2.0, 6.5], material: slate_armor, rotate: [6, 0, 0], blend_with: [neck_5_core, brow_ridge_l, brow_ridge_r]
+                      }
+                      box skull_crest_spike place(base_box=skull_crown, anchor=[0, 0.96, -0.25], align=[0, -0.80, 0]) {
+                        size: [1.5, 3.5, 2.5], material: bone_ivory, rotate: [24, 0, 0], blend_with: [skull_core, neck_5_core, neck_5_spine]
+                      }
+                      box brow_ridge_l place(base_box=skull_core, anchor=[0.84, 0.76, 0.48], align=[-0.15, -0.48, -0.25]) {
+                        size: [2.5, 2.0, 6.0], material: slate_armor, rotate: [10, -14, -14], blend_with: [skull_crown]
+                      }
+                      box brow_ridge_r place(base_box=skull_core, anchor=[-0.84, 0.76, 0.48], align=[0.15, -0.48, -0.25]) {
+                        size: [2.5, 2.0, 6.0], material: slate_armor, rotate: [10, 14, 14], blend_with: [skull_crown]
+                      }
+                      box cheek_jowl_l place(base_box=skull_core, anchor=[0.96, -0.20, 0.08], align=[-0.48, 0, 0]) {
+                        size: [2.5, 4.0, 5.5], material: slate_armor, rotate: [6, -12, 8], blend_with: [brow_ridge_l, neck_5_core]
+                      }
+                      box cheek_jowl_r place(base_box=skull_core, anchor=[-0.96, -0.20, 0.08], align=[0.48, 0, 0]) {
+                        size: [2.5, 4.0, 5.5], material: slate_armor, rotate: [6, 12, -8], blend_with: [brow_ridge_r, neck_5_core]
+                      }
+                      box eye_slit_l place(base_box=skull_core, anchor=[0.98, 0.44, 0.52], align=[-0.72, 0, 0]) {
+                        size: [1.0, 1.5, 2.5], material: eye_gold, rotate: [8, -10, 0], blend_with: [brow_ridge_l, cheek_jowl_l]
+                      }
+                      box eye_slit_r place(base_box=skull_core, anchor=[-0.98, 0.44, 0.52], align=[0.72, 0, 0]) {
+                        size: [1.0, 1.5, 2.5], material: eye_gold, rotate: [8, 10, 0], blend_with: [brow_ridge_r, cheek_jowl_r]
+                      }
+
+                      // Sharp 3D wedged western-dragon snout (snout_taper_ratio < 0.35!)
+                      box snout_core place(base_box=skull_core, anchor=[0, -0.12, 1], align=[0, 0, -0.78]) {
+                        size: [4.5, 3.5, 7.0], material: obsidian_scale, rotate: [8, 0, 0], blend_with: [brow_ridge_l, brow_ridge_r, eye_slit_l, eye_slit_r]
+                      }
+                      box nasal_bridge place(base_box=snout_core, anchor=[0, 0.90, 0.05], align=[0, -0.50, 0]) {
+                        size: [3.5, 2.0, 6.5], material: slate_armor, rotate: [6, 0, 0], blend_with: [skull_core, skull_crown, brow_ridge_l, brow_ridge_r]
+                      }
+                      box maxilla_wedge_l place(base_box=snout_core, anchor=[0.96, -0.10, -0.18], align=[-0.48, 0, 0]) {
+                        size: [2.0, 3.0, 5.5], material: obsidian_scale, rotate: [8, -20, 8], blend_with: [skull_core, cheek_jowl_l, nasal_bridge, eye_slit_l]
+                      }
+                      box maxilla_wedge_r place(base_box=snout_core, anchor=[-0.96, -0.10, -0.18], align=[0.48, 0, 0]) {
+                        size: [2.0, 3.0, 5.5], material: obsidian_scale, rotate: [8, 20, -8], blend_with: [skull_core, cheek_jowl_r, nasal_bridge, eye_slit_r]
+                      }
+                      box nose_tip place(base_box=snout_core, anchor=[0, 0.08, 0.96], align=[0, 0, -0.68]) {
+                        size: [2.5, 2.5, 3.0], material: deep_charcoal, rotate: [14, 0, 0], blend_with: [nasal_bridge, maxilla_wedge_l, maxilla_wedge_r]
+                      }
+
+                      // 4 Multi-segment swept-back ridged Fatalis horns (2 long upper crown + 2 lower temporal)
+                      bone horn_upper_l attach(parent_box=skull_core, anchor=[0.62, 0.92, -0.82], align=[0, 0, 1], seat=0.06) mirror_x(horn_upper_r) {
+                        rest_euler: [28, -16, -8]
+                        box horn_u_seg_1 { size: [3.0, 3.0, 6.0], material: slate_armor, blend_with: [skull_crown, brow_ridge_l, neck_5_core] }
+                        bone horn_upper_mid_l attach(parent_box=horn_u_seg_1, anchor=[0, 0.05, -1], align=[0, 0, 1], seat=0.18) {
+                          rest_euler: [12, -8, 0]
+                          box horn_u_seg_2 { size: [2.5, 2.5, 6.0], material: horn_ochre }
+                          bone horn_upper_tip_l attach(parent_box=horn_u_seg_2, anchor=[0, 0.05, -1], align=[0, 0, 1], seat=0.18) {
+                            rest_euler: [14, -6, 0]
+                            box horn_u_seg_3 { size: [1.5, 1.5, 5.5], material: bone_ivory }
+                          }
+                        }
+                      }
+                      bone horn_lower_l attach(parent_box=skull_core, anchor=[0.94, -0.10, -0.82], align=[0, 0, 1], seat=0.06) mirror_x(horn_lower_r) {
+                        rest_euler: [2, -34, 8]
+                        box horn_l_seg_1 { size: [2.5, 2.0, 5.5], material: horn_ochre, blend_with: [cheek_jowl_l, neck_5_core] }
+                        bone horn_lower_tip_l attach(parent_box=horn_l_seg_1, anchor=[0, 0.05, -1], align=[0, 0, 1], seat=0.12) {
+                          rest_euler: [10, -10, 0]
+                          box horn_l_seg_2 { size: [1.5, 1.5, 5.0], material: bone_ivory }
+                        }
+                      }
+
+                      // Armored pale bone-ivory lower dragon jaw & chin keel
+                      bone jaw attach(parent_box=skull_core, anchor=[0, -0.72, 0.18], align=[0, 0, -1], seat=0.14) {
+                        rest_euler: [10, 0, 0]
+                        box jaw_core { size: [4.0, 2.5, 8.0], material: bone_ivory, blend_with: [cheek_jowl_l, cheek_jowl_r, snout_core] }
+                        box chin_keel place(base_box=jaw_core, anchor=[0, -0.90, 0.25], align=[0, 0.45, 0]) {
+                          size: [3.0, 2.0, 5.5], material: bone_ivory, rotate: [-12, 0, 0], blend_with: [neck_5_core, neck_5_scute]
+                        }
+                        box jaw_frill_spur_l place(base_box=jaw_core, anchor=[0.96, -0.45, 0.12], align=[-0.65, 0, 0]) {
+                          size: [1.5, 2.0, 4.0], material: bone_ivory, rotate: [8, -18, 12], blend_with: [cheek_jowl_l, chin_keel]
+                        }
+                        box jaw_frill_spur_r place(base_box=jaw_core, anchor=[-0.96, -0.45, 0.12], align=[0.65, 0, 0]) {
+                          size: [1.5, 2.0, 4.0], material: bone_ivory, rotate: [8, 18, -12], blend_with: [cheek_jowl_r, chin_keel]
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+
+          // Colossal 18-bone partitioned bat wings with multi-layer ragged cutout membrane bays in X-Y fan plane (`normal: z`)!
+          bone wing_mount_l attach(parent_box=chest_core, anchor=[0.88, 0.85, 0.08], align=[-0.45, -0.45, 0], seat=0.10) mirror_x(wing_mount_r) {
+            rest_euler: [8, 0, -10]
+            box wing_root_mass { size: [5.5, 5.0, 8.5], material: slate_armor, blend_with: [thoracic_ridge, neck_1_core] }
+
+            bone wing_arm_l attach(parent_box=wing_root_mass, anchor=[0.96, 0.45, 0], align=[-1, 0, 0], seat=0.08) {
+              rest_euler: [38, 22, 48]
+              box wing_humerus { size: [15.5, 4.0, 4.5], material: obsidian_scale, blend_with: [chest_core] }
+              plane wing_patagium_plane place(base_box=wing_humerus, anchor=[0.0, -0.96, 0.05], align=[0, 0.90, 0]) {
+                size: [15.0, 14.0], normal: z, material: bronze_wing,
+                edge: ragged(depth=5, holes=2, side=bottom, seed=11), layer: 1,
+                blend_with: [wing_root_mass, chest_core, waist_core, fore_bicep, wing_radius, wing_spar_4, wing_bay_4_plane, wing_forearm_bay_plane]
+              }
+
+              bone wing_forearm_l attach(parent_box=wing_humerus, anchor=[1, 0.08, 0], align=[-1, 0, 0], seat=0.10) {
+                rest_euler: [0, -30, 34]
+                box wing_radius { size: [21.5, 3.5, 3.5], material: obsidian_scale }
+                box wing_wrist_hub place(base_box=wing_radius, anchor=[0.98, 0, -0.05], align=[-0.55, 0, 0]) {
+                  size: [4.0, 5.5, 6.5], material: slate_armor
+                }
+                box wing_thumb_claw place(base_box=wing_wrist_hub, anchor=[0.55, 0.75, 0.96], align=[0, 0, -0.80]) {
+                  size: [2.0, 2.0, 6.0], material: bone_ivory, rotate: [-18, -22, 12], blend_with: [wing_radius, wing_spar_1]
+                }
+                plane wing_forearm_bay_plane place(base_box=wing_radius, anchor=[0.0, -0.96, 0.05], align=[0, 0.90, 0]) {
+                  size: [20.5, 16.0], normal: z, material: bronze_wing,
+                  edge: scallop(bays=2, depth=5, side=bottom, seed=17), layer: 2,
+                  blend_with: [wing_humerus, wing_patagium_plane, wing_wrist_hub, wing_spar_3, wing_spar_4, wing_bay_3_plane, wing_bay_4_plane]
+                }
+
+                bone wing_finger_1_l attach(parent_box=wing_wrist_hub, anchor=[0.96, 0.82, 0.78], align=[-1, 0, 0], seat=0.0) {
+                  rest_euler: [0, 12, -40]
+                  box wing_spar_1 { size: [19.0, 2.5, 2.5], material: obsidian_scale, blend_with: [wing_radius] }
+                  plane wing_bay_1_plane place(base_box=wing_spar_1, anchor=[0.08, -0.96, 0.05], align=[0, 0.88, 0]) {
+                    size: [18.5, 13.5], normal: z, material: bronze_wing, rotate: [0, 0, -10],
+                    edge: ragged(depth=6, holes=3, side=bottom, seed=23), layer: 1,
+                    blend_with: [wing_wrist_hub, wing_radius, wing_spar_2, wing_spar_3, wing_bay_2_plane, wing_bay_3_plane, wing_spar_1b]
+                  }
+                  bone wing_finger_1b_l attach(parent_box=wing_spar_1, anchor=[1, 0, 0], align=[-1, 0, 0], seat=0.05) {
+                    rest_euler: [0, 10, -10]
+                    box wing_spar_1b { size: [13.5, 1.5, 1.5], material: bone_ivory }
+                    plane wing_bay_1b_plane place(base_box=wing_spar_1b, anchor=[0.0, -0.96, 0.05], align=[0, 0.88, 0]) {
+                      size: [13.0, 12.0], normal: z, material: bronze_wing, rotate: [0, 0, -12],
+                      edge: ragged(depth=6, holes=3, side=bottom, seed=29), layer: 2,
+                      blend_with: [wing_spar_1, wing_bay_1_plane, wing_spar_2, wing_spar_2b, wing_bay_2_plane, wing_bay_2b_plane]
+                    }
+                  }
+                }
+
+                bone wing_finger_2_l attach(parent_box=wing_wrist_hub, anchor=[0.96, 0.24, 0.22], align=[-1, 0, 0], seat=0.0) {
+                  rest_euler: [0, 26, -68]
+                  box wing_spar_2 { size: [18.5, 2.0, 2.0], material: obsidian_scale, blend_with: [wing_radius, wing_spar_1] }
+                  plane wing_bay_2_plane place(base_box=wing_spar_2, anchor=[0.08, -0.96, 0.05], align=[0, 0.88, 0]) {
+                    size: [18.0, 14.0], normal: z, material: bronze_wing, rotate: [0, 0, -10],
+                    edge: ragged(depth=6, holes=2, side=bottom, seed=31), layer: 2,
+                    blend_with: [wing_wrist_hub, wing_radius, wing_spar_1, wing_spar_3, wing_spar_4, wing_bay_3_plane, wing_bay_4_plane, wing_spar_2b]
+                  }
+                  bone wing_finger_2b_l attach(parent_box=wing_spar_2, anchor=[1, 0, 0], align=[-1, 0, 0], seat=0.05) {
+                    rest_euler: [0, 10, -10]
+                    box wing_spar_2b { size: [12.5, 1.5, 1.5], material: bone_ivory }
+                    plane wing_bay_2b_plane place(base_box=wing_spar_2b, anchor=[0.0, -0.96, 0.05], align=[0, 0.88, 0]) {
+                      size: [12.0, 12.0], normal: z, material: bronze_wing, rotate: [0, 0, -12],
+                      edge: ragged(depth=6, holes=2, side=bottom, seed=37), layer: 1,
+                      blend_with: [wing_spar_2, wing_bay_2_plane, wing_spar_3, wing_bay_3_plane]
+                    }
+                  }
+                }
+
+                bone wing_finger_3_l attach(parent_box=wing_wrist_hub, anchor=[0.92, -0.34, -0.34], align=[-1, 0, 0], seat=0.0) {
+                  rest_euler: [0, 34, -96]
+                  box wing_spar_3 { size: [27.5, 2.0, 2.0], material: obsidian_scale, blend_with: [wing_radius, wing_spar_2] }
+                  plane wing_bay_3_plane place(base_box=wing_spar_3, anchor=[0.05, -0.96, 0.05], align=[0, 0.88, 0]) {
+                    size: [25.5, 14.0], normal: z, material: bronze_wing, rotate: [0, 0, -10],
+                    edge: ragged(depth=6, holes=3, side=bottom, seed=41), layer: 1,
+                    blend_with: [wing_wrist_hub, wing_radius, wing_spar_2, wing_spar_4, wing_bay_4_plane, wing_forearm_bay_plane]
+                  }
+                }
+
+                bone wing_finger_4_l attach(parent_box=wing_wrist_hub, anchor=[0.78, -0.92, -0.90], align=[-1, 0, 0], seat=0.0) {
+                  rest_euler: [0, 34, -124]
+                  box wing_spar_4 { size: [24.0, 2.0, 2.0], material: obsidian_scale, blend_with: [wing_radius, wing_spar_2, wing_spar_3, wing_humerus] }
+                  plane wing_bay_4_plane place(base_box=wing_spar_4, anchor=[0.05, -0.96, 0.05], align=[0, 0.88, 0]) {
+                    size: [22.0, 13.0], normal: z, material: bronze_wing, rotate: [0, 0, -8],
+                    edge: scallop(bays=2, depth=5, side=bottom, seed=43), layer: 2,
+                    blend_with: [wing_wrist_hub, wing_radius, wing_humerus, wing_spar_3, wing_patagium_plane, wing_forearm_bay_plane]
+                  }
+                }
+              }
+            }
+          }
+
+          // Long muscular dragon forelimbs reaching down from reared chest to Y = 0
+          bone fore_shoulder_l attach(parent_box=chest_core, anchor=[0.96, -0.35, 0.18], align=[-0.55, 0.85, 0], seat=0.12) mirror_x(fore_shoulder_r) {
+            rest_euler: [62, 6, 22]
+            box fore_bicep { size: [6.5, 13.5, 7.0], material: obsidian_scale, blend_with: [waist_core, wing_root_mass] }
+            box fore_pauldron place(base_box=fore_bicep, anchor=[0.98, 0.35, 0.05], align=[-0.50, 0, 0]) {
+              size: [2.5, 6.5, 6.0], material: slate_armor, rotate: [-8, 8, -12], blend_with: [chest_core, wing_root_mass]
+            }
+            box fore_elbow_spur place(base_box=fore_bicep, anchor=[0.15, -0.82, -0.96], align=[0, 0, 0.70]) {
+              size: [3.0, 3.0, 4.5], material: bone_ivory, rotate: [20, 0, 0], blend_with: [fore_bracer]
+            }
+
+            bone fore_arm_l attach(parent_box=fore_bicep, anchor=[0.08, -1, -0.05], align=[0, 0.88, 0], seat=0.16) {
+              rest_euler: [-34, 0, -14]
+              box fore_bracer { size: [5.5, 13.5, 6.0], material: obsidian_scale, blend_with: [chest_core] }
+              box fore_bracer_guard place(base_box=fore_bracer, anchor=[0.85, 0.05, 0.65], align=[-0.55, 0, -0.55]) {
+                size: [2.5, 9.5, 3.0], material: slate_armor, rotate: [4, -12, -6], blend_with: [fore_bicep, fore_hand_pad]
+              }
+
+              bone fore_hand_l attach(parent_box=fore_bracer, anchor=[0, -1, 0.15], align=[0, 0.88, -0.45], seat=0.14) {
+                rest_euler: [18, 0, -8]
+                box fore_hand_pad { size: [7.0, 3.0, 7.0], material: deep_charcoal }
+                box f_toe_1 place(base_box=fore_hand_pad, anchor=[-0.68, -0.10, 0.94], align=[0, 0, -0.78]) {
+                  size: [1.5, 2.0, 4.5], material: slate_armor, rotate: [2, 16, 0]
+                }
+                box f_toe_2 place(base_box=fore_hand_pad, anchor=[-0.22, -0.10, 0.98], align=[0, 0, -0.80]) {
+                  size: [1.5, 2.0, 5.0], material: slate_armor, rotate: [2, 5, 0], blend_with: [f_toe_1]
+                }
+                box f_toe_3 place(base_box=fore_hand_pad, anchor=[0.24, -0.10, 0.98], align=[0, 0, -0.80]) {
+                  size: [1.5, 2.0, 5.0], material: slate_armor, rotate: [2, -6, 0], blend_with: [f_toe_2]
+                }
+                box f_toe_4 place(base_box=fore_hand_pad, anchor=[0.70, -0.10, 0.92], align=[0, 0, -0.78]) {
+                  size: [1.5, 2.0, 4.5], material: slate_armor, rotate: [2, -18, 0], blend_with: [f_toe_3]
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // Coiled powerful dragon hindlimbs planted wide on Y = 0
+      bone hind_thigh_l attach(parent_box=pelvis_core, anchor=[0.96, -0.12, -0.05], align=[-0.55, 0.85, 0], seat=0.14) mirror_x(hind_thigh_r) {
+        rest_euler: [-10, -6, 20]
+        box thigh_mass { size: [6.5, 11.5, 8.0], material: obsidian_scale, blend_with: [waist_core, tail_1_seg] }
+        box thigh_armor place(base_box=thigh_mass, anchor=[0.98, 0.22, 0.08], align=[-0.48, 0, 0]) {
+          size: [2.5, 6.5, 6.0], material: slate_armor, rotate: [6, -8, -10], blend_with: [pelvis_core, haunch_muscle_l]
+        }
+        box knee_guard place(base_box=thigh_mass, anchor=[0.15, -0.82, 0.96], align=[0, 0, -0.72]) {
+          size: [3.5, 3.5, 2.5], material: slate_armor, rotate: [-14, 0, 0], blend_with: [shin_mass, waist_core]
+        }
+
+        bone hind_shin_l attach(parent_box=thigh_mass, anchor=[0.05, -1, -0.10], align=[0, 0.88, 0], seat=0.16) {
+          rest_euler: [52, 0, -12]
+          box shin_mass { size: [5.0, 10.5, 5.5], material: obsidian_scale }
+          box hock_spur place(base_box=shin_mass, anchor=[0, 0.65, -0.94], align=[0, 0, 0.72]) {
+            size: [2.5, 3.0, 4.0], material: bone_ivory, rotate: [20, 0, 0], blend_with: [thigh_mass]
+          }
+
+          bone hind_foot_l attach(parent_box=shin_mass, anchor=[0, -1, 0.15], align=[0, 0.88, -0.42], seat=0.14) {
+            rest_euler: [-24, 0, -8]
+            box hind_foot_pad { size: [6.5, 3.0, 7.0], material: deep_charcoal }
+            box h_toe_1 place(base_box=hind_foot_pad, anchor=[-0.62, -0.10, 0.94], align=[0, 0, -0.78]) {
+              size: [1.5, 2.0, 4.5], material: slate_armor, rotate: [2, 14, 0]
+            }
+            box h_toe_2 place(base_box=hind_foot_pad, anchor=[0.0, -0.10, 0.98], align=[0, 0, -0.80]) {
+              size: [1.5, 2.0, 5.0], material: slate_armor, rotate: [2, 0, 0], blend_with: [h_toe_1]
+            }
+            box h_toe_3 place(base_box=hind_foot_pad, anchor=[0.62, -0.10, 0.94], align=[0, 0, -0.78]) {
+              size: [1.5, 2.0, 4.5], material: slate_armor, rotate: [2, -14, 0], blend_with: [h_toe_2]
+            }
+          }
+        }
+      }
+
+      // Extra-long 7-bone articulated serpentine whip tail (`tail_1..tail_7`) lined with bone spines!
+      bone tail_1 attach(parent_box=pelvis_core, anchor=[0, -0.05, -1], align=[0, 0, 1], seat=0.20) {
+        rest_euler: [-4, 0, 0]
+        box tail_1_seg { size: [8.5, 7.5, 12.5], material: obsidian_scale }
+        box tail_1_scute place(base_box=tail_1_seg, anchor=[0, -0.96, 0], align=[0, 0.45, 0]) {
+          size: [6.0, 1.5, 10.5], material: belly_bronze, blend_with: [pelvis_belly, pelvis_core]
+        }
+        box tail_1_spine place(base_box=tail_1_seg, anchor=[0, 0.96, -0.10], align=[0, -0.78, 0]) {
+          size: [2.0, 3.5, 4.0], material: bone_ivory, rotate: [24, 0, 0], blend_with: [pelvis_core, sacrum_armor]
+        }
+
+        bone tail_2 attach(parent_box=tail_1_seg, anchor=[0, 0.02, -1], align=[0, 0, 1], seat=0.20) {
+          rest_euler: [10, 0, 0]
+          box tail_2_seg { size: [7.5, 6.5, 12.0], material: obsidian_scale }
+          box tail_2_scute place(base_box=tail_2_seg, anchor=[0, -0.96, 0], align=[0, 0.45, 0]) {
+            size: [5.0, 1.5, 10.0], material: belly_bronze, blend_with: [tail_1_scute, tail_1_seg]
+          }
+          box tail_2_spine place(base_box=tail_2_seg, anchor=[0, 0.96, -0.10], align=[0, -0.78, 0]) {
+            size: [1.5, 3.5, 4.0], material: bone_ivory, rotate: [24, 0, 0], blend_with: [tail_1_seg]
+          }
+
+          bone tail_3 attach(parent_box=tail_2_seg, anchor=[0, 0.02, -1], align=[0, 0, 1], seat=0.20) {
+            rest_euler: [10, 0, 0]
+            box tail_3_seg { size: [6.5, 5.5, 11.5], material: obsidian_scale }
+            box tail_3_scute place(base_box=tail_3_seg, anchor=[0, -0.96, 0], align=[0, 0.45, 0]) {
+              size: [4.5, 1.0, 9.5], material: belly_bronze, blend_with: [tail_2_scute, tail_2_seg]
+            }
+            box tail_3_spine place(base_box=tail_3_seg, anchor=[0, 0.96, -0.10], align=[0, -0.78, 0]) {
+              size: [1.5, 3.5, 3.5], material: bone_ivory, rotate: [24, 0, 0], blend_with: [tail_2_seg]
+            }
+
+            bone tail_4 attach(parent_box=tail_3_seg, anchor=[0, 0.02, -1], align=[0, 0, 1], seat=0.20) {
+              rest_euler: [4, 0, 0]
+              box tail_4_seg { size: [5.5, 5.0, 11.0], material: obsidian_scale }
+              box tail_4_spine place(base_box=tail_4_seg, anchor=[0, 0.96, -0.10], align=[0, -0.78, 0]) {
+                size: [1.5, 3.0, 3.5], material: bone_ivory, rotate: [24, 0, 0], blend_with: [tail_3_seg]
+              }
+
+              bone tail_5 attach(parent_box=tail_4_seg, anchor=[0, 0.02, -1], align=[0, 0, 1], seat=0.20) {
+                rest_euler: [4, 0, 0]
+                box tail_5_seg { size: [4.5, 4.0, 10.5], material: obsidian_scale }
+                box tail_5_spine place(base_box=tail_5_seg, anchor=[0, 0.96, -0.10], align=[0, -0.78, 0]) {
+                  size: [1.0, 3.0, 3.5], material: bone_ivory, rotate: [26, 0, 0], blend_with: [tail_4_seg]
+                }
+
+                bone tail_6 attach(parent_box=tail_5_seg, anchor=[0, 0.02, -1], align=[0, 0, 1], seat=0.18) {
+                  rest_euler: [8, 0, 0]
+                  box tail_6_seg { size: [3.5, 3.5, 10.0], material: slate_armor }
+                  box tail_6_spine place(base_box=tail_6_seg, anchor=[0, 0.96, -0.10], align=[0, -0.78, 0]) {
+                    size: [1.0, 2.5, 3.0], material: bone_ivory, rotate: [26, 0, 0], blend_with: [tail_5_seg]
+                  }
+
+                  bone tail_7 attach(parent_box=tail_6_seg, anchor=[0, 0.02, -1], align=[0, 0, 1], seat=0.18) {
+                    rest_euler: [12, 0, 0]
+                    box tail_7_seg { size: [2.5, 2.5, 9.5], material: slate_armor }
+                    box tail_whip_barb place(base_box=tail_7_seg, anchor=[0, 0.25, -0.96], align=[0, 0, 0.75]) {
+                      size: [2.0, 2.5, 6.5], material: bone_ivory, rotate: [12, 0, 0]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

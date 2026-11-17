@@ -253,6 +253,7 @@ class MaterialSpec:
     # Continuity & symmetry controls
     symmetry_mode: str = "independent_seed"
     weld_group: str | None = None
+    coat: str | None = None
     labpbr_metal_code: int = 230  # LabPBR 1.3 R-channel: 230=Iron, 231=Gold, 234=Copper, 255=Albedo-tinted metal
     seed: int = 101
 
@@ -311,6 +312,7 @@ class MaterialSpec:
             "biofilm_affinity": self.biofilm_affinity,
             "symmetry_mode": self.symmetry_mode,
             "weld_group": self.weld_group,
+            "coat": self.coat,
             "labpbr_metal_code": self.labpbr_metal_code,
             "seed": self.seed,
         }
@@ -399,16 +401,28 @@ class MaterialProgram:
 
     @classmethod
     def from_program(cls, program: Program, seed: int = 101) -> "MaterialProgram":
-        """Build MaterialProgram from Program palettes + optional @materials AST declarations."""
+        """Build MaterialProgram from Program palettes + optional @materials and @stamps AST declarations."""
         base = cls.default_from_palettes(program.palettes, seed=seed)
-        if not program.materials:
-            return base
         pal_map = {p.name: p for p in program.palettes}
         specs = dict(base.materials)
         for mdecl in program.materials:
             pal = pal_map[mdecl.name]
             l_val, c_val, h_val = pal.base_lch
             sec_lch = (max(0.05, l_val * 0.65), min(0.35, c_val * 1.2 + 0.03), (h_val + pal.hue_shift[0]) % 360.0)
+            coat_name = getattr(mdecl, "coat", None)
+            rd_f = float(mdecl.rd_feed)
+            rd_k = float(mdecl.rd_kill)
+            rd_t = 22.0
+            aniso = float(mdecl.anisotropy)
+            if coat_name == "plain":
+                rd_f, rd_k, rd_t = 0.090, 0.059, 0.0
+            elif coat_name == "spotted":
+                rd_f, rd_k = 0.030, 0.062
+            elif coat_name == "striped":
+                rd_f, rd_k = 0.042, 0.060
+                aniso = max(aniso, 3.2)
+            elif coat_name in ("banded_limb", "scale_rows"):
+                rd_t = 0.0
             specs[mdecl.name] = MaterialSpec(
                 name=mdecl.name,
                 family=mdecl.family,
@@ -423,18 +437,135 @@ class MaterialProgram:
                 porosity=mdecl.porosity,
                 subsurface=mdecl.subsurface,
                 feature_scale=mdecl.scale,
-                anisotropy=mdecl.anisotropy,
-                rd_feed=mdecl.rd_feed,
-                rd_kill=mdecl.rd_kill,
+                anisotropy=aniso,
+                rd_feed=rd_f,
+                rd_kill=rd_k,
+                rd_initial_time=rd_t,
                 film_thickness_nm=mdecl.film_nm,
                 wear_susceptibility=mdecl.wear,
                 oxidation_rate=mdecl.oxidation,
                 biofilm_affinity=mdecl.biofilm,
                 emissive_strength=max(mdecl.emissive, 1.0 if pal.emissive else 0.0),
                 weld_group=mdecl.weld_group,
+                coat=coat_name,
                 seed=mdecl.seed,
             )
-        return cls(materials=specs)
+
+        compiled_stamps: list[StampOverride] = []
+        if getattr(program, "stamps", ()):
+            from synccraft.kinematics.se3_chain import compile_geometry
+            from synccraft.surface.domain import face_uv_extents_units
+
+            rest_sc = compile_geometry(program)
+            box_by_name = rest_sc.box_by_name
+            upb = float(getattr(program.meta, "units_per_block", 16))
+            px_to_u = upb / float(max(1, program.meta.texel_density))
+            face_alias_map = {
+                "front": "south",
+                "back": "north",
+                "side": "west",
+                "top": "up",
+                "bottom": "down",
+            }
+            opp_side_face = {"west": "east", "east": "west"}
+
+            for stp in program.stamps:
+                if stp.target_box not in box_by_name or stp.color not in pal_map:
+                    continue
+                bx = box_by_name[stp.target_box]
+                pal_s = pal_map[stp.color]
+                f_resolved = face_alias_map.get(stp.face, stp.face)
+                if f_resolved not in FACES:
+                    continue
+                wu, hv = face_uv_extents_units(bx.size, f_resolved)
+                wu = max(px_to_u, float(wu))
+                hv = max(px_to_u, float(hv))
+
+                # `size` is specified in texel pixels (or model units when fractional); convert cleanly
+                sw_u = min(wu * 0.95, max(px_to_u * 0.8, float(stp.size[0]) * px_to_u))
+                sh_v = min(hv * 0.95, max(px_to_u * 0.8, float(stp.size[1]) * px_to_u))
+
+                raw_u, raw_v = float(stp.at[0]), float(stp.at[1])
+                base_cu = (raw_u * wu) if (0.0 <= raw_u <= 1.0 and wu > 1.2) else min(wu - 0.5 * sw_u, max(0.5 * sw_u, raw_u))
+                base_cv = (raw_v * hv) if (0.0 <= raw_v <= 1.0 and hv > 1.2) else min(hv - 0.5 * sh_v, max(0.5 * sh_v, raw_v))
+                em_val = max(float(stp.emissive), 1.0 if pal_s.emissive else 0.0)
+                em_opt = em_val if em_val > 0.0 else None
+
+                n_rows = max(1, int(stp.rows))
+                step_u = float(stp.spacing) * px_to_u if float(stp.spacing) > 0.0 else (sw_u * 1.6)
+                for r_idx in range(n_rows):
+                    cu_i = base_cu + (r_idx - 0.5 * (n_rows - 1)) * step_u
+                    u0 = max(0.0, min(wu - 1e-4, cu_i - 0.5 * sw_u))
+                    u1 = max(u0 + 1e-3, min(wu, cu_i + 0.5 * sw_u))
+                    v0 = max(0.0, min(hv - 1e-4, base_cv - 0.5 * sh_v))
+                    v1 = max(v0 + 1e-3, min(hv, base_cv + 0.5 * sh_v))
+                    compiled_stamps.append(
+                        StampOverride(
+                            box_name=bx.name,
+                            face=f_resolved,
+                            u_min=u0,
+                            v_min=v0,
+                            u_max=u1,
+                            v_max=v1,
+                            lch=pal_s.base_lch,
+                            shape=stp.shape,
+                            emissive=em_opt,
+                        )
+                    )
+                    if stp.mirror:
+                        # 1. Opposite lateral face on centerline boxes (`west` <-> `east`)
+                        if f_resolved in opp_side_face and abs(float(bx.center[0])) <= 0.5:
+                            compiled_stamps.append(
+                                StampOverride(
+                                    box_name=bx.name,
+                                    face=opp_side_face[f_resolved],
+                                    u_min=max(0.0, wu - u1),
+                                    v_min=v0,
+                                    u_max=max(max(0.0, wu - u1) + 1e-3, wu - u0),
+                                    v_max=v1,
+                                    lch=pal_s.base_lch,
+                                    shape=stp.shape,
+                                    emissive=em_opt,
+                                )
+                            )
+                        # 2. Bilateral mirror on north/south/up/down of a centerline box
+                        elif f_resolved in ("north", "south", "up", "down") and abs(float(bx.center[0])) <= 0.5 and abs(cu_i - 0.5 * wu) > 1e-3:
+                            mu0 = max(0.0, wu - u1)
+                            mu1 = max(mu0 + 1e-3, wu - u0)
+                            compiled_stamps.append(
+                                StampOverride(
+                                    box_name=bx.name,
+                                    face=f_resolved,
+                                    u_min=mu0,
+                                    v_min=v0,
+                                    u_max=mu1,
+                                    v_max=v1,
+                                    lch=pal_s.base_lch,
+                                    shape=stp.shape,
+                                    emissive=em_opt,
+                                )
+                            )
+                        # 3. Mirrored twin box on bilateral limbs/cheeks
+                        for cand_b in rest_sc.boxes:
+                            if cand_b.name != bx.name and cand_b.mirrored != bx.mirrored and (
+                                cand_b.name.endswith(f"__{bx.name}") or bx.name.endswith(f"__{cand_b.name}")
+                            ):
+                                mf = opp_side_face.get(f_resolved, f_resolved)
+                                compiled_stamps.append(
+                                    StampOverride(
+                                        box_name=cand_b.name,
+                                        face=mf,
+                                        u_min=max(0.0, wu - u1),
+                                        v_min=v0,
+                                        u_max=max(max(0.0, wu - u1) + 1e-3, wu - u0),
+                                        v_max=v1,
+                                        lch=pal_s.base_lch,
+                                        shape=stp.shape,
+                                        emissive=em_opt,
+                                    )
+                                )
+
+        return cls(materials=specs, stamps=tuple(compiled_stamps))
 
     def spec_for(self, material_name: str, fallback_palette: Palette | None = None) -> MaterialSpec:
         if material_name in self.materials:
@@ -610,10 +741,19 @@ class StyleConfig:
     bevel_highlight_strength: float = 0.08
     vanilla_reference_view_deg: float = 20.0
     target_encoding: str = "vanilla"
+    shade_mode: str = "physical"
+    banded_steps: int = 4
+    banded_direction: str = "down"
+    banded_cluster: str = "diagonal"
+    banded_top_highlight: bool = True
+    banded_contact_shadow: bool = True
+    glow_bleed: int = 0
 
     def __post_init__(self) -> None:
         if self.target_encoding not in TARGET_ENCODINGS:
             raise ValueError(f"Unsupported target_encoding {self.target_encoding!r}")
+        if self.shade_mode not in ("physical", "banded"):
+            raise ValueError(f"Unsupported shade_mode {self.shade_mode!r}")
 
     @property
     def fidelity_label(self) -> str:
@@ -624,11 +764,19 @@ class StyleConfig:
         if program.style is None:
             return cls()
         s = program.style
+        bd = getattr(s, "banded", None)
         return cls(
             quantize_to_palette_ramp=s.quantize_ramp,
             bevel_highlight_strength=s.bevel_highlight,
             vanilla_reference_view_deg=s.view_deg,
             target_encoding=s.target_encoding,
+            shade_mode=getattr(s, "shade_mode", "physical"),
+            banded_steps=int(bd.steps) if bd is not None else 4,
+            banded_direction=str(bd.direction) if bd is not None else "down",
+            banded_cluster=str(bd.cluster) if bd is not None else "diagonal",
+            banded_top_highlight=bool(bd.top_highlight) if bd is not None else True,
+            banded_contact_shadow=bool(bd.contact_shadow) if bd is not None else True,
+            glow_bleed=int(getattr(s, "glow_bleed", 0)),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -638,6 +786,13 @@ class StyleConfig:
             "bevel_highlight_strength": self.bevel_highlight_strength,
             "vanilla_reference_view_deg": self.vanilla_reference_view_deg,
             "target_encoding": self.target_encoding,
+            "shade_mode": self.shade_mode,
+            "banded_steps": self.banded_steps,
+            "banded_direction": self.banded_direction,
+            "banded_cluster": self.banded_cluster,
+            "banded_top_highlight": self.banded_top_highlight,
+            "banded_contact_shadow": self.banded_contact_shadow,
+            "glow_bleed": self.glow_bleed,
         }
 
     @classmethod

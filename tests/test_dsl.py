@@ -466,37 +466,77 @@ def thrusters(length, width=2) {
         missing = required_literals - quoted_literals
         self.assertEqual(missing, set(), f"grammar.lark missing v3.2 literals: {missing}")
 
-        # 3. If lark is installed in the environment, execute live parse-tree parity on v3.0/v3.1/v3.2 fixtures
-        if importlib.util.find_spec("lark") is not None:
-            from lark import Lark  # type: ignore[import-not-found]
+        # 3. Execute live Lark parse-tree parity on v3.0/v3.2/v4.0/v4.1 fixtures (unconditional — Item #14)
+        from lark import Lark
 
-            lark_parser = Lark(grammar_text, start="start")
-            valid_samples = [
-                MINIMAL,
-                *(p.read_text() for p in sorted((ROOT / "examples").glob("*.blockdsl"))),
-                format_program(
-                    Program(
-                        Meta("entity", "bedrock_entity", 16, size_step=0.5, audit_profile="authored"),
-                        [Palette("fur", (0.6, 0.1, 45.0), 4)],
-                        Bone(
-                            "root",
-                            pivot_local=(0.0, 8.0, 0.0),
-                            items=[
-                                Box("body", (4.0, 4.0, 6.0), "fur", uv=(0.0, 0.0), texture="tex"),
-                                Bone(
-                                    "ear",
-                                    attach=Joint("body", at=(2.0, 2.0, -2.0)),
-                                    items=[Plane("ear_p", (2.0, 3.0), "z", "fur")],
-                                ),
-                            ],
-                        ),
-                        textures=(TextureDecl("tex", "textures/entity/test.png", 64, 32),),
-                    )
-                ),
-            ]
-            for sample in valid_samples:
-                lark_parser.parse(sample)
-                parse_program(sample)
+        lark_parser = Lark(grammar_text, start="start")
+        v41_sample = """@meta { archetype: entity, target_profile: bedrock_entity, texel_density: 16, dsl_version: "4.1", size_step: 0.5, audit_profile: sculpted, gravity: 156.96 }
+@palette {
+  teal: ramp(base_lch=[0.55, 0.12, 190], steps=4)
+  gold: ramp(base_lch=[0.82, 0.16, 85], steps=3, emissive=true)
+}
+@rig {
+  root bone torso {
+    pivot_local: [0, 8, 0]
+    box chest { size: [6, 5, 8], material: teal }
+    octagon wheel place(base_box=chest, anchor=[1, -1, 0], align=[-1, 0, 0]) { size: [4, 4, 1.5], axis: x, material: teal }
+    bone fin attach(parent_box=chest, anchor=[0, 1, 0], align=[0, -1, 0], seat=0.25) {
+      joint_limits: continuous
+      plane crest { size: [3, 6], normal: x, material: teal, edge: spikes(width=2, length=1..4, side=top), layer: 1 }
+    }
+    bone leg_l attach(parent_box=chest, anchor=[1, -1, -0.5], align=[0, 1, 0]) mirror_x(leg_r) {
+      box thigh { size: [2, 4, 2], material: teal }
+      bone shin attach(parent_box=thigh, anchor=[0, -1, 0], align=[0, 1, 0]) {
+        box calf { size: [1.5, 4, 1.5], material: teal }
+      }
+    }
+  }
+}
+@materials {
+  teal: process(family=patterned_skin, coat=plain)
+}
+@style { target_encoding: vanilla, shade: banded(steps=4, direction=down, cluster=diagonal), glow_bleed: 2 }
+@stamps {
+  stamp eye on chest.north { at: [0.3, 0.4], size: [2, 1], color: gold, emissive: 0.9, mirror: true }
+}
+@kinematics {
+  ik_chain leg_l_ik { upper: leg_l, lower: shin, effector: [0, -2, 0], plane: sagittal }
+}
+@behavior {
+  clip walk {
+    duration_s: 1.6
+    gait walk { pattern: biped_alternate, froude: 0.25, duty: 0.65 }
+  }
+}
+"""
+        valid_samples = [
+            MINIMAL,
+            v41_sample,
+            format_program(parse_program(v41_sample)),
+            *(p.read_text() for p in sorted((ROOT / "examples").glob("*.blockdsl"))),
+            format_program(
+                Program(
+                    Meta("entity", "bedrock_entity", 16, size_step=0.5, audit_profile="authored"),
+                    [Palette("fur", (0.6, 0.1, 45.0), 4)],
+                    Bone(
+                        "root",
+                        pivot_local=(0.0, 8.0, 0.0),
+                        items=[
+                            Box("body", (4.0, 4.0, 6.0), "fur", uv=(0.0, 0.0), texture="tex"),
+                            Bone(
+                                "ear",
+                                attach=Joint("body", at=(2.0, 2.0, -2.0)),
+                                items=[Plane("ear_p", (2.0, 3.0), "z", "fur")],
+                            ),
+                        ],
+                    ),
+                    textures=(TextureDecl("tex", "textures/entity/test.png", 64, 32),),
+                )
+            ),
+        ]
+        for sample in valid_samples:
+            lark_parser.parse(sample)
+            parse_program(sample)
 
 
 if __name__ == "__main__":

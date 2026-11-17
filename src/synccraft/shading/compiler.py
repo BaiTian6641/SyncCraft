@@ -451,6 +451,223 @@ def shade_patch_ggx_linear(
     return np.clip(compressed, 0.0, 1.0)
 
 
+def shade_patch_banded_linear(
+    patch: FaceOpticalPatch,
+    palette: Palette,
+    grid_n_out_box: np.ndarray,
+    box_rotation_world: np.ndarray,
+    style: StyleConfig,
+) -> np.ndarray:
+    """Discrete painterly pixel-art cel-band shader (`shade: banded(...)`, ADR 0011).
+
+    Centers its discrete OKLCH value steps directly on ``palette.base_lch`` so mid-tones
+    never darken unexpectedly, lays stepped diagonal clusters across each face, and paints
+    1-px top-edge highlight and bottom/cavity contact-shadow rows while preserving crisp
+    authored stamps and emissive glow.
+    """
+    h_px, w_px = patch.height.shape
+    n_steps = max(2, int(style.banded_steps))
+    base_l, base_c, base_h = palette.base_lch
+    sh_shift, hi_shift = palette.hue_shift
+
+    # Build normalized discrete ramp where index `mid_idx` has EXACT palette.base_lch!
+    mid_idx = n_steps // 2
+    ramp_lch = np.zeros((n_steps, 3), dtype=np.float64)
+    for idx in range(n_steps):
+        rel = (idx - mid_idx) / float(max(1, n_steps - 1))
+        l_i = float(np.clip(base_l + rel * 0.34, 0.08, 0.96))
+        c_i = max(0.0, base_c * (1.0 - 0.15 * abs(rel)))
+        h_i = (base_h + ((-rel) * sh_shift if rel < 0.0 else rel * hi_shift)) % 360.0
+        ramp_lch[idx] = (l_i, c_i, h_i)
+    ramp_lin = oklch_to_linear_srgb(ramp_lch)  # (n_steps, 3), dark -> bright
+
+    rot = np.asarray(box_rotation_world, dtype=np.float64)
+    n_geom_w = rot @ grid_n_out_box
+    ny = float(n_geom_w[1])
+    # Directional face bias: top faces +0.28, side faces 0.0, bottom faces -0.30
+    face_bias = 0.28 * ny
+
+    rr, cc = np.meshgrid(
+        np.arange(h_px, dtype=np.float64),
+        np.arange(w_px, dtype=np.float64),
+        indexing="ij",
+    )
+    v_norm = rr / float(max(1, h_px - 1)) if h_px > 1 else np.full((h_px, w_px), 0.5)
+    u_norm = cc / float(max(1, w_px - 1)) if w_px > 1 else np.full((h_px, w_px), 0.5)
+    if style.banded_direction == "up":
+        grad_field = v_norm
+    elif style.banded_direction == "left":
+        grad_field = u_norm
+    elif style.banded_direction == "right":
+        grad_field = 1.0 - u_norm
+    else:
+        # "down": top of face lighter -> bottom of face darker
+        grad_field = 1.0 - v_norm
+
+    # Stepped diagonal pixel cluster offset (avoids noisy single-pixel checkerboard dithering)
+    if style.banded_cluster == "diagonal" and h_px >= 2 and w_px >= 2:
+        diag_step = (((rr.astype(np.int64) + cc.astype(np.int64) // 2) % 2).astype(np.float64) - 0.5) * (0.28 / n_steps)
+    else:
+        diag_step = 0.0
+
+    ao_term = (patch.cavity_ao - 0.85) * 0.45
+    h_span = float(np.ptp(patch.height))
+    if h_span > 1e-3:
+        h_centered = (patch.height - float(np.mean(patch.height))) / max(0.08, h_span)
+        relief_term = np.clip(h_centered, -0.55, 0.55) * 0.40
+    else:
+        relief_term = 0.0
+    val = 0.52 + face_bias + 0.36 * (grad_field - 0.5) + diag_step + ao_term + relief_term
+    band_idx = np.clip(np.rint(val * (n_steps - 1)).astype(np.int64), 0, n_steps - 1)
+
+    if style.banded_top_highlight and h_px >= 3 and ny >= -0.25:
+        top_ok = patch.cavity_ao[0, :] >= 0.65
+        band_idx[0, :] = np.where(top_ok, np.minimum(n_steps - 1, band_idx[0, :] + 1), band_idx[0, :])
+    if style.banded_contact_shadow and h_px >= 3 and ny <= 0.65:
+        band_idx[-1, :] = np.maximum(0, band_idx[-1, :] - 1)
+    band_idx = np.where(patch.cavity_ao < 0.48, np.maximum(0, band_idx - 1), band_idx)
+
+    banded_rgb = ramp_lin[band_idx]
+
+    # Preserve distinct secondary-pigment / stamp / emissive pixels from patch.base_color_linear
+    base_mid_lin = oklch_to_linear_srgb(palette.base_lch)
+    color_diff = np.linalg.norm(patch.base_color_linear - base_mid_lin[None, None, :], axis=-1)
+    override_mask = (color_diff > 0.16) | (patch.emissive > 0.15)
+    out = np.where(override_mask[..., None], patch.base_color_linear, banded_rgb)
+
+    if np.any(patch.emissive > 0.01):
+        out = np.clip(out + patch.emissive[..., None] * np.maximum(patch.base_color_linear, 0.10) * 0.45, 0.0, 1.0)
+    return np.clip(out, 0.0, 1.0)
+
+
+def apply_emissive_glow_bleed(
+    shaded_lin: np.ndarray,
+    emissive_mask: np.ndarray,
+    bleed_px: int,
+) -> np.ndarray:
+    """Bleed soft emissive glow colour `1..6` pixels onto neighbouring face texels (`SKILL.md` §Eyes/Glow)."""
+    if bleed_px <= 0 or not np.any(emissive_mask > 0.15):
+        return shaded_lin
+    h_px, w_px, _ = shaded_lin.shape
+    src_mask = emissive_mask > 0.15
+    ys, xs = np.nonzero(src_mask)
+    if len(ys) == 0:
+        return shaded_lin
+    out = shaded_lin.copy()
+    rr, cc = np.meshgrid(np.arange(h_px), np.arange(w_px), indexing="ij")
+    acc_glow = np.zeros_like(out)
+    r_max = float(bleed_px) + 0.5
+    for sy, sx in zip(ys.tolist(), xs.tolist()):
+        dist = np.hypot(rr - sy, cc - sx)
+        within = (dist > 0.0) & (dist <= r_max)
+        if not np.any(within):
+            continue
+        w = np.where(within, np.square(1.0 - dist / (r_max + 0.5)) * float(emissive_mask[sy, sx]) * 0.42, 0.0)
+        acc_glow = np.maximum(acc_glow, w[..., None] * shaded_lin[sy, sx][None, None, :])
+    return np.clip(out + acc_glow * (1.0 - src_mask.astype(np.float64)[..., None]), 0.0, 1.0)
+
+
+def compute_plane_edge_alpha_mask(
+    h_px: int,
+    w_px: int,
+    edge_decl: Any,
+) -> np.ndarray:
+    """Synthesize deterministic binary `{0, 255}` cut-out alpha mask for a `plane` with `edge: ...`."""
+    alpha = np.full((h_px, w_px), 255, dtype=np.uint8)
+    if edge_decl is None or h_px < 1 or w_px < 1:
+        return alpha
+
+    mode = str(edge_decl.mode)
+    side = str(edge_decl.side)
+    seed = int(edge_decl.seed)
+
+    def _hash1(idx: int, salt: int = 0) -> float:
+        x = ((idx * 73856093) ^ (seed * 19349663) ^ (salt * 83492791)) & 0xFFFFFFFF
+        x = ((x ^ (x >> 16)) * 0x45D9F3B) & 0xFFFFFFFF
+        return float(x & 0xFFFF) / 65535.0
+
+    # Orient canonical coordinates `(along_len, into_depth)` so any `side` shares identical logic:
+    # `d == 0` is the outer cut-out edge; `d` increases inward toward the clean spar edge!
+    sides_to_cut = ("top", "bottom", "left", "right") if side == "perimeter" else (side,)
+
+    for s_idx, cur_side in enumerate(sides_to_cut):
+        if cur_side in ("top", "bottom"):
+            n_along, n_perp = w_px, h_px
+        else:
+            n_along, n_perp = h_px, w_px
+        if n_perp <= 1:
+            continue
+
+        max_safe_cut = max(1, n_perp - 1)
+        cut_depths = np.zeros(n_along, dtype=np.int64)
+
+        if mode == "ragged":
+            d_cap = min(max_safe_cut, max(1, int(edge_decl.depth)))
+            for i in range(n_along):
+                r = 0.6 * _hash1(i, s_idx + 1) + 0.4 * _hash1(i // 2, s_idx + 17)
+                cut_depths[i] = int(round(r * d_cap))
+        elif mode in ("spikes", "drip"):
+            w_tooth = max(1, int(edge_decl.width))
+            lo_l = min(max_safe_cut, max(1, int(edge_decl.min_len)))
+            hi_l = min(max_safe_cut, max(lo_l, int(edge_decl.max_len)))
+            for i in range(n_along):
+                tooth_id = i // max(1, w_tooth * 2 if mode == "drip" else w_tooth)
+                tooth_len = lo_l + int(round(_hash1(tooth_id, s_idx + 31) * (hi_l - lo_l)))
+                if mode == "drip":
+                    # Hanging columns separated by gaps cut to `hi_l`
+                    in_col = (i % max(2, w_tooth * 2)) < w_tooth
+                    cut_depths[i] = (hi_l - tooth_len) if in_col else hi_l
+                else:
+                    # Sawtooth spikes: tip at center of tooth (`cut == hi_l - tooth_len`), notch at boundary (`cut == hi_l`)
+                    if w_tooth <= 2:
+                        tri = 1.0 if (i % 2 == 1) else 0.0
+                    else:
+                        local_u = (i % w_tooth) / float(w_tooth - 1)
+                        tri = 1.0 - abs(2.0 * local_u - 1.0)
+                    keep_extra = int(round(tri * tooth_len))
+                    cut_depths[i] = max(0, hi_l - keep_extra)
+        elif mode == "scallop":
+            n_bays = max(1, int(edge_decl.bays))
+            d_cap = min(max_safe_cut, max(1, int(edge_decl.depth)))
+            for i in range(n_along):
+                u_all = (i + 0.5) / float(max(1, n_along))
+                bay_u = (u_all * n_bays) % 1.0
+                arch = math.sin(math.pi * bay_u)
+                cut_depths[i] = int(round(arch * d_cap))
+        elif mode == "triangle_bay":
+            ax_u, ax_v = float(edge_decl.apex[0]), float(edge_decl.apex[1])
+            for i in range(n_along):
+                u_n = (i + 0.5) / float(max(1, n_along))
+                frac = min(1.0, abs(u_n - ax_u) / max(0.15, 1.0 - ax_u))
+                cut_depths[i] = min(max_safe_cut, int(round((1.0 - frac) * (1.0 - ax_v) * n_perp)))
+
+        for i in range(n_along):
+            c_d = int(cut_depths[i])
+            if c_d <= 0:
+                continue
+            if cur_side == "top":
+                alpha[:c_d, i] = 0
+            elif cur_side == "bottom":
+                alpha[h_px - c_d :, i] = 0
+            elif cur_side == "left":
+                alpha[i, :c_d] = 0
+            elif cur_side == "right":
+                alpha[i, w_px - c_d :] = 0
+
+    # Optional interior membrane holes (`holes > 0`, placed near outer half per `SKILL.md` §Membrane wings)
+    n_holes = int(getattr(edge_decl, "holes", 0))
+    if n_holes > 0 and h_px >= 3 and w_px >= 3:
+        for h_i in range(n_holes):
+            ry = 1 + int(_hash1(h_i, 101) * max(1, h_px - 2))
+            rx = 1 + int(_hash1(h_i, 211) * max(1, w_px - 2))
+            alpha[min(h_px - 2, ry), min(w_px - 2, rx)] = 0
+
+    # Guarantee at least 1 opaque pixel remains so island never becomes 100% invisible accidentally
+    if not np.any(alpha > 0):
+        alpha[h_px // 2, w_px // 2] = 255
+    return alpha
+
+
 def write_padded_island(canvas: np.ndarray, x: int, y: int, island: np.ndarray, padding: int) -> None:
     """Blit ``island`` (H, W, C) at (x, y) and edge-clamp into its ``padding`` border."""
     h, w = island.shape[:2]
@@ -476,7 +693,13 @@ def evaluate_world_optical_pipeline(
     subdivisions_per_unit: int | None = None,
 ) -> tuple[SurfaceDomain, Scene, dict[FaceKey, PosedFaceKinematics], OpticalFields, OpticalFields]:
     """Run P1-03a/b/c stages returning (domain, posed_scene, posed_kin, solver_optics, pixel_optics)."""
-    subdiv = subdivisions_per_unit or max(4, world_state.surface_state.subdivisions_per_unit)
+    if subdivisions_per_unit is not None:
+        subdiv = subdivisions_per_unit
+    elif getattr(world_state.style_config, "shade_mode", "physical") == "banded":
+        upb = max(1, int(getattr(world_state.program.meta, "units_per_block", 16)))
+        subdiv = max(1, min(4, int(round(world_state.program.meta.texel_density / float(upb)))))
+    else:
+        subdiv = max(4, world_state.surface_state.subdivisions_per_unit)
     domain = build_surface_domain(
         world_state.program,
         world_state.material_program,
@@ -564,26 +787,44 @@ def compile_vanilla_atlas(
             np.minimum(np.minimum(ug, eff_w_u - ug), np.minimum(vg, eff_h_u - vg)),
         )
 
-        shaded_lin = shade_patch_ggx_linear(
-            patch,
-            grid.tangent_right_box,
-            grid.bitangent_up_box,
-            grid.normal_box,
-            pbox.rotation,
-            edge_d,
-            world_state.environment,
-            world_state.style_config,
-        )
+        if getattr(world_state.style_config, "shade_mode", "physical") == "banded" and grid.material_name in palettes:
+            shaded_lin = shade_patch_banded_linear(
+                patch,
+                palettes[grid.material_name],
+                grid.normal_box,
+                pbox.rotation,
+                world_state.style_config,
+            )
+        else:
+            shaded_lin = shade_patch_ggx_linear(
+                patch,
+                grid.tangent_right_box,
+                grid.bitangent_up_box,
+                grid.normal_box,
+                pbox.rotation,
+                edge_d,
+                world_state.environment,
+                world_state.style_config,
+            )
 
-        if world_state.style_config.quantize_to_palette_ramp and grid.material_name in swatch_bank:
-            # Preserve unquantized stamp overrides or blend high-step perceptual ramp
-            swatches = swatch_bank[grid.material_name]
-            has_stamp = any(s.box_name == box_name and s.face == face for s in world_state.material_program.stamps)
-            if not has_stamp and spec_allows_ramp(world_state.material_program, grid.material_name):
-                shaded_lin = quantize_linear_rgb_to_swatches(shaded_lin, swatches)
+            if world_state.style_config.quantize_to_palette_ramp and grid.material_name in swatch_bank:
+                # Preserve unquantized stamp overrides or blend high-step perceptual ramp
+                swatches = swatch_bank[grid.material_name]
+                has_stamp = any(s.box_name == box_name and s.face == face for s in world_state.material_program.stamps)
+                if not has_stamp and spec_allows_ramp(world_state.material_program, grid.material_name):
+                    shaded_lin = quantize_linear_rgb_to_swatches(shaded_lin, swatches)
+
+        bleed_px = int(getattr(world_state.style_config, "glow_bleed", 0))
+        if bleed_px > 0:
+            shaded_lin = apply_emissive_glow_bleed(shaded_lin, patch.emissive, bleed_px)
 
         rgb_u8 = linear_to_srgb_u8(shaded_lin)
-        alpha_u8 = np.rint(np.clip(patch.opacity, 0.0, 1.0) * 255.0).astype(np.uint8)[..., None]
+        box_edge = getattr(pbox, "edge", None)
+        if getattr(pbox, "plane_normal", None) is not None and box_edge is not None:
+            alpha_2d = compute_plane_edge_alpha_mask(h_px, w_px, box_edge)
+            alpha_u8 = alpha_2d[..., None]
+        else:
+            alpha_u8 = np.rint(np.clip(patch.opacity, 0.0, 1.0) * 255.0).astype(np.uint8)[..., None]
         island_rgba = np.concatenate((rgb_u8, alpha_u8), axis=-1)
         write_padded_island(canvas, int(u0), int(v0), island_rgba, pad)
 

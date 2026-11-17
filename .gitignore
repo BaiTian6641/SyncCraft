@@ -53,6 +53,7 @@ htmlcov/
 # (Only deterministic starter runs/demo/ fixtures remain tracked; never commit checkpoints,
 #  runs/published/, runs/gate_g2_report.json, or agent logs)
 datasets/
+artifacts/
 runs/*
 !runs/demo/
 runs/published/

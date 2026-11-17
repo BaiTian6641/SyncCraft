@@ -1,5 +1,8 @@
 # Block-DSL v3.2 — Comprehensive Language Specification & External-AI Dataset Generation Guide
 
+> [!NOTE]
+> **Looking for Block-DSL v4.0 / v4.1 (`@layout`, `@component`, `@assembly`, `@morphology`, `gait`, `@stamps`, `edge`, `shade: banded`)?** See the canonical v4 specification at [BLOCK_DSL_V4_SPECIFICATION.md](BLOCK_DSL_V4_SPECIFICATION.md).
+
 > [!IMPORTANT]
 > **Purpose of This Document**: This is the self-contained, zero-ambiguity reference manual and dataset-engineering specification for **SyncCraft Block-DSL v3.2**. It is designed to be handed directly to an external AI model (or human technical artist) to synthesize **100% parser-valid, SE(3)-kinematics-valid, 15-axis SAT collision-free, `P1-02` physically connected, multi-material, animated 3D Minecraft / Blockbench assets** that fill underrepresented domains and biomechanical/procedural gaps in SyncCraft's human-artist training corpus (`TassP0lar/synccraft-v3-human-artist-dataset`), targeting our default multimodal world-model backbone **`LiquidAI/LFM3-VL-2B`**.
 

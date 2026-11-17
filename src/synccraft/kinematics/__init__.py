@@ -10,6 +10,19 @@ from .se3_chain import (
     euler_xyz_matrix,
 )
 from .sat_potential import SATResult, sat_obb
+from .gait_solver import (
+    audit_gait_clip_contracts,
+    compute_froude_kinematics,
+    evaluate_gait_clip,
+    resolve_limb_phases,
+)
+from .morphology import (
+    LimbMorphology,
+    MorphologyReport,
+    WingMorphology,
+    analyze_morphology,
+    format_morphology_block,
+)
 from .musculoskeletal import (
     HILL_ACTIVE_WIDTH_DEFAULT,
     HILL_PASSIVE_STIFFNESS_DEFAULT,
@@ -51,4 +64,13 @@ __all__ = [
     "hill_active_force_length",
     "hill_passive_force_length",
     "solve_look_chain",
+    "LimbMorphology",
+    "MorphologyReport",
+    "WingMorphology",
+    "analyze_morphology",
+    "format_morphology_block",
+    "audit_gait_clip_contracts",
+    "compute_froude_kinematics",
+    "evaluate_gait_clip",
+    "resolve_limb_phases",
 ]

@@ -125,6 +125,7 @@ def render_world_observation(
     )
 
     view_arrays: dict[str, np.ndarray] = {}
+    rgba_view_arrays: dict[str, np.ndarray] = {}
     hit_box_maps: dict[str, np.ndarray] = {}
 
     for view_name in views:
@@ -202,8 +203,6 @@ def render_world_observation(
             if not np.any(hit_mask):
                 continue
 
-            z_buf = np.where(hit_mask, t_near, z_buf)
-            box_idx_buf = np.where(hit_mask, b_idx, box_idx_buf)
             hit_loc = o_loc + t_near[..., None] * d_loc
 
             for k in range(3):
@@ -212,6 +211,8 @@ def render_world_observation(
                     if not np.any(f_mask):
                         continue
                     face_name = axis_faces[k][sgn_idx]
+                    if face_name in box.cullface:
+                        continue
                     t_r, t_d, _ = (np.asarray(v, dtype=np.float64) for v in FACE_AXES_BOX[face_name])
                     wu, hv = face_uv_extents_units(box.size, face_name)
                     span_u = wu + 2.0 * float(box.inflate)
@@ -222,10 +223,21 @@ def render_world_observation(
                     v_frac = np.clip((pts_f @ t_d) / max(1e-8, span_v) + 0.5, 0.0, 1.0 - 1e-9)
 
                     u0, v0, u1, v1 = atlas_desc["faces"][box.name][face_name]
-                    ax = (int(u0) + np.floor(u_frac * (u1 - u0)).astype(np.intp))
-                    ay = (int(v0) + np.floor(v_frac * (v1 - v0)).astype(np.intp))
-                    rgb_buf[f_mask] = atlas_rgba[ay, ax, :3]
+                    ax = (int(u0) + np.floor(u_frac * max(1, u1 - u0)).astype(np.intp))
+                    ay = (int(v0) + np.floor(v_frac * max(1, v1 - v0)).astype(np.intp))
+                    sampled_rgba = atlas_rgba[ay, ax]
+                    opaque_sub = sampled_rgba[:, 3] >= 128
+                    if not np.any(opaque_sub):
+                        continue
+                    fy, fx = np.nonzero(f_mask)
+                    oy = fy[opaque_sub]
+                    ox = fx[opaque_sub]
+                    z_buf[oy, ox] = t_near[oy, ox]
+                    box_idx_buf[oy, ox] = b_idx
+                    rgb_buf[oy, ox] = sampled_rgba[opaque_sub, :3]
 
+        alpha_silhouette = np.where(box_idx_buf >= 0, 255, 0).astype(np.uint8)
+        rgba_view_arrays[view_name] = np.concatenate((rgb_buf, alpha_silhouette[..., None]), axis=-1)
         view_arrays[view_name] = rgb_buf
         hit_box_maps[view_name] = box_idx_buf
 
@@ -235,6 +247,7 @@ def render_world_observation(
 
     return {
         "views": view_arrays,
+        "rgba_views": rgba_view_arrays,
         "hit_box_maps": hit_box_maps,
         "composite_rgb": composite,
         "atlas_descriptor": atlas_desc,

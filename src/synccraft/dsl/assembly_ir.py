@@ -54,11 +54,16 @@ from .ast_nodes import (
     Program,
     SlideDriveDecl,
     SpringDecl,
+    StampDecl,
     StyleDecl,
     TendonCoupling,
     TextureDecl,
     TrackDecl,
+    UVRect,
     Vec3,
+    _is_continuous_limit_pair,
+    EdgeCutoutDecl,
+    format_edge_cutout,
     validate_program,
 )
 from typing import TYPE_CHECKING
@@ -296,6 +301,9 @@ class BudgetSpec:
 class EnvelopeSpec:
     max_span: Vec3 | None = None
     min_ground_y: float | None = None
+    grounded: bool = False
+    ground_y: float = 0.0
+    ground_tol: float = 0.15
 
 
 @dataclass(frozen=True)
@@ -352,6 +360,12 @@ class ComponentBoxTemplate:
     cullface: tuple[str, ...] = ()
     blend_with: tuple[str, ...] = ()
     plane_normal: str | None = None
+    uv: tuple[float, float] | None = None
+    uv_faces: tuple[tuple[str, UVRect], ...] = ()
+    texture: str | None = None
+    edge: EdgeCutoutDecl | None = None
+    layer: int = 0
+    prism_group: str | None = None
 
 
 @dataclass(frozen=True)
@@ -371,6 +385,7 @@ class ComponentBoneTemplate:
     attach_offset: tuple[str, str, str] = ("0", "0", "0")
     attach_joint_mode: bool = False
     attach_detached: bool = False
+    attach_seat: float = 0.0
     rest_euler_exprs: tuple[str, str, str] = ("0", "0", "0")
     joint_limits: JointLimits | None = None
     boxes: tuple[ComponentBoxTemplate, ...] = ()
@@ -591,6 +606,15 @@ def evaluate_layout_dag(
 # ---------------------------------------------------------------------------
 
 
+def _component_uv_faces(
+    faces: tuple[tuple[str, UVRect], ...], sign: np.ndarray,
+) -> tuple[tuple[str, UVRect], ...]:
+    """Preserve painted UVs, using the direct-rig mirror convention exactly once."""
+    from synccraft.kinematics.se3_chain import _stored_uv_faces
+
+    return tuple(_stored_uv_faces(dict(faces), sign).items())
+
+
 @dataclass
 class _EvaluatedBox:
     local_name: str
@@ -605,6 +629,13 @@ class _EvaluatedBox:
     blend_with_local: tuple[str, ...]
     plane_normal: str | None
     uv_share_key: str | None
+    uv: tuple[float, float] | None
+    uv_faces: tuple[tuple[str, UVRect], ...]
+    texture: str | None
+    place_base_local: str | None = None
+    edge: EdgeCutoutDecl | None = None
+    layer: int = 0
+    prism_group: str | None = None
 
 
 @dataclass
@@ -831,6 +862,13 @@ def _evaluate_component_instance(
             blend_with_local=bt.blend_with,
             plane_normal=bt.plane_normal,
             uv_share_key=share_key,
+            uv=bt.uv,
+            uv_faces=_component_uv_faces(bt.uv_faces, mirror_sign),
+            texture=bt.texture,
+            place_base_local=bt.place_base if bt.has_place else None,
+            edge=bt.edge,
+            layer=bt.layer,
+            prism_group=f"{inst.name}__{bt.prism_group}" if bt.prism_group else None,
         )
         eval_boxes.append(eb)
         by_local_box[bt.name] = eb
@@ -916,7 +954,9 @@ def _lower_component_sub_bone(
         new_lims: list[tuple[float, float]] = []
         for ax_i in range(3):
             lo, hi = j_lims[ax_i]
-            if float(angle_sign[ax_i]) < 0.0:
+            if _is_continuous_limit_pair((lo, hi)):
+                new_lims.append((float(lo), float(hi)))
+            elif float(angle_sign[ax_i]) < 0.0:
                 new_lims.append((-float(hi), -float(lo)))
             else:
                 new_lims.append((float(lo), float(hi)))
@@ -929,6 +969,7 @@ def _lower_component_sub_bone(
             Joint(parent=parent_exp, at=off, align=alg, detached=btmpl.attach_detached),  # type: ignore[arg-type]
             anchor=anc,  # type: ignore[arg-type]
             joint_mode=False,
+            seat=btmpl.attach_seat,
         )
     )
 
@@ -976,6 +1017,11 @@ def _lower_component_sub_bone(
                 cullface=bx_t.cullface,
                 rotate=rot_b,  # type: ignore[arg-type]
                 pivot=piv_b,  # type: ignore[arg-type]
+                uv=bx_t.uv,
+                uv_faces=_component_uv_faces(bx_t.uv_faces, mirror_sign),
+                texture=bx_t.texture,
+                edge=bx_t.edge,
+                layer=bx_t.layer,
             )
             bone_items.append(replace(p_box, uv_share_key=sh_key, instance_name=inst_name))
         else:
@@ -990,8 +1036,12 @@ def _lower_component_sub_bone(
                     cullface=bx_t.cullface,
                     rotate=rot_b,  # type: ignore[arg-type]
                     pivot=piv_b,  # type: ignore[arg-type]
+                    uv=bx_t.uv,
+                    uv_faces=_component_uv_faces(bx_t.uv_faces, mirror_sign),
+                    texture=bx_t.texture,
                     uv_share_key=sh_key,
                     instance_name=inst_name,
+                    prism_group=f"{exp_bone_name}__{bx_t.prism_group}" if bx_t.prism_group else None,
                 )
             )
 
@@ -1047,6 +1097,7 @@ def resolve_assembly_program(
     kinematics: KinematicsDecl | None = None,
     behavior: BehaviorDecl | None = None,
     controller: ControllerDecl | None = None,
+    stamps: tuple[StampDecl, ...] = (),
     layout_overrides: Mapping[str, int | float] | None = None,
 ) -> Program:
     """Lower a typed v4.0 ``AssemblySpec`` into a resolved ``Program`` + ``SourceMap``."""
@@ -1146,7 +1197,7 @@ def resolve_assembly_program(
             ang_sign_c = _angle_sign_from_reflection(m_sign_c)
             ax_idx = {"x": 0, "y": 1, "z": 2}[conn.axis]
             new_lims = conn.limits
-            if new_lims is not None:
+            if new_lims is not None and not _is_continuous_limit_pair(new_lims):
                 flip_lim = (
                     float(ang_sign_c[ax_idx]) < 0.0
                     if conn.conn_type == "revolute"
@@ -1410,10 +1461,18 @@ def resolve_assembly_program(
                 for bw in eb.blend_with_local
             ]
             contact_targets: list[str] = []
+            if eb.place_base_local is not None and eb.place_base_local in local_to_export_box:
+                contact_targets.append(local_to_export_box[eb.place_base_local])
             if conn_contact_target_box is not None and eb.local_name == conn_contact_child_local:
-                contact_targets.append(conn_contact_target_box)
+                if conn_contact_target_box not in contact_targets:
+                    contact_targets.append(conn_contact_target_box)
                 if conn_sculpted_blend and conn_contact_target_box not in blend_targets:
                     blend_targets.append(conn_contact_target_box)
+
+            if eb.plane_normal is not None and eb.layer != 0:
+                n_ax = {"x": 0, "y": 1, "z": 2}[eb.plane_normal]
+                n_w = box_w_rot[:, n_ax]
+                ctr_in_rb = ctr_in_rb + 0.25 * float(eb.layer) * (rb_rot.T @ n_w)
 
             sz_tuple: tuple[int | float, int | float, int | float] = tuple(
                 int(round(float(v))) if abs(float(v) - round(float(v))) <= 1e-9 else round(float(v), 6)
@@ -1437,6 +1496,12 @@ def resolve_assembly_program(
                 explicit_local_center=(float(ctr_in_rb[0]), float(ctr_in_rb[1]), float(ctr_in_rb[2])),
                 explicit_contact_with=tuple(contact_targets),
                 instance_name=inst_name,
+                uv=eb.uv,
+                uv_faces=eb.uv_faces,
+                texture=eb.texture,
+                edge=eb.edge,
+                layer=0,
+                prism_group=eb.prism_group,
             )
             bone_boxes_map[rb_name].append(ast_box)
             dotted_box_map[f"{inst_name}.{eb.local_name}"] = eb.export_name
@@ -1670,6 +1735,7 @@ def resolve_assembly_program(
                 ik_drives=cl.ik_drives,
                 keyframes=tuple(replace(kf, bone=_res_bone(kf.bone)) for kf in cl.keyframes),
                 slide_drives=tuple(replace(sd, bone=_res_bone(sd.bone)) for sd in cl.slide_drives),
+                gaits=cl.gaits,
             )
             for cl in behavior.clips
         )
@@ -1701,6 +1767,11 @@ def resolve_assembly_program(
         dotted_box_map=tuple(sorted(dotted_box_map.items())),
     )
 
+    remapped_stamps = tuple(
+        replace(stp, target_box=dotted_box_map.get(stp.target_box, stp.target_box))
+        for stp in stamps
+    )
+
     program = Program(
         meta=meta,
         palettes=palettes,
@@ -1714,6 +1785,7 @@ def resolve_assembly_program(
         controller=controller,
         assembly_spec=assembly_spec,
         source_map=source_map,
+        stamps=remapped_stamps,
     )
     return validate_program(program)
 
@@ -1777,6 +1849,7 @@ def override_layout_params(
         kinematics=clean_kin,
         behavior=program.behavior,
         controller=program.controller,
+        stamps=program.stamps,
     )
 
 
@@ -1819,6 +1892,7 @@ def swap_component_definition(
         kinematics=clean_kin,
         behavior=program.behavior,
         controller=program.controller,
+        stamps=program.stamps,
     )
 
 
@@ -1862,6 +1936,13 @@ def audit_assembly_contracts(program: Program, scene: Scene | None = None) -> di
                 "kind": "envelope_min_ground_y_violated",
                 "actual_min_y": round(float(mins[1]), 4),
                 "limit": float(env.min_ground_y),
+            })
+        if env.grounded and abs(float(mins[1]) - float(env.ground_y)) > float(env.ground_tol) + 1e-6:
+            violations.append({
+                "kind": "envelope_grounded_violated",
+                "actual_min_y": round(float(mins[1]), 4),
+                "ground_y": float(env.ground_y),
+                "tolerance": float(env.ground_tol),
             })
 
     return {
@@ -1970,6 +2051,12 @@ def format_assembly_sections(spec: AssemblySpec) -> list[str]:
             lines.append(f"  envelope max_span = [{_fmt_num(sp[0])}, {_fmt_num(sp[1])}, {_fmt_num(sp[2])}]")
         if lay.envelope.min_ground_y is not None:
             lines.append(f"  envelope min_ground_y = {_fmt_num(lay.envelope.min_ground_y)}")
+        if lay.envelope.grounded:
+            lines.append("  envelope grounded = true")
+            if abs(float(lay.envelope.ground_y)) > 1e-9:
+                lines.append(f"  envelope ground_y = {_fmt_num(lay.envelope.ground_y)}")
+            if abs(float(lay.envelope.ground_tol) - 0.15) > 1e-9:
+                lines.append(f"  envelope ground_tol = {_fmt_num(lay.envelope.ground_tol)}")
         lines.append("}")
 
     def _write_comp_box(bt: ComponentBoxTemplate, pad: str) -> None:
@@ -1998,6 +2085,19 @@ def format_assembly_sections(spec: AssemblySpec) -> list[str]:
             bf.append(f"cullface: [{', '.join(bt.cullface)}]")
         if bt.blend_with:
             bf.append(f"blend_with: [{', '.join(bt.blend_with)}]")
+        if bt.uv is not None:
+            bf.append(f"uv: box({_fmt_num(bt.uv[0])}, {_fmt_num(bt.uv[1])})")
+        if bt.uv_faces:
+            uvf = [f"{face}: [{', '.join(_fmt_num(x) for x in rect)}]" for face, rect in bt.uv_faces]
+            bf.append("uv_faces: { " + ", ".join(uvf) + " }")
+        if bt.texture is not None:
+            bf.append(f"texture: {bt.texture}")
+        if bt.edge is not None:
+            bf.append(f"edge: {format_edge_cutout(bt.edge)}")
+        if bt.layer != 0:
+            bf.append(f"layer: {bt.layer}")
+        if bt.prism_group is not None:
+            bf.append(f"prism_group: {bt.prism_group}")
         lines.append(f"{hdr} {{ {', '.join(bf)} }}")
 
     def _write_comp_bone(cb: ComponentBoneTemplate, indent: int) -> None:
@@ -2021,13 +2121,18 @@ def format_assembly_sections(spec: AssemblySpec) -> list[str]:
                 aa.append(f"offset={_fmt_vec_e(cb.attach_offset)}")
             if cb.attach_detached:
                 aa.append("detached=true")
+            if cb.attach_seat > 1e-9:
+                aa.append(f"seat={_fmt_num(cb.attach_seat)}")
             att_s = f"attach({', '.join(aa)})"
         lines.append(f"{pad}bone {cb.name} {att_s} {{")
         if not _is_zero_ve(cb.rest_euler_exprs):
             lines.append(f"{pad}  rest_euler: {_fmt_vec_e(cb.rest_euler_exprs)}")
         if cb.joint_limits is not None:
-            jl_s = "[" + ", ".join(f"[{_fmt_num(a)}, {_fmt_num(b)}]" for a, b in cb.joint_limits) + "]"
-            lines.append(f"{pad}  joint_limits: {jl_s}")
+            if all(_is_continuous_limit_pair(p) for p in cb.joint_limits):
+                lines.append(f"{pad}  joint_limits: continuous")
+            else:
+                jl_s = "[" + ", ".join("continuous" if _is_continuous_limit_pair(p) else f"[{_fmt_num(p[0])}, {_fmt_num(p[1])}]" for p in cb.joint_limits) + "]"
+                lines.append(f"{pad}  joint_limits: {jl_s}")
         for bx in cb.boxes:
             _write_comp_box(bx, pad + "  ")
         for lc in cb.locators:
@@ -2122,7 +2227,10 @@ def format_assembly_sections(spec: AssemblySpec) -> list[str]:
             if c.conn_type in ("revolute", "prismatic"):
                 cp.append(f"axis: {c.axis}")
                 if c.limits is not None:
-                    cp.append(f"limits: [{_fmt_num(c.limits[0])}, {_fmt_num(c.limits[1])}]")
+                    if _is_continuous_limit_pair(c.limits):
+                        cp.append("limits: continuous")
+                    else:
+                        cp.append(f"limits: [{_fmt_num(c.limits[0])}, {_fmt_num(c.limits[1])}]")
             if c.mode != "align":
                 cp.append(f"mode: {c.mode}")
             if not _is_zero_ve(c.offset_pos):

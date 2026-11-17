@@ -1,0 +1,1035 @@
+// Ruiner Nergigante (Eater of Elders) — Stage 3 Sculpted Blockbench Masterwork (V9)
+// Hand-authored progressive Block-DSL v4.1 modeled from Capcom Monster Hunter World: Iceborne references:
+// six-limbed hunchbacked juggernaut Elder Dragon, genuinely asymmetric bull-demon horns (left bone-ivory vs
+// right massive battle-scarred regrown gunmetal-iron cleaver horn), brutal bulldog wedged snout, dense
+// gunmetal-iron & ivory regenerative spike mantle, 12-bone non-uni-sheet tattered wings, & gorilla forelimbs.
+@meta {
+  dsl_version: "4.1",
+  archetype: entity,
+  target_profile: bbmodel_5,
+  texel_density: 32,
+  size_step: 0.5,
+  audit_profile: sculpted
+}
+@layout {
+  budget max_boxes = 440
+  budget max_bones = 96
+  envelope grounded = true
+  envelope ground_y = 0.0
+  envelope ground_tol = 0.25
+}
+@palette {
+  obsidian_hide: ramp(base_lch=[0.29, 0.055, 275], steps=6, hue_shift=[24, -16])
+  elder_charcoal: ramp(base_lch=[0.36, 0.062, 290], steps=6, hue_shift=[24, -16])
+  gunmetal_iron: ramp(base_lch=[0.54, 0.068, 248], steps=6, hue_shift=[22, -16])
+  scarred_steel: ramp(base_lch=[0.66, 0.058, 238], steps=6, hue_shift=[22, -14])
+  ivory_spike: ramp(base_lch=[0.86, 0.048, 82], steps=6, hue_shift=[20, -12])
+  aged_keratin: ramp(base_lch=[0.64, 0.082, 68], steps=6, hue_shift=[18, -12])
+  copper_underhide: ramp(base_lch=[0.48, 0.125, 34], steps=6, hue_shift=[22, -14])
+  wing_membrane_plum: ramp(base_lch=[0.35, 0.088, 12], steps=6, hue_shift=[24, -16])
+  maw_crimson: ramp(base_lch=[0.40, 0.155, 20], steps=6, hue_shift=[16, -12])
+  ruiner_amber: ramp(base_lch=[0.76, 0.195, 52], steps=6, hue_shift=[14, -16], emissive=true)
+}
+@rig {
+  root bone root {
+    pivot_local: [0, 0, 0]
+    locator ground_origin { offset: [0, 0, 0] }
+
+    bone pelvis joint(parent=ground_origin, at=[0, 22.15, -14.5]) {
+      rest_euler: [12, 0, 0]
+      box pelvis_core { size: [14.0, 11.5, 13.5], material: obsidian_hide }
+      box pelvis_belly place(base_box=pelvis_core, anchor=[0, -0.96, 0], align=[0, 0.42, 0]) {
+        size: [10.0, 2.0, 11.0], material: copper_underhide
+      }
+      box sacrum_armor place(base_box=pelvis_core, anchor=[0, 0.98, -0.08], align=[0, -0.58, 0]) {
+        size: [8.5, 2.5, 10.5], material: elder_charcoal, rotate: [8, 0, 0], blend_with: [lumbar_armor, tail_1_seg, tail_1_plate]
+      }
+      box sacrum_iron_spike_1 place(base_box=sacrum_armor, anchor=[0, 0.96, 0.34], align=[0, -0.78, 0]) {
+        size: [3.0, 3.5, 4.0], material: gunmetal_iron, rotate: [22, 0, 0], blend_with: [pelvis_core, lumbar_armor]
+      }
+      box sacrum_ivory_spike_2 place(base_box=sacrum_armor, anchor=[0, 0.96, -0.38], align=[0, -0.78, 0]) {
+        size: [2.5, 3.5, 4.0], material: ivory_spike, rotate: [24, 0, 0], blend_with: [pelvis_core, tail_1_plate]
+      }
+      box haunch_mass_l place(base_box=pelvis_core, anchor=[0.98, 0.24, -0.05], align=[-0.50, 0, 0]) {
+        size: [3.5, 8.0, 10.0], material: elder_charcoal, rotate: [5, 8, -14], blend_with: [thigh_mass, waist_core]
+      }
+      box haunch_mass_r place(base_box=pelvis_core, anchor=[-0.98, 0.24, -0.05], align=[0.50, 0, 0]) {
+        size: [3.5, 8.0, 10.0], material: elder_charcoal, rotate: [5, -8, 14], blend_with: [hind_thigh_r__thigh_mass, waist_core]
+      }
+      box hip_iron_spur_l place(base_box=haunch_mass_l, anchor=[0.92, 0.45, -0.36], align=[-0.68, 0, 0.38]) {
+        size: [2.5, 3.0, 6.5], material: gunmetal_iron, rotate: [18, 26, -14], blend_with: [pelvis_core, thigh_mass, thigh_iron_plate]
+      }
+      box hip_iron_spur_r place(base_box=haunch_mass_r, anchor=[-0.92, 0.45, -0.36], align=[0.68, 0, 0.38]) {
+        size: [2.5, 3.0, 6.5], material: gunmetal_iron, rotate: [18, -26, 14], blend_with: [pelvis_core, hind_thigh_r__thigh_mass, hind_thigh_r__thigh_iron_plate]
+      }
+
+      bone waist attach(parent_box=pelvis_core, anchor=[0, 0.16, 1], align=[0, 0, -1], seat=0.28) {
+        rest_euler: [-6, 0, 0]
+        box waist_core { size: [16.5, 14.0, 12.5], material: obsidian_hide }
+        box waist_belly place(base_box=waist_core, anchor=[0, -0.96, 0], align=[0, 0.42, 0]) {
+          size: [12.0, 2.0, 10.5], material: copper_underhide, blend_with: [pelvis_belly, thigh_mass, hind_thigh_r__thigh_mass]
+        }
+        box lumbar_armor place(base_box=waist_core, anchor=[0, 0.96, 0], align=[0, -0.55, 0]) {
+          size: [10.0, 3.0, 10.5], material: elder_charcoal, rotate: [-6, 0, 0], blend_with: [pelvis_core, chest_core]
+        }
+        box lumbar_iron_spike_1 place(base_box=lumbar_armor, anchor=[0, 0.96, 0.34], align=[0, -0.80, 0]) {
+          size: [3.5, 4.5, 4.5], material: gunmetal_iron, rotate: [24, 0, 0], blend_with: [waist_core, chest_core, hunch_shoulder_c]
+        }
+        box lumbar_ivory_spike_2 place(base_box=lumbar_armor, anchor=[0, 0.96, -0.36], align=[0, -0.80, 0]) {
+          size: [3.0, 4.0, 4.5], material: ivory_spike, rotate: [26, 0, 0], blend_with: [waist_core, pelvis_core, sacrum_armor]
+        }
+        box flank_spike_plate_l_1 place(base_box=waist_core, anchor=[0.98, 0.35, 0.22], align=[-0.68, 0, 0]) {
+          size: [2.5, 5.5, 6.0], material: gunmetal_iron, rotate: [10, 16, -16], blend_with: [chest_core]
+        }
+        box flank_spike_plate_r_1 place(base_box=waist_core, anchor=[-0.98, 0.35, 0.22], align=[0.68, 0, 0]) {
+          size: [2.5, 5.5, 6.0], material: gunmetal_iron, rotate: [10, -16, 16], blend_with: [chest_core]
+        }
+        box flank_spike_plate_l_2 place(base_box=waist_core, anchor=[0.98, -0.14, -0.22], align=[-0.68, 0, 0]) {
+          size: [2.0, 5.0, 5.5], material: ivory_spike, rotate: [8, 18, -12], blend_with: [flank_spike_plate_l_1, pelvis_core, haunch_mass_l, thigh_mass]
+        }
+        box flank_spike_plate_r_2 place(base_box=waist_core, anchor=[-0.98, -0.14, -0.22], align=[0.68, 0, 0]) {
+          size: [2.0, 5.0, 5.5], material: ivory_spike, rotate: [8, -18, 12], blend_with: [flank_spike_plate_r_1, pelvis_core, haunch_mass_r, hind_thigh_r__thigh_mass]
+        }
+        plane waist_quill_plane_l place(base_box=waist_core, anchor=[1.0, 0.68, -0.10], align=[-1.0, -0.5, 0]) {
+          size: [5.5, 8.5], normal: x, material: ivory_spike, rotate: [10, 14, -26],
+          edge: spikes(width=4, min_len=3, max_len=8, side=top, seed=13), layer: 1,
+          blend_with: [lumbar_armor, flank_spike_plate_l_1, chest_core, pelvis_core]
+        }
+        plane waist_quill_plane_r place(base_box=waist_core, anchor=[-1.0, 0.68, -0.10], align=[1.0, -0.5, 0]) {
+          size: [5.5, 8.5], normal: x, material: ivory_spike, rotate: [10, -14, 26],
+          edge: spikes(width=4, min_len=3, max_len=8, side=top, seed=13), layer: 1,
+          blend_with: [lumbar_armor, flank_spike_plate_r_1, chest_core, pelvis_core]
+        }
+
+        bone chest attach(parent_box=waist_core, anchor=[0, 0.24, 1], align=[0, 0, -1], seat=0.28) {
+          rest_euler: [-10, 0, 0]
+          box chest_core { size: [22.0, 18.5, 17.5], material: obsidian_hide }
+          // Towering Hunchbacked Scapula & Regenerative Gunmetal/Ivory Spike Mantle
+          box hunch_shoulder_c place(base_box=chest_core, anchor=[0, 0.98, 0.10], align=[0, -0.55, 0]) {
+            size: [14.5, 5.5, 15.0], material: elder_charcoal, rotate: [-12, 0, 0], blend_with: [neck_base, lumbar_armor, lumbar_iron_spike_1]
+          }
+          box hunch_scapula_l place(base_box=chest_core, anchor=[0.74, 0.88, 0.05], align=[-0.20, -0.55, 0]) {
+            size: [6.5, 5.5, 13.5], material: gunmetal_iron, rotate: [-8, -14, -22], blend_with: [hunch_shoulder_c, neck_base]
+          }
+          box hunch_scapula_r place(base_box=chest_core, anchor=[-0.74, 0.88, 0.05], align=[0.20, -0.55, 0]) {
+            size: [6.5, 5.5, 13.5], material: gunmetal_iron, rotate: [-8, 14, 22], blend_with: [hunch_shoulder_c, neck_base]
+          }
+          // Dense Multi-Tier Regenerative Gunmetal-Iron & Ivory Porcupine Spikes
+          box hunch_iron_spike_c place(base_box=hunch_shoulder_c, anchor=[0, 0.98, 0.18], align=[0, -0.86, 0.25]) {
+            size: [3.5, 6.5, 6.5], material: gunmetal_iron, rotate: [26, 0, 0], blend_with: [chest_core, neck_base, neck_spike_crown_c]
+          }
+          box hunch_ivory_spike_rear place(base_box=hunch_shoulder_c, anchor=[0, 0.98, -0.58], align=[0, -0.86, 0.25]) {
+            size: [3.0, 6.0, 6.0], material: ivory_spike, rotate: [30, 0, 0], blend_with: [chest_core, hunch_iron_spike_c, lumbar_armor, lumbar_iron_spike_1]
+          }
+          box hunch_ivory_spike_l place(base_box=hunch_scapula_l, anchor=[0.55, 0.98, 0.35], align=[-0.25, -0.88, 0.25]) {
+            size: [3.0, 6.5, 7.0], material: ivory_spike, rotate: [26, -16, -20], blend_with: [hunch_shoulder_c, chest_core, neck_base, wing_arm_spar, wing_arm_iron_crest]
+          }
+          box hunch_ivory_spike_r place(base_box=hunch_scapula_r, anchor=[-0.55, 0.98, 0.35], align=[0.25, -0.88, 0.25]) {
+            size: [3.0, 6.5, 7.0], material: ivory_spike, rotate: [26, 16, 20], blend_with: [hunch_shoulder_c, chest_core, neck_base, wing_shoulder_r__wing_arm_spar, wing_shoulder_r__wing_arm_iron_crest]
+          }
+          box hunch_outer_iron_l place(base_box=hunch_scapula_l, anchor=[0.96, 0.45, 0.32], align=[-0.72, -0.55, 0.25]) {
+            size: [2.5, 5.5, 6.0], material: scarred_steel, rotate: [22, -24, -34], blend_with: [chest_core, fore_bicep, pauldron_iron_plate]
+          }
+          box hunch_outer_iron_r place(base_box=hunch_scapula_r, anchor=[-0.96, 0.45, 0.32], align=[0.72, -0.55, 0.25]) {
+            size: [2.5, 5.5, 6.0], material: scarred_steel, rotate: [22, 24, 34], blend_with: [chest_core, fore_shoulder_r__fore_bicep, fore_shoulder_r__pauldron_iron_plate]
+          }
+          plane hunch_quill_crest_c place(base_box=hunch_shoulder_c, anchor=[0, 0.92, 0.48], align=[0, -0.82, 0]) {
+            size: [12.0, 6.5], normal: z, material: ivory_spike, rotate: [22, 0, 0],
+            edge: spikes(width=4, min_len=4, max_len=9, side=top, seed=19), layer: 1,
+            blend_with: [hunch_iron_spike_c, hunch_ivory_spike_l, hunch_ivory_spike_r, neck_base, neck_spike_crown_c]
+          }
+          plane hunch_quill_crest_rear place(base_box=hunch_shoulder_c, anchor=[0, 0.90, -0.82], align=[0, -0.82, 0]) {
+            size: [10.5, 6.0], normal: z, material: scarred_steel, rotate: [28, 0, 0],
+            edge: spikes(width=4, min_len=4, max_len=9, side=top, seed=23), layer: 2,
+            blend_with: [hunch_ivory_spike_rear, waist_core, lumbar_armor, lumbar_iron_spike_1]
+          }
+
+          // Ribcage Iron & Ivory Shingles
+          box rib_iron_shingle_l_1 place(base_box=chest_core, anchor=[0.99, 0.24, -0.24], align=[-0.74, 0, 0]) {
+            size: [2.5, 6.0, 6.5], material: gunmetal_iron, rotate: [10, 16, -12], blend_with: [hunch_scapula_l, fore_bicep, flank_spike_plate_l_1, waist_core]
+          }
+          box rib_iron_shingle_r_1 place(base_box=chest_core, anchor=[-0.99, 0.24, -0.24], align=[0.74, 0, 0]) {
+            size: [2.5, 6.0, 6.5], material: gunmetal_iron, rotate: [10, -16, 12], blend_with: [hunch_scapula_r, fore_shoulder_r__fore_bicep, flank_spike_plate_r_1, waist_core]
+          }
+          box rib_ivory_shingle_l_2 place(base_box=chest_core, anchor=[0.99, -0.24, -0.36], align=[-0.74, 0, 0]) {
+            size: [2.0, 5.0, 6.0], material: ivory_spike, rotate: [8, 18, -10], blend_with: [rib_iron_shingle_l_1, fore_bicep, fore_bracer, flank_spike_plate_l_1, flank_spike_plate_l_2, waist_core]
+          }
+          box rib_ivory_shingle_r_2 place(base_box=chest_core, anchor=[-0.99, -0.24, -0.36], align=[0.74, 0, 0]) {
+            size: [2.0, 5.0, 6.0], material: ivory_spike, rotate: [8, -18, 10], blend_with: [rib_iron_shingle_r_1, fore_shoulder_r__fore_bicep, fore_shoulder_r__fore_bracer, flank_spike_plate_r_1, flank_spike_plate_r_2, waist_core]
+          }
+
+          // Warm Burnt-Copper / Bruised-Amber Ventral Sternum Scutes & Spiked Collar Ruff
+          box chest_scute_rear place(base_box=chest_core, anchor=[0, -0.96, -0.32], align=[0, 0.42, 0]) {
+            size: [14.5, 2.5, 9.0], material: copper_underhide, rotate: [4, 0, 0], blend_with: [waist_belly]
+          }
+          box chest_scute_front place(base_box=chest_core, anchor=[0, -0.96, 0.56], align=[0, 0.48, -0.25]) {
+            size: [13.0, 2.5, 8.5], material: copper_underhide, rotate: [-18, 0, 0], blend_with: [chest_scute_rear, fore_bracer, fore_shoulder_r__fore_bracer]
+          }
+          box sternum_iron_keel place(base_box=chest_scute_front, anchor=[0, -0.95, 0.25], align=[0, 0.72, 0]) {
+            size: [5.5, 2.5, 6.0], material: gunmetal_iron, rotate: [-12, 0, 0], blend_with: [chest_core, neck_throat_plate, fore_bicep, fore_shoulder_r__fore_bicep]
+          }
+          plane chest_spike_ruff_l place(base_box=chest_core, anchor=[0.66, -0.82, 0.92], align=[0, 0.65, -0.85]) {
+            size: [7.0, 5.5], normal: z, material: ivory_spike, rotate: [-24, -18, -12],
+            edge: spikes(width=4, min_len=3, max_len=8, side=bottom, seed=37), layer: 1,
+            blend_with: [chest_scute_front, sternum_iron_keel, neck_throat_plate, fore_bicep]
+          }
+          plane chest_spike_ruff_r place(base_box=chest_core, anchor=[-0.66, -0.82, 0.92], align=[0, 0.65, -0.85]) {
+            size: [7.0, 5.5], normal: z, material: gunmetal_iron, rotate: [-24, 18, 12],
+            edge: spikes(width=4, min_len=3, max_len=8, side=bottom, seed=37), layer: 1,
+            blend_with: [chest_scute_front, sternum_iron_keel, neck_throat_plate, fore_shoulder_r__fore_bicep]
+          }
+
+          // SIX-LIMBED SPINED ELDER DRAGON WINGS (12 wing bones + 10 tattered non-uni-sheet membrane bays!)
+          bone wing_shoulder_l attach(parent_box=hunch_shoulder_c, anchor=[0.94, 0.68, -0.12], align=[-0.94, -0.60, 0], seat=0.05) mirror_x(wing_shoulder_r) {
+            rest_euler: [8, 20, 42]
+            box wing_arm_spar { size: [14.0, 4.5, 5.0], material: obsidian_hide, blend_with: [chest_core, hunch_scapula_l, hunch_scapula_r] }
+            box wing_arm_iron_crest place(base_box=wing_arm_spar, anchor=[0.25, 0.96, 0.25], align=[0, -0.82, 0]) {
+              size: [9.0, 3.5, 3.5], material: gunmetal_iron, rotate: [12, 8, -14], blend_with: [hunch_scapula_l, wing_forearm_spar]
+            }
+            box wing_arm_ivory_quill place(base_box=wing_arm_iron_crest, anchor=[0.10, 0.92, 0.25], align=[0, -0.84, 0]) {
+              size: [6.0, 3.0, 2.5], material: ivory_spike, rotate: [16, 12, -18]
+            }
+            plane wing_arm_patagium place(base_box=wing_arm_spar, anchor=[0.22, 0.0, -0.96], align=[0, 0, 0.92]) {
+              size: [11.0, 7.5], normal: y, material: wing_membrane_plum,
+              edge: ragged(depth=5, holes=2, side=top, seed=17), layer: 2,
+              blend_with: [chest_core, hunch_scapula_l, waist_core, wing_forearm_spar, wing_forearm_patagium]
+            }
+
+            bone wing_forearm_l attach(parent_box=wing_arm_spar, anchor=[1, 0.05, 0.05], align=[-1, 0, 0], seat=0.10) {
+              rest_euler: [0, -34, 8]
+              box wing_forearm_spar { size: [17.0, 4.0, 4.5], material: elder_charcoal }
+              box wing_elbow_spike place(base_box=wing_forearm_spar, anchor=[-0.72, 0.88, -0.65], align=[0.45, -0.65, 0.55]) {
+                size: [6.5, 3.0, 3.5], material: ivory_spike, rotate: [14, 28, 18], blend_with: [wing_arm_spar]
+              }
+              box wing_elbow_iron_lance place(base_box=wing_elbow_spike, anchor=[-0.88, 0.35, -0.35], align=[0.72, -0.35, 0.35]) {
+                size: [5.0, 2.0, 2.5], material: scarred_steel, rotate: [10, 18, 14], blend_with: [wing_arm_spar, wing_forearm_spar]
+              }
+              box wing_leading_iron_row place(base_box=wing_forearm_spar, anchor=[0.15, 0.55, 0.96], align=[0, -0.55, -0.72]) {
+                size: [12.0, 3.0, 3.5], material: gunmetal_iron, rotate: [-16, -8, 0], blend_with: [wing_wrist_hub]
+              }
+              plane wing_leading_quill_plane place(base_box=wing_leading_iron_row, anchor=[0, 0.96, 0.25], align=[0, -0.88, 0]) {
+                size: [11.0, 4.5], normal: z, material: ivory_spike, rotate: [-18, 0, 0],
+                edge: spikes(width=4, min_len=3, max_len=7, side=top, seed=27), layer: 1,
+                blend_with: [wing_forearm_spar, wing_wrist_hub, wing_thumb_claw]
+              }
+              plane wing_forearm_patagium place(base_box=wing_forearm_spar, anchor=[0.05, 0.15, -0.96], align=[0, 0, 0.92]) {
+                size: [15.0, 11.5], normal: y, material: wing_membrane_plum,
+                edge: scallop(bays=3, depth=5, side=top, seed=23), layer: 1,
+                blend_with: [wing_arm_spar, wing_wrist_hub, wing_f3_spar, wing_bay_3_plane, wing_bay_2_plane, wing_bay_1_plane]
+              }
+
+              bone wing_wrist_l attach(parent_box=wing_forearm_spar, anchor=[1, 0, 0], align=[-1, 0, 0], seat=0.10) {
+                rest_euler: [0, 26, -20]
+                box wing_wrist_hub { size: [5.0, 4.0, 4.5], material: gunmetal_iron }
+                box wing_thumb_claw place(base_box=wing_wrist_hub, anchor=[0.45, 0.45, 0.98], align=[0, -0.45, -0.82]) {
+                  size: [3.0, 3.0, 8.5], material: scarred_steel, rotate: [-22, -24, 12], blend_with: [wing_forearm_spar, wing_f1_spar]
+                }
+                box wing_thumb_ivory_barb place(base_box=wing_wrist_hub, anchor=[-0.35, 0.88, 0.85], align=[0, -0.78, -0.78]) {
+                  size: [2.0, 2.5, 6.0], material: ivory_spike, rotate: [-28, -14, 16], blend_with: [wing_forearm_spar, wing_leading_iron_row, wing_thumb_claw]
+                }
+
+                bone wing_finger_1_l attach(parent_box=wing_wrist_hub, anchor=[1, 0.22, 0.55], align=[-1, 0, 0], seat=0.06) {
+                  rest_euler: [0, 14, -6]
+                  box wing_f1_spar { size: [22.0, 2.5, 3.0], material: gunmetal_iron }
+                  box wing_f1_iron_ridge place(base_box=wing_f1_spar, anchor=[0.10, 0.92, 0.45], align=[0, -0.82, 0]) {
+                    size: [14.0, 2.0, 2.0], material: scarred_steel, rotate: [-12, 0, 0], blend_with: [wing_wrist_hub, wing_thumb_claw]
+                  }
+                  box wing_f1_tip_spike place(base_box=wing_f1_spar, anchor=[0.98, 0, 0], align=[-0.82, 0, 0]) {
+                    size: [6.5, 2.0, 2.0], material: ivory_spike, rotate: [0, 8, -6]
+                  }
+                  plane wing_bay_1_plane place(base_box=wing_f1_spar, anchor=[0.02, 0.0, -0.96], align=[0, 0, 0.92]) {
+                    size: [20.0, 9.5], normal: y, material: wing_membrane_plum,
+                    edge: ragged(depth=5, holes=3, side=top, seed=31), layer: 1,
+                    blend_with: [wing_wrist_hub, wing_f2_spar, wing_bay_2_plane]
+                  }
+                }
+
+                bone wing_finger_2_l attach(parent_box=wing_wrist_hub, anchor=[0.88, 0.0, -0.15], align=[-1, 0, 0], seat=0.06) {
+                  rest_euler: [0, 44, -12]
+                  box wing_f2_spar { size: [19.5, 2.5, 2.5], material: ivory_spike, blend_with: [wing_f1_spar] }
+                  box wing_f2_tip_spike place(base_box=wing_f2_spar, anchor=[0.98, 0, 0], align=[-0.82, 0, 0]) {
+                    size: [5.5, 1.5, 2.0], material: scarred_steel, rotate: [0, 10, -6]
+                  }
+                  plane wing_bay_2_plane place(base_box=wing_f2_spar, anchor=[0.02, 0.0, -0.96], align=[0, 0, 0.92]) {
+                    size: [17.5, 9.5], normal: y, material: wing_membrane_plum,
+                    edge: scallop(bays=3, depth=5, side=top, seed=37), layer: 2,
+                    blend_with: [wing_wrist_hub, wing_f3_spar, wing_bay_3_plane]
+                  }
+                }
+
+                bone wing_finger_3_l attach(parent_box=wing_wrist_hub, anchor=[0.55, -0.20, -0.85], align=[-1, 0, 0], seat=0.06) {
+                  rest_euler: [0, 74, -18]
+                  box wing_f3_spar { size: [16.5, 2.0, 2.5], material: gunmetal_iron, blend_with: [wing_forearm_spar, wing_f2_spar] }
+                  box wing_f3_tip_spike place(base_box=wing_f3_spar, anchor=[0.98, 0, 0], align=[-0.82, 0, 0]) {
+                    size: [5.0, 1.5, 1.5], material: ivory_spike, rotate: [0, 10, -6]
+                  }
+                  plane wing_bay_3_plane place(base_box=wing_f3_spar, anchor=[0.02, 0.0, -0.96], align=[0, 0, 0.92]) {
+                    size: [14.5, 8.5], normal: y, material: wing_membrane_plum,
+                    edge: ragged(depth=5, holes=2, side=top, seed=43), layer: 1,
+                    blend_with: [wing_wrist_hub, wing_forearm_spar]
+                  }
+                }
+              }
+            }
+          }
+
+          bone neck_1 attach(parent_box=chest_core, anchor=[0, 0.22, 1], align=[0, 0, -1], seat=0.28) {
+            rest_euler: [-12, 0, 0]
+            box neck_base { size: [15.5, 13.5, 9.0], material: obsidian_hide, blend_with: [hunch_shoulder_c, hunch_scapula_l, hunch_scapula_r] }
+            box neck_throat_plate place(base_box=neck_base, anchor=[0, -0.96, 0.12], align=[0, 0.45, 0]) {
+              size: [10.5, 2.5, 7.5], material: copper_underhide, rotate: [-6, 0, 0], blend_with: [chest_scute_front, chest_core, sternum_iron_keel]
+            }
+            box neck_spike_crown_c place(base_box=neck_base, anchor=[0, 1.0, 0.25], align=[0, -0.84, 0]) {
+              size: [5.0, 8.5, 4.5], material: ivory_spike, rotate: [24, 0, 0], blend_with: [hunch_shoulder_c, chest_core, neck_upper, nape_iron_crest]
+            }
+            box neck_spike_crown_l place(base_box=neck_base, anchor=[0.72, 0.94, 0.22], align=[-0.35, -0.84, 0]) {
+              size: [3.5, 8.0, 4.5], material: gunmetal_iron, rotate: [24, -18, -28], blend_with: [neck_spike_crown_c, hunch_scapula_l, chest_core, neck_upper]
+            }
+            box neck_spike_crown_r place(base_box=neck_base, anchor=[-0.72, 0.94, 0.22], align=[0.35, -0.84, 0]) {
+              size: [3.5, 8.0, 4.5], material: gunmetal_iron, rotate: [24, 18, 28], blend_with: [neck_spike_crown_c, hunch_scapula_r, chest_core, neck_upper]
+            }
+            box neck_outer_quill_l place(base_box=neck_base, anchor=[0.98, 0.52, 0.28], align=[-0.72, -0.55, 0]) {
+              size: [3.0, 6.5, 4.0], material: ivory_spike, rotate: [16, -22, -40], blend_with: [neck_spike_crown_l, hunch_scapula_l, chest_core, fore_bicep]
+            }
+            box neck_outer_quill_r place(base_box=neck_base, anchor=[-0.98, 0.52, 0.28], align=[0.72, -0.55, 0]) {
+              size: [3.0, 6.5, 4.0], material: scarred_steel, rotate: [16, 22, 40], blend_with: [neck_spike_crown_r, hunch_scapula_r, chest_core, fore_shoulder_r__fore_bicep]
+            }
+            plane neck_quill_plane_c place(base_box=neck_spike_crown_c, anchor=[0, 0.95, -0.85], align=[0, -0.85, 0]) {
+              size: [12.0, 6.0], normal: z, material: scarred_steel, rotate: [14, 0, 0],
+              edge: spikes(width=4, min_len=4, max_len=9, side=top, seed=53), layer: 2,
+              blend_with: [neck_spike_crown_l, neck_spike_crown_r, hunch_shoulder_c, hunch_quill_crest_c]
+            }
+            plane neck_side_quill_l place(base_box=neck_base, anchor=[1.0, 0.05, 0.15], align=[-1.0, 0, 0]) {
+              size: [6.5, 8.0], normal: x, material: ivory_spike, rotate: [6, 18, -18],
+              edge: spikes(width=4, min_len=3, max_len=8, side=top, seed=59), layer: 1,
+              blend_with: [neck_outer_quill_l, chest_core, fore_bicep]
+            }
+            plane neck_side_quill_r place(base_box=neck_base, anchor=[-1.0, 0.05, 0.15], align=[1.0, 0, 0]) {
+              size: [6.5, 8.0], normal: x, material: gunmetal_iron, rotate: [6, -18, 18],
+              edge: spikes(width=4, min_len=3, max_len=8, side=top, seed=59), layer: 1,
+              blend_with: [neck_outer_quill_r, chest_core, fore_shoulder_r__fore_bicep]
+            }
+
+            bone neck_2 attach(parent_box=neck_base, anchor=[0, 0.08, 1], align=[0, 0, -1], seat=0.26) {
+              rest_euler: [18, 0, 0]
+              box neck_upper { size: [12.5, 11.0, 7.5], material: obsidian_hide }
+              box nape_iron_crest place(base_box=neck_upper, anchor=[0, 0.96, -0.15], align=[0, -0.68, 0.35]) {
+                size: [5.5, 4.5, 7.5], material: gunmetal_iron, rotate: [18, 0, 0], blend_with: [neck_base, neck_spike_crown_c, skull_core]
+              }
+              box nape_ivory_quill_l place(base_box=neck_upper, anchor=[0.96, 0.38, 0.05], align=[-0.68, 0, 0]) {
+                size: [2.5, 4.5, 6.5], material: ivory_spike, rotate: [10, -14, -18], blend_with: [neck_base, neck_spike_crown_l, skull_core, cheek_armor_l]
+              }
+              box nape_iron_quill_r place(base_box=neck_upper, anchor=[-0.96, 0.38, 0.05], align=[0.68, 0, 0]) {
+                size: [2.5, 4.5, 6.5], material: scarred_steel, rotate: [10, 14, 18], blend_with: [neck_base, neck_spike_crown_r, skull_core, cheek_armor_r]
+              }
+              plane nape_quill_plane place(base_box=nape_iron_crest, anchor=[0, 1.0, 0], align=[0, -1.0, 0]) {
+                size: [5.5, 7.5], normal: x, material: ivory_spike, rotate: [10, 0, 0],
+                edge: spikes(width=4, min_len=3, max_len=8, side=top, seed=67), layer: 1,
+                blend_with: [neck_upper, neck_spike_crown_c, skull_core]
+              }
+
+              bone head attach(parent_box=neck_upper, anchor=[0, 0.02, 1], align=[0, 0, -1], seat=0.24) {
+                rest_euler: [14, 0, 0]
+                box skull_core { size: [11.0, 7.5, 8.0], material: obsidian_hide }
+                box skull_iron_crown place(base_box=skull_core, anchor=[0, 0.98, -0.14], align=[0, -0.68, 0]) {
+                  size: [6.0, 2.5, 6.5], material: gunmetal_iron, rotate: [8, 0, 0], blend_with: [neck_upper, nape_iron_crest, brow_ridge_l, brow_ridge_r]
+                }
+                box brow_ridge_l place(base_box=skull_core, anchor=[0.84, 0.78, 0.56], align=[-0.20, -0.52, -0.30]) {
+                  size: [3.0, 2.5, 6.0], material: elder_charcoal, rotate: [12, -14, -16], blend_with: [skull_iron_crown]
+                }
+                box brow_ridge_r place(base_box=skull_core, anchor=[-0.84, 0.78, 0.56], align=[0.20, -0.52, -0.30]) {
+                  size: [3.0, 2.5, 6.0], material: gunmetal_iron, rotate: [12, 14, 16], blend_with: [skull_iron_crown]
+                }
+                box cheek_armor_l place(base_box=skull_core, anchor=[0.96, -0.22, 0.14], align=[-0.50, 0, 0]) {
+                  size: [3.0, 4.5, 6.0], material: elder_charcoal, rotate: [6, -15, 8], blend_with: [brow_ridge_l, neck_upper]
+                }
+                box cheek_armor_r place(base_box=skull_core, anchor=[-0.96, -0.22, 0.14], align=[0.50, 0, 0]) {
+                  size: [3.0, 4.5, 6.0], material: elder_charcoal, rotate: [6, 15, -8], blend_with: [brow_ridge_r, neck_upper]
+                }
+                box cheek_spike_l place(base_box=cheek_armor_l, anchor=[0.92, -0.15, -0.66], align=[-0.68, 0, 0.55]) {
+                  size: [2.0, 2.5, 5.5], material: ivory_spike, rotate: [10, -28, 12], blend_with: [skull_core, neck_upper, nape_ivory_quill_l]
+                }
+                box cheek_spike_r place(base_box=cheek_armor_r, anchor=[-0.92, -0.15, -0.66], align=[0.68, 0, 0.55]) {
+                  size: [2.0, 2.5, 5.5], material: scarred_steel, rotate: [10, 28, -12], blend_with: [skull_core, neck_upper, nape_iron_quill_r]
+                }
+                plane cheek_quill_plane_l place(base_box=cheek_armor_l, anchor=[0.95, -0.55, -0.45], align=[-0.85, 0.5, 0.65]) {
+                  size: [4.0, 5.5], normal: x, material: ivory_spike, rotate: [-12, -24, 18],
+                  edge: spikes(width=4, min_len=2, max_len=6, side=bottom, seed=71), layer: 1,
+                  blend_with: [cheek_spike_l, neck_upper, jaw_core]
+                }
+                plane cheek_quill_plane_r place(base_box=cheek_armor_r, anchor=[-0.95, -0.55, -0.45], align=[0.85, 0.5, 0.65]) {
+                  size: [4.0, 5.5], normal: x, material: gunmetal_iron, rotate: [-12, 24, -18],
+                  edge: spikes(width=4, min_len=2, max_len=6, side=bottom, seed=71), layer: 1,
+                  blend_with: [cheek_spike_r, neck_upper, jaw_core]
+                }
+                box eye_slit_l place(base_box=skull_core, anchor=[0.98, 0.44, 0.58], align=[-0.72, 0, 0]) {
+                  size: [1.0, 1.5, 2.5], material: ruiner_amber, rotate: [8, -12, 0], blend_with: [brow_ridge_l, cheek_armor_l]
+                }
+                box eye_slit_r place(base_box=skull_core, anchor=[-0.98, 0.44, 0.58], align=[0.72, 0, 0]) {
+                  size: [1.0, 1.5, 2.5], material: ruiner_amber, rotate: [8, 12, 0], blend_with: [brow_ridge_r, cheek_armor_r]
+                }
+
+                // Brutal Bulldog-Gargoyle Wedged Snout
+                box snout_core place(base_box=skull_core, anchor=[0, -0.14, 1], align=[0, 0, -0.78]) {
+                  size: [5.0, 4.5, 6.0], material: obsidian_hide, rotate: [14, 0, 0], blend_with: [brow_ridge_l, brow_ridge_r, eye_slit_l, eye_slit_r]
+                }
+                box nasal_spike_bridge place(base_box=snout_core, anchor=[0, 0.90, 0.05], align=[0, -0.52, 0]) {
+                  size: [3.5, 2.5, 6.0], material: gunmetal_iron, rotate: [8, 0, 0], blend_with: [skull_core, skull_iron_crown, brow_ridge_l, brow_ridge_r]
+                }
+                box nasal_iron_hornlet place(base_box=nasal_spike_bridge, anchor=[0, 0.96, 0.48], align=[0, -0.82, 0]) {
+                  size: [1.5, 2.0, 2.5], material: scarred_steel, rotate: [-22, 0, 0], blend_with: [snout_core, nose_horn_shield]
+                }
+                box maxilla_wedge_l place(base_box=snout_core, anchor=[0.96, -0.10, -0.04], align=[-0.50, 0, 0]) {
+                  size: [2.0, 3.5, 5.5], material: elder_charcoal, rotate: [8, -22, 8], blend_with: [skull_core, cheek_armor_l, nasal_spike_bridge, eye_slit_l]
+                }
+                box maxilla_wedge_r place(base_box=snout_core, anchor=[-0.96, -0.10, -0.04], align=[0.50, 0, 0]) {
+                  size: [2.0, 3.5, 5.5], material: elder_charcoal, rotate: [8, 22, -8], blend_with: [skull_core, cheek_armor_r, nasal_spike_bridge, eye_slit_r]
+                }
+                box nose_horn_shield place(base_box=snout_core, anchor=[0, 0.25, 0.96], align=[0, -0.25, -0.62]) {
+                  size: [3.0, 3.5, 3.0], material: ivory_spike, rotate: [-18, 0, 0], blend_with: [nasal_spike_bridge, maxilla_wedge_l, maxilla_wedge_r, nasal_iron_hornlet]
+                }
+                box upper_tusk_l place(base_box=snout_core, anchor=[0.84, -0.98, 0.62], align=[0, 0.90, 0]) {
+                  size: [1.5, 3.0, 1.5], material: ivory_spike, rotate: [-8, 0, -10], blend_with: [maxilla_wedge_l, jaw_core, palate_upper]
+                }
+                box upper_tusk_r place(base_box=snout_core, anchor=[-0.84, -0.98, 0.62], align=[0, 0.90, 0]) {
+                  size: [1.5, 3.0, 1.5], material: ivory_spike, rotate: [-8, 0, 10], blend_with: [maxilla_wedge_r, jaw_core, palate_upper]
+                }
+                box palate_upper place(base_box=snout_core, anchor=[0, -0.98, 0.25], align=[0, 0.78, 0]) {
+                  size: [3.5, 1.0, 4.5], material: maw_crimson, blend_with: [skull_core, jaw_core]
+                }
+
+                // GENUINELY ASYMMETRIC BULL-DEMON HORNS!
+                // Left Horn (+X): Curved weathered bone-ivory & aged-keratin bull horn
+                bone horn_l attach(parent_box=skull_core, anchor=[0.90, 0.92, 0.08], align=[-0.55, -0.72, -0.75], seat=0.05) {
+                  rest_euler: [-14, 46, -16]
+                  box horn_l_seg_1 { size: [4.0, 4.0, 6.5], material: aged_keratin, blend_with: [brow_ridge_l, cheek_armor_l, neck_upper, skull_iron_crown] }
+                  box horn_l_ridge_1 place(base_box=horn_l_seg_1, anchor=[0, 0.96, 0], align=[0, -0.78, 0]) {
+                    size: [2.0, 1.5, 5.5], material: ivory_spike, blend_with: [horn_l_seg_2]
+                  }
+                  bone horn_l_mid attach(parent_box=horn_l_seg_1, anchor=[0, 0.08, 1], align=[0, 0, -1], seat=0.18) {
+                    rest_euler: [-22, -28, 8]
+                    box horn_l_seg_2 { size: [3.5, 3.5, 6.0], material: ivory_spike }
+                    box horn_l_ridge_2 place(base_box=horn_l_seg_2, anchor=[0, 0.96, 0], align=[0, -0.78, 0]) {
+                      size: [1.5, 1.0, 5.0], material: aged_keratin, blend_with: [horn_l_ridge_1, horn_l_seg_3]
+                    }
+                    bone horn_l_tip attach(parent_box=horn_l_seg_2, anchor=[0, 0.08, 1], align=[0, 0, -1], seat=0.18) {
+                      rest_euler: [-24, -22, 8]
+                      box horn_l_seg_3 { size: [2.5, 2.5, 5.5], material: ivory_spike }
+                      box horn_l_sharp_point place(base_box=horn_l_seg_3, anchor=[0, 0.10, 0.96], align=[0, 0, -0.82]) {
+                        size: [1.5, 1.5, 3.5], material: aged_keratin, rotate: [-10, -8, 0]
+                      }
+                    }
+                  }
+                }
+                // Right Horn (-X): MASSIVE battle-scarred regrown gunmetal-iron cleaver horn!
+                bone horn_r attach(parent_box=skull_core, anchor=[-0.92, 0.96, -0.02], align=[0.65, -0.82, -0.65], seat=0.05) {
+                  rest_euler: [-18, -40, 20]
+                  box horn_r_seg_1 { size: [5.0, 5.0, 7.5], material: gunmetal_iron, blend_with: [brow_ridge_r, cheek_armor_r, neck_upper, skull_iron_crown, nape_iron_quill_r] }
+                  box horn_r_regrown_spur place(base_box=horn_r_seg_1, anchor=[-0.92, 0.35, 0.25], align=[0.65, -0.35, 0]) {
+                    size: [2.5, 3.0, 5.5], material: scarred_steel, rotate: [-12, -24, 18]
+                  }
+                  box horn_r_scar_fissure place(base_box=horn_r_seg_1, anchor=[0.88, 0.45, 0.20], align=[-0.78, 0, 0]) {
+                    size: [1.0, 2.0, 4.5], material: ruiner_amber
+                  }
+                  bone horn_r_mid attach(parent_box=horn_r_seg_1, anchor=[0, 0.10, 1], align=[0, 0, -1], seat=0.18) {
+                    rest_euler: [-24, 24, -10]
+                    box horn_r_seg_2 { size: [4.5, 5.0, 7.5], material: gunmetal_iron }
+                    box horn_r_cleaver_keel place(base_box=horn_r_seg_2, anchor=[-0.45, 0.96, 0.10], align=[0.25, -0.78, 0]) {
+                      size: [2.5, 2.5, 6.5], material: scarred_steel, rotate: [-8, 0, 14], blend_with: [horn_r_seg_1, horn_r_seg_3]
+                    }
+                    box horn_r_outer_barb place(base_box=horn_r_seg_2, anchor=[-0.96, -0.15, 0.20], align=[0.74, 0, 0]) {
+                      size: [2.0, 2.0, 5.0], material: gunmetal_iron, rotate: [-8, -18, 12], blend_with: [horn_r_regrown_spur]
+                    }
+                    bone horn_r_tip attach(parent_box=horn_r_seg_2, anchor=[0, 0.10, 1], align=[0, 0, -1], seat=0.18) {
+                      rest_euler: [-26, 20, -8]
+                      box horn_r_seg_3 { size: [3.0, 3.5, 7.0], material: scarred_steel }
+                      box horn_r_iron_blade_tip place(base_box=horn_r_seg_3, anchor=[0, 0.12, 0.96], align=[0, 0, -0.82]) {
+                        size: [2.0, 2.5, 4.5], material: gunmetal_iron, rotate: [-12, 8, 0]
+                      }
+                    }
+                  }
+                }
+
+                bone jaw attach(parent_box=skull_core, anchor=[0, -0.78, 0.20], align=[0, 0, -1], seat=0.14) {
+                  rest_euler: [22, 0, 0]
+                  box jaw_core { size: [4.0, 3.0, 7.5], material: elder_charcoal, blend_with: [cheek_armor_l, cheek_armor_r, snout_core, palate_upper] }
+                  box tongue_bed place(base_box=jaw_core, anchor=[0, 0.98, 0.30], align=[0, -0.82, 0]) {
+                    size: [3.0, 1.0, 4.5], material: maw_crimson, blend_with: [palate_upper, snout_core, skull_core]
+                  }
+                  box lower_tusk_l place(base_box=jaw_core, anchor=[0.86, 0.98, 0.94], align=[0, -0.92, -0.65]) {
+                    size: [1.0, 2.0, 1.5], material: ivory_spike, rotate: [6, 0, 12], blend_with: [snout_core, palate_upper, maxilla_wedge_l, upper_tusk_l, nose_horn_shield]
+                  }
+                  box lower_tusk_r place(base_box=jaw_core, anchor=[-0.86, 0.98, 0.94], align=[0, -0.92, -0.65]) {
+                    size: [1.0, 2.0, 1.5], material: ivory_spike, rotate: [6, 0, -12], blend_with: [snout_core, palate_upper, maxilla_wedge_r, upper_tusk_r, nose_horn_shield]
+                  }
+                  box chin_spike_plate place(base_box=jaw_core, anchor=[0, -0.92, 0.15], align=[0, 0.55, 0]) {
+                    size: [4.0, 2.5, 5.5], material: ivory_spike, rotate: [-14, 0, 0], blend_with: [neck_upper]
+                  }
+                  box jaw_beard_spike_l place(base_box=jaw_core, anchor=[0.90, -0.35, 0.12], align=[-0.15, 0.72, 0]) {
+                    size: [1.5, 3.5, 2.5], material: gunmetal_iron, rotate: [24, -16, 18], blend_with: [chin_spike_plate]
+                  }
+                  box jaw_beard_spike_r place(base_box=jaw_core, anchor=[-0.90, -0.35, 0.12], align=[0.15, 0.72, 0]) {
+                    size: [1.5, 3.5, 2.5], material: gunmetal_iron, rotate: [24, 16, -18], blend_with: [chin_spike_plate]
+                  }
+                  plane chin_quill_plane place(base_box=chin_spike_plate, anchor=[0, -0.95, -0.15], align=[0, 0.85, 0]) {
+                    size: [3.5, 5.5], normal: x, material: ivory_spike, rotate: [-10, 0, 0],
+                    edge: spikes(width=4, min_len=2, max_len=6, side=bottom, seed=83), layer: 1,
+                    blend_with: [jaw_core, neck_upper, neck_throat_plate]
+                  }
+                }
+              }
+            }
+          }
+
+          // Gorilla-Like Colossal Brawling Forelimbs Bristling with Metallic & Ivory Spikes!
+          bone fore_shoulder_l attach(parent_box=chest_core, anchor=[0.96, -0.18, 0.44], align=[-0.55, 0.82, 0], seat=0.12) mirror_x(fore_shoulder_r) {
+            rest_euler: [20, 8, 28]
+            box fore_bicep { size: [9.5, 12.0, 9.5], material: obsidian_hide }
+            box pauldron_iron_plate place(base_box=fore_bicep, anchor=[0.98, 0.35, 0.08], align=[-0.52, 0, 0]) {
+              size: [3.0, 7.5, 8.0], material: gunmetal_iron, rotate: [-8, 10, -14], blend_with: [chest_core]
+            }
+            box pauldron_ivory_quill place(base_box=pauldron_iron_plate, anchor=[0.86, 0.88, -0.25], align=[-0.68, -0.68, 0.35]) {
+              size: [2.5, 4.0, 6.5], material: ivory_spike, rotate: [20, 24, -18], blend_with: [fore_bicep, chest_core, hunch_scapula_l, hunch_outer_iron_l]
+            }
+            box elbow_ivory_spike place(base_box=fore_bicep, anchor=[0.25, -0.78, -0.94], align=[0, 0, 0.68]) {
+              size: [4.5, 4.5, 7.0], material: ivory_spike, rotate: [24, 0, 0], blend_with: [fore_bracer]
+            }
+            plane elbow_quill_plane place(base_box=elbow_ivory_spike, anchor=[0.35, -0.15, -0.96], align=[0, 0, 0.85]) {
+              size: [6.0, 5.5], normal: x, material: scarred_steel, rotate: [16, 18, 0],
+              edge: spikes(width=4, min_len=4, max_len=9, side=right, seed=89), layer: 1,
+              blend_with: [fore_bicep, fore_bracer, rib_ivory_shingle_l_2, rib_ivory_shingle_r_2, flank_spike_plate_l_2, flank_spike_plate_r_2]
+            }
+
+            bone fore_arm_l attach(parent_box=fore_bicep, anchor=[0.12, -1, -0.04], align=[0, 0.88, 0], seat=0.18) {
+              rest_euler: [-32, 0, -18]
+              box fore_bracer { size: [9.0, 12.5, 9.0], material: elder_charcoal, blend_with: [chest_core] }
+              box bracer_front_guard place(base_box=fore_bracer, anchor=[0.10, 0.05, 0.98], align=[0, 0, -0.68]) {
+                size: [6.5, 10.0, 2.5], material: gunmetal_iron, rotate: [4, -6, 0], blend_with: [fore_bicep, fore_palm]
+              }
+              box bracer_iron_spike_1 place(base_box=fore_bracer, anchor=[0.96, 0.56, 0.20], align=[-0.52, 0, 0.38]) {
+                size: [3.5, 3.0, 8.5], material: gunmetal_iron, rotate: [22, 32, -16], blend_with: [fore_bicep, pauldron_iron_plate, elbow_ivory_spike]
+              }
+              box bracer_ivory_spike_2 place(base_box=fore_bracer, anchor=[0.96, 0.16, 0.20], align=[-0.52, 0, 0.38]) {
+                size: [3.5, 3.0, 8.5], material: ivory_spike, rotate: [22, 32, -16], blend_with: [bracer_iron_spike_1, elbow_ivory_spike]
+              }
+              box bracer_iron_spike_3 place(base_box=fore_bracer, anchor=[0.96, -0.24, 0.20], align=[-0.60, 0, 0.38]) {
+                size: [3.0, 2.5, 8.0], material: scarred_steel, rotate: [22, 32, -16], blend_with: [bracer_ivory_spike_2]
+              }
+              box bracer_ivory_spike_4 place(base_box=fore_bracer, anchor=[0.96, -0.62, 0.16], align=[-0.78, 0, 0.38]) {
+                size: [2.5, 2.5, 7.0], material: ivory_spike, rotate: [22, 32, -16], blend_with: [bracer_iron_spike_3, fore_palm]
+              }
+              box bracer_front_quill_1 place(base_box=bracer_front_guard, anchor=[0.35, 0.35, 0.96], align=[0, 0, -0.78]) {
+                size: [2.0, 2.5, 4.5], material: ivory_spike, rotate: [26, -12, 0], blend_with: [fore_bracer]
+              }
+              box bracer_front_quill_2 place(base_box=bracer_front_guard, anchor=[-0.35, -0.20, 0.96], align=[0, 0, -0.78]) {
+                size: [2.0, 2.5, 4.5], material: scarred_steel, rotate: [26, 12, 0], blend_with: [fore_bracer, fore_palm]
+              }
+              box f_inner_wrist_spike place(base_box=fore_bracer, anchor=[-0.96, -0.35, -0.25], align=[0.78, 0, 0.35]) {
+                size: [2.0, 2.5, 5.5], material: gunmetal_iron, rotate: [16, -24, 12], blend_with: [fore_palm, chest_core, chest_scute_front]
+              }
+              plane forearm_quill_fringe place(base_box=fore_bracer, anchor=[0.45, -0.08, -1.0], align=[0, 0, 0.90]) {
+                size: [10.0, 7.5], normal: x, material: ivory_spike, rotate: [8, 16, 0],
+                edge: spikes(width=4, min_len=4, max_len=9, side=right, seed=97), layer: 1,
+                blend_with: [elbow_ivory_spike, bracer_iron_spike_1, bracer_ivory_spike_2, bracer_iron_spike_3, bracer_ivory_spike_4, fore_palm]
+              }
+
+              bone fore_hand_l attach(parent_box=fore_bracer, anchor=[0, -1, 0.16], align=[0, 0.85, -0.45], seat=0.16) {
+                rest_euler: [16, 0, -10]
+                box fore_palm { size: [9.5, 4.0, 8.0], material: copper_underhide }
+                box knuckle_iron_guard place(base_box=fore_palm, anchor=[0, 0.98, 0.62], align=[0, -0.82, 0]) {
+                  size: [8.0, 1.5, 4.0], material: gunmetal_iron, rotate: [12, 0, 0], blend_with: [fore_bracer, bracer_front_guard, f_toe_1, f_toe_2, f_toe_3, f_toe_4]
+                }
+                box f_toe_1 place(base_box=fore_palm, anchor=[-0.68, -0.10, 0.92], align=[0, 0, -0.75]) {
+                  size: [2.0, 2.5, 4.0], material: elder_charcoal, rotate: [2, 16, 0]
+                }
+                box f_talon_1 place(base_box=f_toe_1, anchor=[0, 0.02, 0.96], align=[0, 0, -0.82]) {
+                  size: [1.5, 2.0, 3.5], material: scarred_steel, rotate: [6, 4, 0]
+                }
+                box f_toe_2 place(base_box=fore_palm, anchor=[-0.22, -0.10, 0.96], align=[0, 0, -0.78]) {
+                  size: [2.0, 2.5, 4.5], material: elder_charcoal, rotate: [2, 5, 0], blend_with: [f_toe_1]
+                }
+                box f_talon_2 place(base_box=f_toe_2, anchor=[0, 0.02, 0.96], align=[0, 0, -0.82]) {
+                  size: [1.5, 2.0, 4.0], material: ivory_spike, rotate: [6, 0, 0], blend_with: [f_talon_1]
+                }
+                box f_toe_3 place(base_box=fore_palm, anchor=[0.24, -0.10, 0.96], align=[0, 0, -0.78]) {
+                  size: [2.0, 2.5, 4.5], material: elder_charcoal, rotate: [2, -6, 0], blend_with: [f_toe_2]
+                }
+                box f_talon_3 place(base_box=f_toe_3, anchor=[0, 0.02, 0.96], align=[0, 0, -0.82]) {
+                  size: [1.5, 2.0, 4.0], material: scarred_steel, rotate: [6, 0, 0], blend_with: [f_talon_2]
+                }
+                box f_toe_4 place(base_box=fore_palm, anchor=[0.70, -0.10, 0.90], align=[0, 0, -0.75]) {
+                  size: [2.0, 2.5, 4.0], material: elder_charcoal, rotate: [2, -18, 0], blend_with: [f_toe_3]
+                }
+                box f_talon_4 place(base_box=f_toe_4, anchor=[0, 0.02, 0.96], align=[0, 0, -0.82]) {
+                  size: [1.5, 2.0, 3.5], material: ivory_spike, rotate: [6, -4, 0], blend_with: [f_talon_3]
+                }
+                box f_thumb_claw place(base_box=fore_palm, anchor=[-0.96, 0.15, -0.35], align=[0.68, 0, 0.35]) {
+                  size: [1.5, 2.0, 4.0], material: scarred_steel, rotate: [12, -28, 0], blend_with: [fore_bracer]
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // Sturdy Spiked Digitigrade Elder Dragon Hindlimbs
+      bone hind_thigh_l attach(parent_box=pelvis_core, anchor=[0.96, -0.12, -0.05], align=[-0.55, 0.85, 0], seat=0.12) mirror_x(hind_thigh_r) {
+        rest_euler: [-24, -6, 18]
+        box thigh_mass { size: [7.5, 12.5, 9.0], material: obsidian_hide, blend_with: [waist_core, tail_1_seg] }
+        box thigh_iron_plate place(base_box=thigh_mass, anchor=[0.98, 0.22, 0.08], align=[-0.50, 0, 0]) {
+          size: [2.5, 7.0, 6.5], material: gunmetal_iron, rotate: [6, -8, -12], blend_with: [pelvis_core, haunch_mass_l]
+        }
+        box thigh_ivory_spur place(base_box=thigh_iron_plate, anchor=[0.92, 0.25, -0.42], align=[-0.68, 0, 0.45]) {
+          size: [2.0, 3.0, 6.5], material: ivory_spike, rotate: [18, 26, -12], blend_with: [thigh_mass, hip_iron_spur_l]
+        }
+        box knee_iron_cap place(base_box=thigh_mass, anchor=[0.15, -0.82, 0.96], align=[0, 0, -0.72]) {
+          size: [4.5, 3.5, 2.5], material: scarred_steel, rotate: [-14, 0, 0], blend_with: [shin_mass, waist_core, waist_belly]
+        }
+        plane thigh_quill_fringe place(base_box=thigh_mass, anchor=[0.45, -0.15, -1.0], align=[0, 0, 0.88]) {
+          size: [8.0, 6.5], normal: x, material: ivory_spike, rotate: [-12, 14, 0],
+          edge: spikes(width=4, min_len=3, max_len=8, side=right, seed=103), layer: 1,
+          blend_with: [thigh_iron_plate, thigh_ivory_spur, shin_mass, hock_ivory_spike]
+        }
+
+        bone hind_shin_l attach(parent_box=thigh_mass, anchor=[0.05, -1, -0.10], align=[0, 0.88, 0], seat=0.16) {
+          rest_euler: [42, 0, -10]
+          box shin_mass { size: [6.0, 11.5, 6.5], material: elder_charcoal }
+          box shin_iron_guard place(base_box=shin_mass, anchor=[0.20, 0.05, 0.96], align=[0, 0, -0.68]) {
+            size: [4.0, 8.0, 2.0], material: gunmetal_iron, rotate: [4, 0, 0], blend_with: [thigh_mass, knee_iron_cap, hind_foot_pad]
+          }
+          box hock_ivory_spike place(base_box=shin_mass, anchor=[0, 0.65, -0.92], align=[0, 0, 0.68]) {
+            size: [3.5, 3.5, 5.0], material: ivory_spike, rotate: [22, 0, 0], blend_with: [thigh_mass]
+          }
+          plane ankle_quill_plane place(base_box=shin_mass, anchor=[0.25, -0.35, -0.98], align=[0, 0, 0.88]) {
+            size: [6.0, 5.5], normal: x, material: scarred_steel, rotate: [10, 10, 0],
+            edge: spikes(width=4, min_len=3, max_len=8, side=right, seed=107), layer: 1,
+            blend_with: [hock_ivory_spike, hind_foot_pad]
+          }
+
+          bone hind_foot_l attach(parent_box=shin_mass, anchor=[0, -1, 0.15], align=[0, 0.88, -0.42], seat=0.14) {
+            rest_euler: [-30, 0, -8]
+            box hind_foot_pad { size: [7.5, 3.5, 7.5], material: copper_underhide }
+            box h_toe_1 place(base_box=hind_foot_pad, anchor=[-0.62, -0.08, 0.92], align=[0, 0, -0.75]) {
+              size: [2.0, 2.0, 4.0], material: elder_charcoal, rotate: [2, 14, 0]
+            }
+            box h_talon_1 place(base_box=h_toe_1, anchor=[0, 0.02, 0.96], align=[0, 0, -0.82]) {
+              size: [1.5, 1.5, 3.0], material: scarred_steel, rotate: [6, 4, 0]
+            }
+            box h_toe_2 place(base_box=hind_foot_pad, anchor=[0.0, -0.08, 0.96], align=[0, 0, -0.78]) {
+              size: [2.0, 2.0, 4.5], material: elder_charcoal, rotate: [2, 0, 0], blend_with: [h_toe_1]
+            }
+            box h_talon_2 place(base_box=h_toe_2, anchor=[0, 0.02, 0.96], align=[0, 0, -0.82]) {
+              size: [1.5, 1.5, 3.5], material: ivory_spike, rotate: [6, 0, 0], blend_with: [h_talon_1]
+            }
+            box h_toe_3 place(base_box=hind_foot_pad, anchor=[0.62, -0.08, 0.92], align=[0, 0, -0.75]) {
+              size: [2.0, 2.0, 4.0], material: elder_charcoal, rotate: [2, -14, 0], blend_with: [h_toe_2]
+            }
+            box h_talon_3 place(base_box=h_toe_3, anchor=[0, 0.02, 0.96], align=[0, 0, -0.82]) {
+              size: [1.5, 1.5, 3.0], material: scarred_steel, rotate: [6, -4, 0], blend_with: [h_talon_2]
+            }
+            box h_knuckle_guard place(base_box=hind_foot_pad, anchor=[0, 0.98, 0.62], align=[0, -0.82, 0]) {
+              size: [6.0, 1.0, 3.5], material: gunmetal_iron, rotate: [10, 0, 0], blend_with: [shin_mass, shin_iron_guard, h_toe_1, h_toe_2, h_toe_3]
+            }
+            box h_heel_spike place(base_box=hind_foot_pad, anchor=[0, 0.25, -0.96], align=[0, 0, 0.80]) {
+              size: [2.0, 2.0, 4.0], material: ivory_spike, rotate: [14, 0, 0], blend_with: [shin_mass]
+            }
+          }
+        }
+      }
+
+      // Heavy Spiked Elder Dragon Club Tail (`tail_1..tail_6`)
+      bone tail_1 attach(parent_box=pelvis_core, anchor=[0, 0.18, -1], align=[0, 0, 1], seat=0.24) {
+        rest_euler: [-10, 0, 0]
+        box tail_1_seg { size: [10.5, 9.0, 9.5], material: obsidian_hide }
+        box tail_1_belly place(base_box=tail_1_seg, anchor=[0, -0.96, 0], align=[0, 0.45, 0]) {
+          size: [7.5, 1.5, 8.5], material: copper_underhide, blend_with: [pelvis_belly, pelvis_core]
+        }
+        box tail_1_plate place(base_box=tail_1_seg, anchor=[0, 0.96, 0], align=[0, -0.52, 0]) {
+          size: [8.0, 2.5, 8.5], material: elder_charcoal, rotate: [10, 0, 0], blend_with: [pelvis_core, sacrum_armor]
+        }
+        box tail_1_side_l place(base_box=tail_1_seg, anchor=[0.96, 0.15, -0.15], align=[-0.60, 0, 0.35]) {
+          size: [2.5, 3.0, 7.5], material: gunmetal_iron, rotate: [12, 22, -10], blend_with: [pelvis_core, haunch_mass_l, tail_2_seg, tail_2_spike_l]
+        }
+        box tail_1_side_r place(base_box=tail_1_seg, anchor=[-0.96, 0.15, -0.15], align=[0.60, 0, 0.35]) {
+          size: [2.5, 3.0, 7.5], material: gunmetal_iron, rotate: [12, -22, 10], blend_with: [pelvis_core, haunch_mass_r, tail_2_seg, tail_2_spike_r]
+        }
+
+        bone tail_2 attach(parent_box=tail_1_seg, anchor=[0, 0.08, -1], align=[0, 0, 1], seat=0.24) {
+          rest_euler: [10, 0, 0]
+          box tail_2_seg { size: [9.5, 8.5, 9.5], material: obsidian_hide }
+          box tail_2_belly place(base_box=tail_2_seg, anchor=[0, -0.96, 0], align=[0, 0.45, 0]) {
+            size: [6.5, 1.5, 8.5], material: copper_underhide, blend_with: [tail_1_belly, tail_1_seg]
+          }
+          box tail_2_spike_l place(base_box=tail_2_seg, anchor=[0.96, 0.25, -0.18], align=[-0.52, 0, 0.45]) {
+            size: [3.0, 3.0, 8.5], material: ivory_spike, rotate: [14, 26, -14], blend_with: [tail_1_seg, tail_3_seg]
+          }
+          box tail_2_spike_r place(base_box=tail_2_seg, anchor=[-0.96, 0.25, -0.18], align=[0.52, 0, 0.45]) {
+            size: [3.0, 3.0, 8.5], material: ivory_spike, rotate: [14, -26, 14], blend_with: [tail_1_seg, tail_3_seg]
+          }
+          plane tail_2_quill_l place(base_box=tail_2_seg, anchor=[0.24, 0.96, 0], align=[0, -0.85, 0]) {
+            size: [5.0, 8.5], normal: x, material: scarred_steel, rotate: [10, 0, -14],
+            edge: spikes(width=4, min_len=3, max_len=8, side=top, seed=113), layer: 1,
+            blend_with: [tail_1_plate, tail_3_dorsal_iron, tail_3_seg]
+          }
+          plane tail_2_quill_r place(base_box=tail_2_seg, anchor=[-0.24, 0.96, 0], align=[0, -0.85, 0]) {
+            size: [5.0, 8.5], normal: x, material: ivory_spike, rotate: [10, 0, 14],
+            edge: spikes(width=4, min_len=3, max_len=8, side=top, seed=113), layer: 2,
+            blend_with: [tail_1_plate, tail_3_dorsal_iron, tail_3_seg, tail_2_quill_l]
+          }
+
+          bone tail_3 attach(parent_box=tail_2_seg, anchor=[0, 0.08, -1], align=[0, 0, 1], seat=0.24) {
+            rest_euler: [14, 0, 0]
+            box tail_3_seg { size: [8.5, 7.5, 9.5], material: elder_charcoal }
+            box tail_3_belly place(base_box=tail_3_seg, anchor=[0, -0.96, 0], align=[0, 0.45, 0]) {
+              size: [5.5, 1.5, 8.5], material: copper_underhide, blend_with: [tail_2_belly, tail_2_seg]
+            }
+            box tail_3_spike_l place(base_box=tail_3_seg, anchor=[0.96, 0.22, -0.20], align=[-0.52, 0, 0.55]) {
+              size: [4.0, 3.5, 10.0], material: gunmetal_iron, rotate: [16, 32, -16], blend_with: [tail_2_seg, tail_2_spike_l, tail_4_seg]
+            }
+            box tail_3_spike_r place(base_box=tail_3_seg, anchor=[-0.96, 0.22, -0.20], align=[0.52, 0, 0.55]) {
+              size: [4.0, 3.5, 10.0], material: gunmetal_iron, rotate: [16, -32, 16], blend_with: [tail_2_seg, tail_2_spike_r, tail_4_seg]
+            }
+            box tail_3_lower_quill_l place(base_box=tail_3_seg, anchor=[0.74, -0.84, -0.22], align=[-0.68, 0.68, 0.55]) {
+              size: [2.5, 2.5, 8.0], material: ivory_spike, rotate: [-14, 24, 18], blend_with: [tail_3_spike_l, tail_3_belly, tail_2_seg, tail_4_seg]
+            }
+            box tail_3_lower_quill_r place(base_box=tail_3_seg, anchor=[-0.74, -0.84, -0.22], align=[0.68, 0.68, 0.55]) {
+              size: [2.5, 2.5, 8.0], material: ivory_spike, rotate: [-14, -24, -18], blend_with: [tail_3_spike_r, tail_3_belly, tail_2_seg, tail_4_seg]
+            }
+            box tail_3_dorsal_iron place(base_box=tail_3_seg, anchor=[0, 0.96, 0], align=[0, -0.52, 0]) {
+              size: [5.0, 3.5, 8.5], material: gunmetal_iron, rotate: [14, 0, 0], blend_with: [tail_2_seg]
+            }
+            plane tail_3_quill_l place(base_box=tail_3_dorsal_iron, anchor=[0.35, 0.92, 0], align=[0, -0.85, 0]) {
+              size: [5.5, 8.5], normal: x, material: ivory_spike, rotate: [8, 0, -16],
+              edge: spikes(width=4, min_len=4, max_len=9, side=top, seed=127), layer: 2,
+              blend_with: [tail_2_quill_l, tail_4_dorsal_ivory, tail_4_seg]
+            }
+            plane tail_3_quill_r place(base_box=tail_3_dorsal_iron, anchor=[-0.35, 0.92, 0], align=[0, -0.85, 0]) {
+              size: [5.5, 8.5], normal: x, material: scarred_steel, rotate: [8, 0, 16],
+              edge: spikes(width=4, min_len=4, max_len=9, side=top, seed=127), layer: 1,
+              blend_with: [tail_2_quill_r, tail_4_dorsal_ivory, tail_4_seg, tail_3_quill_l]
+            }
+
+            bone tail_4 attach(parent_box=tail_3_seg, anchor=[0, 0.08, -1], align=[0, 0, 1], seat=0.24) {
+              rest_euler: [12, 0, 0]
+              box tail_4_seg { size: [7.5, 7.0, 9.0], material: elder_charcoal }
+              box tail_4_spike_l place(base_box=tail_4_seg, anchor=[0.96, 0.20, -0.22], align=[-0.52, 0, 0.58]) {
+                size: [4.5, 4.0, 11.5], material: ivory_spike, rotate: [16, 36, -18], blend_with: [tail_3_seg, tail_3_spike_l, tail_5_seg]
+              }
+              box tail_4_spike_r place(base_box=tail_4_seg, anchor=[-0.96, 0.20, -0.22], align=[0.52, 0, 0.58]) {
+                size: [4.5, 4.0, 11.5], material: scarred_steel, rotate: [16, -36, 18], blend_with: [tail_3_seg, tail_3_spike_r, tail_5_seg]
+              }
+              box tail_4_lower_quill_l place(base_box=tail_4_seg, anchor=[0.74, -0.86, -0.25], align=[-0.68, 0.68, 0.55]) {
+                size: [3.0, 2.5, 8.5], material: gunmetal_iron, rotate: [-14, 26, 18], blend_with: [tail_4_spike_l, tail_3_seg, tail_3_lower_quill_l, tail_5_seg]
+              }
+              box tail_4_lower_quill_r place(base_box=tail_4_seg, anchor=[-0.74, -0.86, -0.25], align=[0.68, 0.68, 0.55]) {
+                size: [3.0, 2.5, 8.5], material: gunmetal_iron, rotate: [-14, -26, -18], blend_with: [tail_4_spike_r, tail_3_seg, tail_3_lower_quill_r, tail_5_seg]
+              }
+              box tail_4_dorsal_ivory place(base_box=tail_4_seg, anchor=[0, 0.96, 0], align=[0, -0.52, 0]) {
+                size: [5.0, 4.0, 8.5], material: ivory_spike, rotate: [16, 0, 0], blend_with: [tail_3_dorsal_iron, tail_3_seg]
+              }
+              plane tail_4_quill_l place(base_box=tail_4_dorsal_ivory, anchor=[0.38, 0.92, 0], align=[0, -0.85, 0]) {
+                size: [6.0, 8.5], normal: x, material: scarred_steel, rotate: [8, 0, -18],
+                edge: spikes(width=4, min_len=4, max_len=9, side=top, seed=131), layer: 1,
+                blend_with: [tail_3_quill_l, tail_5_seg, tail_5_dorsal_iron]
+              }
+              plane tail_4_quill_r place(base_box=tail_4_dorsal_ivory, anchor=[-0.38, 0.92, 0], align=[0, -0.85, 0]) {
+                size: [6.0, 8.5], normal: x, material: ivory_spike, rotate: [8, 0, 18],
+                edge: spikes(width=4, min_len=4, max_len=9, side=top, seed=131), layer: 2,
+                blend_with: [tail_3_quill_r, tail_5_seg, tail_5_dorsal_iron, tail_4_quill_l]
+              }
+
+              bone tail_5 attach(parent_box=tail_4_seg, anchor=[0, 0.08, -1], align=[0, 0, 1], seat=0.24) {
+                rest_euler: [8, 0, 0]
+                box tail_5_seg { size: [6.5, 6.0, 8.5], material: obsidian_hide }
+                box tail_5_spike_l place(base_box=tail_5_seg, anchor=[0.95, 0.18, -0.20], align=[-0.52, 0, 0.58]) {
+                  size: [4.5, 3.5, 11.0], material: gunmetal_iron, rotate: [14, 34, -16], blend_with: [tail_4_seg, tail_4_spike_l, tail_6_mace]
+                }
+                box tail_5_spike_r place(base_box=tail_5_seg, anchor=[-0.95, 0.18, -0.20], align=[0.52, 0, 0.58]) {
+                  size: [4.5, 3.5, 11.0], material: gunmetal_iron, rotate: [14, -34, 16], blend_with: [tail_4_seg, tail_4_spike_r, tail_6_mace]
+                }
+                box tail_5_lower_quill_l place(base_box=tail_5_seg, anchor=[0.74, -0.86, -0.22], align=[-0.68, 0.68, 0.55]) {
+                  size: [2.5, 2.5, 8.0], material: ivory_spike, rotate: [-14, 24, 16], blend_with: [tail_5_spike_l, tail_4_seg, tail_4_lower_quill_l, tail_6_mace]
+                }
+                box tail_5_lower_quill_r place(base_box=tail_5_seg, anchor=[-0.74, -0.86, -0.22], align=[0.68, 0.68, 0.55]) {
+                  size: [2.5, 2.5, 8.0], material: ivory_spike, rotate: [-14, -24, -16], blend_with: [tail_5_spike_r, tail_4_seg, tail_4_lower_quill_r, tail_6_mace]
+                }
+                box tail_5_dorsal_iron place(base_box=tail_5_seg, anchor=[0, 0.98, 0], align=[0, -0.72, 0]) {
+                  size: [3.5, 3.0, 7.0], material: scarred_steel, rotate: [14, 0, 0], blend_with: [tail_4_dorsal_ivory, tail_6_mace]
+                }
+                plane tail_5_quill_l place(base_box=tail_5_dorsal_iron, anchor=[0.38, 0.92, 0], align=[0, -0.85, 0]) {
+                  size: [5.0, 7.5], normal: x, material: ivory_spike, rotate: [8, 0, -16],
+                  edge: spikes(width=4, min_len=3, max_len=8, side=top, seed=137), layer: 2,
+                  blend_with: [tail_4_quill_l, tail_6_mace]
+                }
+                plane tail_5_quill_r place(base_box=tail_5_dorsal_iron, anchor=[-0.38, 0.92, 0], align=[0, -0.85, 0]) {
+                  size: [5.0, 7.5], normal: x, material: scarred_steel, rotate: [8, 0, 16],
+                  edge: spikes(width=4, min_len=3, max_len=8, side=top, seed=137), layer: 1,
+                  blend_with: [tail_4_quill_r, tail_6_mace, tail_5_quill_l]
+                }
+
+                bone tail_6 attach(parent_box=tail_5_seg, anchor=[0, 0.05, -1], align=[0, 0, 1], seat=0.22) {
+                  rest_euler: [4, 0, 0]
+                  box tail_6_mace { size: [5.0, 4.5, 9.0], material: gunmetal_iron }
+                  box tail_6_side_spike_l place(base_box=tail_6_mace, anchor=[0.96, 0.12, -0.15], align=[-0.65, 0, 0.45]) {
+                    size: [3.0, 2.5, 8.0], material: ivory_spike, rotate: [10, 26, -12], blend_with: [tail_5_seg, tail_5_spike_l, tail_mace_tip_l]
+                  }
+                  box tail_6_side_spike_r place(base_box=tail_6_mace, anchor=[-0.96, 0.12, -0.15], align=[0.65, 0, 0.45]) {
+                    size: [3.0, 2.5, 8.0], material: scarred_steel, rotate: [10, -26, 12], blend_with: [tail_5_seg, tail_5_spike_r, tail_mace_tip_r]
+                  }
+                  box tail_mace_tip_l place(base_box=tail_6_mace, anchor=[0.68, 0.12, -0.92], align=[-0.35, 0, 0.72]) {
+                    size: [2.0, 2.5, 7.5], material: ivory_spike, rotate: [8, 18, -8], blend_with: [tail_5_seg, tail_5_spike_l]
+                  }
+                  box tail_mace_tip_r place(base_box=tail_6_mace, anchor=[-0.68, 0.12, -0.92], align=[0.35, 0, 0.72]) {
+                    size: [2.0, 2.5, 7.5], material: scarred_steel, rotate: [8, -18, 8], blend_with: [tail_5_seg, tail_5_spike_r, tail_mace_tip_l]
+                  }
+                  box tail_mace_center_lance place(base_box=tail_6_mace, anchor=[0, 0.88, -0.65], align=[0, -0.78, 0.55]) {
+                    size: [2.0, 2.5, 6.0], material: gunmetal_iron, rotate: [16, 0, 0], blend_with: [tail_mace_tip_l, tail_mace_tip_r]
+                  }
+                  plane tail_6_quill_l place(base_box=tail_6_mace, anchor=[0.35, 0.94, 0], align=[0, -0.85, 0]) {
+                    size: [4.5, 7.0], normal: x, material: ivory_spike, rotate: [10, 0, -16],
+                    edge: spikes(width=4, min_len=3, max_len=8, side=top, seed=149), layer: 1,
+                    blend_with: [tail_5_quill_l, tail_5_dorsal_iron, tail_mace_tip_l, tail_mace_center_lance]
+                  }
+                  plane tail_6_quill_r place(base_box=tail_6_mace, anchor=[-0.35, 0.94, 0], align=[0, -0.85, 0]) {
+                    size: [4.5, 7.0], normal: x, material: scarred_steel, rotate: [10, 0, 16],
+                    edge: spikes(width=4, min_len=3, max_len=8, side=top, seed=149), layer: 2,
+                    blend_with: [tail_5_quill_r, tail_5_dorsal_iron, tail_mace_tip_r, tail_mace_center_lance, tail_6_quill_l]
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+@materials {
+  obsidian_hide: process(family=keratin_scales, coat=scale_rows, roughness=0.58)
+  elder_charcoal: process(family=keratin_scales, coat=banded_limb, roughness=0.52)
+  gunmetal_iron: process(family=brushed_metal, coat=striped, roughness=0.28)
+  scarred_steel: process(family=painted_metal, coat=striped, roughness=0.24)
+  ivory_spike: process(family=polymer_dielectric, coat=striped, roughness=0.36)
+  aged_keratin: process(family=weathered_stone, coat=striped, roughness=0.46)
+  copper_underhide: process(family=patterned_skin, coat=plain, roughness=0.62)
+  wing_membrane_plum: process(family=woven_fabric, coat=mottled, roughness=0.72)
+  maw_crimson: process(family=patterned_skin, coat=plain, roughness=0.44)
+  ruiner_amber: process(family=thin_film_iridescence, coat=plain, roughness=0.18, emissive=0.95)
+}
+@style {
+  target_encoding: vanilla,
+  shade: banded(steps=5, direction=down, cluster=diagonal),
+  glow_bleed: 2
+}
+@stamps {
+  stamp predator_amber_glare on skull_core.east { at: [0.72, 0.36], size: [1.5, 1.0], color: ruiner_amber, emissive: 0.95, mirror: true }
+  stamp battle_scar_gleam on horn_r_seg_2.west { at: [0.52, 0.40], size: [3.0, 1.0], rows: 2, spacing: 1.8, color: ruiner_amber, emissive: 0.85 }
+  stamp throat_dermal_glow on neck_throat_plate.down { at: [0.50, 0.38], size: [4.0, 1.0], rows: 2, spacing: 2.0, color: ruiner_amber, emissive: 0.82 }
+}
+@behavior {
+  spring wing_finger_1_l { stiffness: 46, damping: 6 }
+  spring wing_shoulder_r__wing_finger_1_l { stiffness: 46, damping: 6 }
+  spring tail_6 { stiffness: 40, damping: 5 }
+
+  // 1. Hulking Eater of Elders breathing, spiked wings subtly flexing, snarling bulldog head scan
+  clip idle {
+    duration_s: 3.2, loop: true
+    key root.position { 0.0: [0, 0, 0], 0.8: [0, -0.6, 0], 1.6: [0, 0.4, 0], 2.4: [0, -0.6, 0], 3.2: [0, 0, 0], catmullrom }
+    key chest.rotation { 0.0: [0, 0, 0], 0.8: [3.0, 2.0, 0], 1.6: [-2.5, 0, 0], 2.4: [3.0, -2.0, 0], 3.2: [0, 0, 0], catmullrom }
+    key neck_1.rotation { 0.0: [0, 0, 0], 0.8: [-3, 6, 2], 1.6: [2, 0, 0], 2.4: [-3, -6, -2], 3.2: [0, 0, 0], catmullrom }
+    key head.rotation { 0.0: [0, 0, 0], 0.8: [4, 10, -4], 1.6: [-3, 0, 0], 2.4: [4, -10, 4], 3.2: [0, 0, 0], catmullrom }
+    key jaw.rotation { 0.0: [0, 0, 0], 1.6: [9, 0, 0], 3.2: [0, 0, 0], catmullrom }
+    key wing_shoulder_l.rotation { 0.0: [0, 0, 0], 1.6: [0, -4, 6], 3.2: [0, 0, 0], catmullrom }
+    key wing_shoulder_r.rotation { 0.0: [0, 0, 0], 1.6: [0, -4, 6], 3.2: [0, 0, 0], catmullrom }
+    track tail_1: wave(axis=y, amp_deg=7, freq_hz=0.3125, phase_deg=0)
+    track tail_3: wave(axis=y, amp_deg=12, freq_hz=0.3125, phase_deg=-65)
+    track tail_5: wave(axis=y, amp_deg=16, freq_hz=0.3125, phase_deg=-130)
+  }
+
+  // 2. Heavy gorilla-juggernaut stalk with rolling spiked shoulders & planted fist impacts
+  clip walk {
+    duration_s: 1.8, loop: true
+    key root.position { 0.0: [0, 0, 0], 0.45: [0, 1.3, 0], 0.90: [0, 0, 0], 1.35: [0, 1.3, 0], 1.8: [0, 0, 0], catmullrom }
+    key pelvis.rotation { 0.0: [0, -6, 3], 0.45: [3, 0, 0], 0.90: [0, 6, -3], 1.35: [3, 0, 0], 1.8: [0, -6, 3], catmullrom }
+    key chest.rotation { 0.0: [0, 10, -7], 0.45: [-3, 0, 0], 0.90: [0, -10, 7], 1.35: [-3, 0, 0], 1.8: [0, 10, -7], catmullrom }
+    key head.rotation { 0.0: [3, -5, 4], 0.90: [3, 5, -4], 1.8: [3, -5, 4], catmullrom }
+    key fore_shoulder_l.rotation { 0.0: [-24, 0, 0], 0.45: [6, 0, 5], 0.90: [22, 0, 0], 1.35: [-10, 0, 6], 1.8: [-24, 0, 0], catmullrom }
+    key fore_arm_l.rotation { 0.0: [12, 0, 0], 0.45: [4, 0, 0], 0.90: [18, 0, 0], 1.35: [-24, 0, 0], 1.8: [12, 0, 0], catmullrom }
+    key fore_shoulder_r.rotation { 0.0: [22, 0, 0], 0.45: [-10, 0, 6], 0.90: [-24, 0, 0], 1.35: [6, 0, 5], 1.8: [22, 0, 0], catmullrom }
+    key fore_shoulder_r__fore_arm_l.rotation { 0.0: [18, 0, 0], 0.45: [-24, 0, 0], 0.90: [12, 0, 0], 1.35: [4, 0, 0], 1.8: [18, 0, 0], catmullrom }
+    key hind_thigh_l.rotation { 0.0: [20, 0, 0], 0.45: [-10, 0, 4], 0.90: [-22, 0, 0], 1.35: [6, 0, 0], 1.8: [20, 0, 0], catmullrom }
+    key hind_shin_l.rotation { 0.0: [-14, 0, 0], 0.45: [24, 0, 0], 0.90: [8, 0, 0], 1.35: [-6, 0, 0], 1.8: [-14, 0, 0], catmullrom }
+    key hind_thigh_r.rotation { 0.0: [-22, 0, 0], 0.45: [6, 0, 0], 0.90: [20, 0, 0], 1.35: [-10, 0, 4], 1.8: [-22, 0, 0], catmullrom }
+    key hind_thigh_r__hind_shin_l.rotation { 0.0: [8, 0, 0], 0.45: [-6, 0, 0], 0.90: [-14, 0, 0], 1.35: [24, 0, 0], 1.8: [8, 0, 0], catmullrom }
+    key wing_shoulder_l.rotation { 0.0: [0, 4, -4], 0.90: [0, -4, 6], 1.8: [0, 4, -4], catmullrom }
+    key wing_shoulder_r.rotation { 0.0: [0, -4, 6], 0.90: [0, 4, -4], 1.8: [0, -4, 6], catmullrom }
+    track tail_1: wave(axis=y, amp_deg=11, freq_hz=0.5556, phase_deg=0)
+    track tail_4: wave(axis=y, amp_deg=18, freq_hz=0.5556, phase_deg=-90)
+  }
+
+  // 3. Thundering 6-limbed Elder Dragon bull-charge with half-flared spiked bat wings
+  clip run {
+    duration_s: 0.95, loop: true
+    key root.position { 0.0: [0, 1.8, 0], 0.24: [0, 6.0, 3.0], 0.48: [0, 0.4, 0], 0.72: [0, -1.6, -1.5], 0.95: [0, 1.8, 0], catmullrom }
+    key pelvis.rotation { 0.0: [-14, 0, 0], 0.24: [-20, 0, 0], 0.48: [10, 0, 0], 0.72: [18, 0, 0], 0.95: [-14, 0, 0], catmullrom }
+    key waist.rotation { 0.0: [-8, 0, 0], 0.24: [-12, 0, 0], 0.48: [10, 0, 0], 0.72: [14, 0, 0], 0.95: [-8, 0, 0], catmullrom }
+    key chest.rotation { 0.0: [-10, 0, 0], 0.24: [10, 0, 0], 0.48: [18, 0, 0], 0.72: [-8, 0, 0], 0.95: [-10, 0, 0], catmullrom }
+    key head.rotation { 0.0: [12, 0, 0], 0.24: [-12, 0, 0], 0.48: [-16, 0, 0], 0.72: [8, 0, 0], 0.95: [12, 0, 0], catmullrom }
+    key fore_shoulder_l.rotation { 0.0: [-42, 0, 6], 0.28: [-18, 0, 0], 0.56: [36, 0, 0], 0.95: [-42, 0, 6], catmullrom }
+    key fore_arm_l.rotation { 0.0: [-18, 0, 0], 0.28: [12, 0, 0], 0.56: [28, 0, 0], 0.95: [-18, 0, 0], catmullrom }
+    key fore_shoulder_r.rotation { 0.0: [-30, 0, 6], 0.22: [-44, 0, 6], 0.52: [34, 0, 0], 0.95: [-30, 0, 6], catmullrom }
+    key fore_shoulder_r__fore_arm_l.rotation { 0.0: [-14, 0, 0], 0.22: [-20, 0, 0], 0.52: [28, 0, 0], 0.95: [-14, 0, 0], catmullrom }
+    key hind_thigh_l.rotation { 0.0: [36, 0, 0], 0.26: [42, 0, 0], 0.58: [-36, 0, 4], 0.95: [36, 0, 0], catmullrom }
+    key hind_thigh_r.rotation { 0.0: [28, 0, 0], 0.32: [40, 0, 0], 0.64: [-34, 0, 4], 0.95: [28, 0, 0], catmullrom }
+    key wing_shoulder_l.rotation { 0.0: [0, -10, 14], 0.48: [0, 8, -10], 0.95: [0, -10, 14], catmullrom }
+    key wing_shoulder_r.rotation { 0.0: [0, -10, 14], 0.48: [0, 8, -10], 0.95: [0, -10, 14], catmullrom }
+    track tail_2: wave(axis=x, amp_deg=20, freq_hz=1.0526, phase_deg=0)
+    track tail_5: wave(axis=x, amp_deg=28, freq_hz=1.0526, phase_deg=-90)
+  }
+
+  // 4. Eater of Elders Roar — rears upright on hindlegs, unfurls both 12-bone spiked wings wide, throws asymmetric horns high!
+  clip roar {
+    duration_s: 2.6, loop: false
+    key root.position { 0.0: [0, 0, 0], 0.45: [0, -3.0, -2.5], 1.05: [0, 9.5, -2.0], 1.85: [0, 8.5, -1.5], 2.6: [0, 0, 0], catmullrom }
+    key pelvis.rotation { 0.0: [0, 0, 0], 0.45: [14, 0, 0], 1.05: [-34, 0, 0], 1.85: [-30, 0, 0], 2.6: [0, 0, 0], catmullrom }
+    key waist.rotation { 0.0: [0, 0, 0], 0.45: [12, 0, 0], 1.05: [-22, 0, 0], 1.85: [-20, 0, 0], 2.6: [0, 0, 0], catmullrom }
+    key chest.rotation { 0.0: [0, 0, 0], 0.45: [18, 0, 0], 1.05: [-26, 0, 0], 1.45: [-24, 6, 0], 1.85: [-26, -6, 0], 2.6: [0, 0, 0], catmullrom }
+    key neck_1.rotation { 0.0: [0, 0, 0], 0.45: [16, 0, 0], 1.05: [-18, 0, 0], 1.85: [-18, 0, 0], 2.6: [0, 0, 0], catmullrom }
+    key head.rotation { 0.0: [0, 0, 0], 0.45: [18, 0, 0], 1.05: [-22, 0, 0], 1.45: [-20, 10, -8], 1.85: [-22, -10, 8], 2.6: [0, 0, 0], catmullrom }
+    key jaw.rotation { 0.0: [0, 0, 0], 0.45: [-6, 0, 0], 0.98: [46, 0, 0], 1.90: [44, 0, 0], 2.6: [0, 0, 0], catmullrom }
+    // Both 6-bone spiked bat wings unfurl dramatically wide & skyward!
+    key wing_shoulder_l.rotation { 0.0: [0, 0, 0], 1.05: [-8, -26, 22], 1.85: [-8, -24, 20], 2.6: [0, 0, 0], catmullrom }
+    key wing_forearm_l.rotation { 0.0: [0, 0, 0], 1.05: [0, 22, 12], 1.85: [0, 20, 10], 2.6: [0, 0, 0], catmullrom }
+    key wing_wrist_l.rotation { 0.0: [0, 0, 0], 1.05: [0, -24, 16], 1.85: [0, -22, 14], 2.6: [0, 0, 0], catmullrom }
+    key wing_shoulder_r.rotation { 0.0: [0, 0, 0], 1.05: [-8, -26, 22], 1.85: [-8, -24, 20], 2.6: [0, 0, 0], catmullrom }
+    key wing_shoulder_r__wing_forearm_l.rotation { 0.0: [0, 0, 0], 1.05: [0, 22, 12], 1.85: [0, 20, 10], 2.6: [0, 0, 0], catmullrom }
+    key wing_shoulder_r__wing_wrist_l.rotation { 0.0: [0, 0, 0], 1.05: [0, -24, 16], 1.85: [0, -22, 14], 2.6: [0, 0, 0], catmullrom }
+    key fore_shoulder_l.rotation { 0.0: [0, 0, 0], 1.05: [-38, 0, 28], 1.85: [-34, 0, 26], 2.6: [0, 0, 0], catmullrom }
+    key fore_shoulder_r.rotation { 0.0: [0, 0, 0], 1.05: [-38, 0, 28], 1.85: [-34, 0, 26], 2.6: [0, 0, 0], catmullrom }
+    key hind_thigh_l.rotation { 0.0: [0, 0, 0], 1.05: [28, 0, 8], 1.85: [26, 0, 8], 2.6: [0, 0, 0], catmullrom }
+    key hind_thigh_r.rotation { 0.0: [0, 0, 0], 1.05: [28, 0, 8], 1.85: [26, 0, 8], 2.6: [0, 0, 0], catmullrom }
+  }
+
+  // 5. SIGNATURE GIF CLIP: Ruiner Heaven-Shattering Extinction Metallic Divebomb!
+  clip extinction_metallic_divebomb {
+    duration_s: 2.3, loop: false
+    key root.position { 0.0: [0, 0, 0], 0.36: [0, -4.5, -3.5], 0.85: [0, 32.0, -4.0], 1.25: [0, 24.0, 6.0], 1.62: [0, -3.5, 22.0], 2.3: [0, 0, 0], catmullrom }
+    key pelvis.rotation { 0.0: [0, 0, 0], 0.36: [18, 0, 0], 0.85: [-28, 0, 0], 1.25: [42, -12, 16], 1.62: [22, 0, 0], 2.3: [0, 0, 0], catmullrom }
+    key waist.rotation { 0.0: [0, 0, 0], 0.36: [14, 0, 0], 0.85: [-18, 0, 0], 1.25: [22, 0, 0], 1.62: [14, 0, 0], 2.3: [0, 0, 0], catmullrom }
+    key chest.rotation { 0.0: [0, 0, 0], 0.36: [20, 0, 0], 0.85: [-24, 0, 0], 1.25: [28, -14, 18], 1.62: [24, 0, 0], 2.3: [0, 0, 0], catmullrom }
+    key head.rotation { 0.0: [0, 0, 0], 0.85: [-26, 0, 0], 1.25: [18, 8, -12], 1.62: [-14, 0, 0], 2.3: [0, 0, 0], catmullrom }
+    key jaw.rotation { 0.0: [0, 0, 0], 0.85: [44, 0, 0], 1.25: [36, 0, 0], 1.62: [12, 0, 0], 2.3: [0, 0, 0], catmullrom }
+    // Spreads spiked wings huge at apex (t=0.85), sweeps back like a meteor (t=1.25), explodes metallic spikes outward on impact (t=1.62)!
+    key wing_shoulder_l.rotation { 0.0: [0, 0, 0], 0.85: [-12, -32, 28], 1.25: [14, 34, -22], 1.62: [-10, -28, 24], 2.3: [0, 0, 0], catmullrom }
+    key wing_forearm_l.rotation { 0.0: [0, 0, 0], 0.85: [0, 26, 14], 1.25: [0, -22, -12], 1.62: [0, 24, 12], 2.3: [0, 0, 0], catmullrom }
+    key wing_wrist_l.rotation { 0.0: [0, 0, 0], 0.85: [0, -28, 18], 1.25: [0, 28, -14], 1.62: [0, -24, 16], 2.3: [0, 0, 0], catmullrom }
+    key wing_shoulder_r.rotation { 0.0: [0, 0, 0], 0.85: [-12, -32, 28], 1.25: [14, 34, -22], 1.62: [-10, -28, 24], 2.3: [0, 0, 0], catmullrom }
+    key wing_shoulder_r__wing_forearm_l.rotation { 0.0: [0, 0, 0], 0.85: [0, 26, 14], 1.25: [0, -22, -12], 1.62: [0, 24, 12], 2.3: [0, 0, 0], catmullrom }
+    key wing_shoulder_r__wing_wrist_l.rotation { 0.0: [0, 0, 0], 0.85: [0, -28, 18], 1.25: [0, 28, -14], 1.62: [0, -24, 16], 2.3: [0, 0, 0], catmullrom }
+    key fore_shoulder_l.rotation { 0.0: [0, 0, 0], 0.85: [-62, 0, 32], 1.25: [-54, 0, 18], 1.62: [24, 0, 28], 2.3: [0, 0, 0], catmullrom }
+    key fore_shoulder_r.rotation { 0.0: [0, 0, 0], 0.85: [-62, 0, 32], 1.25: [-68, 0, 24], 1.62: [26, 0, 28], 2.3: [0, 0, 0], catmullrom }
+    key hind_thigh_l.rotation { 0.0: [0, 0, 0], 0.85: [42, 0, 16], 1.25: [36, 0, 12], 1.62: [-18, 0, 8], 2.3: [0, 0, 0], catmullrom }
+    key hind_thigh_r.rotation { 0.0: [0, 0, 0], 0.85: [42, 0, 16], 1.25: [36, 0, 12], 1.62: [-18, 0, 8], 2.3: [0, 0, 0], catmullrom }
+  }
+
+  // 6. Ruiner Right-Arm Iron-Spike Shrapnel Ground Slam!
+  clip iron_spike_shrapnel_slam {
+    duration_s: 1.9, loop: false
+    key root.position { 0.0: [0, 0, 0], 0.55: [2.5, 8.5, -1.0], 0.92: [-2.0, -3.5, 10.5], 1.30: [-1.5, -2.5, 10.0], 1.9: [0, 0, 0], catmullrom }
+    key pelvis.rotation { 0.0: [0, 0, 0], 0.55: [-28, 18, -10], 0.92: [20, -20, 8], 1.9: [0, 0, 0], catmullrom }
+    key chest.rotation { 0.0: [0, 0, 0], 0.55: [-34, 28, -18], 0.92: [26, -28, 16], 1.9: [0, 0, 0], catmullrom }
+    key jaw.rotation { 0.0: [0, 0, 0], 0.55: [38, 0, 0], 0.92: [14, 0, 0], 1.9: [0, 0, 0], catmullrom }
+    key fore_shoulder_r.rotation { 0.0: [0, 0, 0], 0.55: [-82, -20, 34], 0.92: [24, 10, -12], 1.30: [20, 8, -10], 1.9: [0, 0, 0], catmullrom }
+    key fore_shoulder_r__fore_arm_l.rotation { 0.0: [0, 0, 0], 0.55: [-32, 0, 0], 0.92: [28, 0, 0], 1.9: [0, 0, 0], catmullrom }
+    key fore_shoulder_l.rotation { 0.0: [0, 0, 0], 0.55: [22, 0, 14], 0.92: [-14, 0, 18], 1.9: [0, 0, 0], catmullrom }
+    key wing_shoulder_r.rotation { 0.0: [0, 0, 0], 0.55: [-10, -24, 24], 0.92: [12, 20, -14], 1.9: [0, 0, 0], catmullrom }
+  }
+
+  // 7. Asymmetric Scarred Gunmetal-Iron Horn Bulldozer Uppercut Gore!
+  clip bulldog_horn_uppercut_gore {
+    duration_s: 1.7, loop: false
+    key root.position { 0.0: [0, 0, 0], 0.42: [0, -4.0, -4.0], 0.85: [0, -2.5, 14.0], 1.18: [0, 6.5, 18.0], 1.7: [0, 0, 0], catmullrom }
+    key pelvis.rotation { 0.0: [0, 0, 0], 0.42: [18, -10, 0], 0.85: [14, 12, 0], 1.18: [-22, 0, 0], 1.7: [0, 0, 0], catmullrom }
+    key chest.rotation { 0.0: [0, 0, 0], 0.42: [24, -18, 8], 0.85: [22, 18, -10], 1.18: [-28, -8, 6], 1.7: [0, 0, 0], catmullrom }
+    key neck_1.rotation { 0.0: [0, 0, 0], 0.42: [24, -16, 0], 0.85: [28, 16, -12], 1.18: [-36, -10, 8], 1.7: [0, 0, 0], catmullrom }
+    key head.rotation { 0.0: [0, 0, 0], 0.42: [26, -14, 16], 0.85: [28, 18, -24], 1.18: [-38, -14, 16], 1.7: [0, 0, 0], catmullrom }
+    key jaw.rotation { 0.0: [0, 0, 0], 0.85: [36, 0, 0], 1.18: [44, 0, 0], 1.7: [0, 0, 0], catmullrom }
+  }
+
+  // 8. Spiked Wing-Mantle Ground Drag & Crushing Cleave
+  clip wing_mantle_shield_grind {
+    duration_s: 1.9, loop: false
+    key root.position { 0.0: [0, 0, 0], 0.50: [-3.5, -2.5, -2.0], 1.05: [4.5, 2.0, 12.0], 1.9: [0, 0, 0], catmullrom }
+    key pelvis.rotation { 0.0: [0, 0, 0], 0.50: [10, 26, -8], 1.05: [-8, -34, 10], 1.9: [0, 0, 0], catmullrom }
+    key chest.rotation { 0.0: [0, 0, 0], 0.50: [16, 34, -16], 1.05: [-12, -38, 16], 1.9: [0, 0, 0], catmullrom }
+    key wing_shoulder_r.rotation { 0.0: [0, 0, 0], 0.50: [18, -32, -38], 1.05: [-16, -42, 24], 1.9: [0, 0, 0], catmullrom }
+    key wing_shoulder_r__wing_forearm_l.rotation { 0.0: [0, 0, 0], 0.50: [0, 28, -18], 1.05: [0, 24, 16], 1.9: [0, 0, 0], catmullrom }
+    key wing_shoulder_r__wing_wrist_l.rotation { 0.0: [0, 0, 0], 0.50: [0, -24, -10], 1.05: [0, -28, 18], 1.9: [0, 0, 0], catmullrom }
+  }
+
+  // 9. Explosive Airborne 360-Degree Spiked Wing & Tail Lariat!
+  clip spinning_spike_lariat {
+    duration_s: 1.8, loop: false
+    key root.position { 0.0: [0, 0, 0], 0.35: [-2.0, -3.0, -2.0], 0.85: [2.0, 11.0, 8.0], 1.30: [0, -2.0, 10.0], 1.8: [0, 0, 0], catmullrom }
+    key pelvis.rotation { 0.0: [0, 0, 0], 0.35: [12, -52, -8], 0.85: [-10, 96, 14], 1.30: [10, 38, 0], 1.8: [0, 0, 0], catmullrom }
+    key waist.rotation { 0.0: [0, 0, 0], 0.35: [0, -26, 0], 0.85: [0, 42, 0], 1.8: [0, 0, 0], catmullrom }
+    key chest.rotation { 0.0: [0, 0, 0], 0.35: [10, -28, 0], 0.85: [-8, 44, -12], 1.8: [0, 0, 0], catmullrom }
+    key wing_shoulder_l.rotation { 0.0: [0, 0, 0], 0.85: [-8, -28, 18], 1.8: [0, 0, 0], catmullrom }
+    key wing_shoulder_r.rotation { 0.0: [0, 0, 0], 0.85: [-8, -28, 18], 1.8: [0, 0, 0], catmullrom }
+    key tail_1.rotation { 0.0: [0, 0, 0], 0.35: [-10, -34, 0], 0.85: [-14, 46, 0], 1.8: [0, 0, 0], catmullrom }
+    key tail_3.rotation { 0.0: [0, 0, 0], 0.35: [-8, -32, 0], 0.85: [-12, 44, 0], 1.8: [0, 0, 0], catmullrom }
+    key tail_5.rotation { 0.0: [0, 0, 0], 0.35: [-6, -28, 0], 0.85: [-8, 38, 0], 1.8: [0, 0, 0], catmullrom }
+  }
+
+  // 10. Overhead Two-Handed Gorilla Double-Fist Earth Quake!
+  clip gorilla_double_fist_quake {
+    duration_s: 2.0, loop: false
+    key root.position { 0.0: [0, 0, 0], 0.62: [0, 12.5, -2.0], 1.02: [0, -4.0, 12.0], 1.40: [0, -2.5, 11.5], 2.0: [0, 0, 0], catmullrom }
+    key pelvis.rotation { 0.0: [0, 0, 0], 0.62: [-42, 0, 0], 1.02: [24, 0, 0], 2.0: [0, 0, 0], catmullrom }
+    key waist.rotation { 0.0: [0, 0, 0], 0.62: [-24, 0, 0], 1.02: [18, 0, 0], 2.0: [0, 0, 0], catmullrom }
+    key chest.rotation { 0.0: [0, 0, 0], 0.62: [-32, 0, 0], 1.02: [30, 0, 0], 2.0: [0, 0, 0], catmullrom }
+    key head.rotation { 0.0: [0, 0, 0], 0.62: [-18, 0, 0], 1.02: [20, 0, 0], 2.0: [0, 0, 0], catmullrom }
+    key jaw.rotation { 0.0: [0, 0, 0], 0.62: [44, 0, 0], 1.02: [16, 0, 0], 2.0: [0, 0, 0], catmullrom }
+    key fore_shoulder_l.rotation { 0.0: [0, 0, 0], 0.62: [-86, 0, 26], 1.02: [26, 0, -8], 2.0: [0, 0, 0], catmullrom }
+    key fore_arm_l.rotation { 0.0: [0, 0, 0], 0.62: [-28, 0, 0], 1.02: [28, 0, 0], 2.0: [0, 0, 0], catmullrom }
+    key fore_shoulder_r.rotation { 0.0: [0, 0, 0], 0.62: [-86, 0, 26], 1.02: [26, 0, -8], 2.0: [0, 0, 0], catmullrom }
+    key fore_shoulder_r__fore_arm_l.rotation { 0.0: [0, 0, 0], 0.62: [-28, 0, 0], 1.02: [28, 0, 0], 2.0: [0, 0, 0], catmullrom }
+    key wing_shoulder_l.rotation { 0.0: [0, 0, 0], 0.62: [-10, -22, 24], 1.02: [10, 18, -16], 2.0: [0, 0, 0], catmullrom }
+    key wing_shoulder_r.rotation { 0.0: [0, 0, 0], 0.62: [-10, -22, 24], 1.02: [10, 18, -16], 2.0: [0, 0, 0], catmullrom }
+  }
+
+  // 11. Regenerative Gunmetal-Iron Spike Shudder & Outward Flare
+  clip regenerative_spike_hardening {
+    duration_s: 2.2, loop: false
+    key root.position { 0.0: [0, 0, 0], 0.55: [0, -3.5, 0], 0.85: [0, -3.2, 0], 1.25: [0, 3.5, 0], 1.70: [0, 2.5, 0], 2.2: [0, 0, 0], catmullrom }
+    key chest.rotation { 0.0: [0, 0, 0], 0.55: [22, -6, 0], 0.70: [22, 6, 0], 0.85: [22, -6, 0], 1.25: [-24, 0, 0], 2.2: [0, 0, 0], catmullrom }
+    key head.rotation { 0.0: [0, 0, 0], 0.55: [20, 0, 0], 1.25: [-28, 0, 0], 2.2: [0, 0, 0], catmullrom }
+    key jaw.rotation { 0.0: [0, 0, 0], 1.25: [42, 0, 0], 1.75: [38, 0, 0], 2.2: [0, 0, 0], catmullrom }
+    key wing_shoulder_l.rotation { 0.0: [0, 0, 0], 0.55: [12, 24, -26], 1.25: [-10, -28, 28], 1.70: [-8, -24, 24], 2.2: [0, 0, 0], catmullrom }
+    key wing_shoulder_r.rotation { 0.0: [0, 0, 0], 0.55: [12, 24, -26], 1.25: [-10, -28, 28], 1.70: [-8, -24, 24], 2.2: [0, 0, 0], catmullrom }
+    key fore_shoulder_l.rotation { 0.0: [0, 0, 0], 0.55: [24, 0, -6], 1.25: [-20, 0, 32], 2.2: [0, 0, 0], catmullrom }
+    key fore_shoulder_r.rotation { 0.0: [0, 0, 0], 0.55: [24, 0, -6], 1.25: [-20, 0, 32], 2.2: [0, 0, 0], catmullrom }
+  }
+
+  // 12. Overhead Spiked Mace-Tail Crush & Cleave
+  clip elder_breaker_tail_crush {
+    duration_s: 1.9, loop: false
+    key root.position { 0.0: [0, 0, 0], 0.45: [0, 4.5, 4.0], 0.95: [0, -2.5, -4.0], 1.9: [0, 0, 0], catmullrom }
+    key pelvis.rotation { 0.0: [0, 0, 0], 0.45: [28, 0, 0], 0.95: [-24, 28, 0], 1.9: [0, 0, 0], catmullrom }
+    key chest.rotation { 0.0: [0, 0, 0], 0.45: [18, 0, 0], 0.95: [-14, -18, 0], 1.9: [0, 0, 0], catmullrom }
+    key tail_1.rotation { 0.0: [0, 0, 0], 0.45: [36, 0, 0], 0.95: [-38, 24, 0], 1.35: [-24, -18, 0], 1.9: [0, 0, 0], catmullrom }
+    key tail_2.rotation { 0.0: [0, 0, 0], 0.45: [32, 0, 0], 0.95: [-34, 22, 0], 1.35: [-20, -16, 0], 1.9: [0, 0, 0], catmullrom }
+    key tail_3.rotation { 0.0: [0, 0, 0], 0.45: [28, 0, 0], 0.95: [-30, 20, 0], 1.35: [-18, -14, 0], 1.9: [0, 0, 0], catmullrom }
+    key tail_4.rotation { 0.0: [0, 0, 0], 0.45: [24, 0, 0], 0.95: [-28, 18, 0], 1.35: [-16, -12, 0], 1.9: [0, 0, 0], catmullrom }
+    key tail_5.rotation { 0.0: [0, 0, 0], 0.45: [20, 0, 0], 0.95: [-24, 16, 0], 1.35: [-12, -10, 0], 1.9: [0, 0, 0], catmullrom }
+  }
+}
+@controller {
+  initial: idle
+  idle -> walk when speed > 0.15, blend 0.22
+  walk -> run when speed > 0.55, blend 0.18
+  run -> walk when speed <= 0.45, blend 0.24
+  walk -> idle when speed <= 0.08, blend 0.25
+  idle -> roar when enraged > 0.5, blend 0.16
+  roar -> idle when enraged <= 0.5, blend 0.25
+}

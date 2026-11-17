@@ -263,11 +263,12 @@ class ExportTests(unittest.TestCase):
 
     def test_exported_keyframes_preserve_exact_so3_matrix_composition_and_joint_limits_on_rotated_bones(self):
         import math
+        from dataclasses import replace
         from synccraft.backends import bedrock_rotation_matrix, export_bedrock
-        from synccraft.dsl.ast_nodes import BehaviorDecl, ClipDecl, TrackDecl
+        from synccraft.dsl.ast_nodes import BehaviorDecl, ClipDecl, DSLValidationError, TrackDecl
         from synccraft.kinematics.musculoskeletal import evaluate_behavior_clip
 
-        prog = Program(
+        over_limit_prog = Program(
             Meta("entity", "bedrock_entity", 16),
             [Palette("mat", (0.6, 0.1, 30.0), 4)],
             Bone(
@@ -286,6 +287,16 @@ class ExportTests(unittest.TestCase):
             ),
             behavior=BehaviorDecl(
                 clips=(ClipDecl("sway", 1.0, True, tracks=(TrackDecl("arm_l", "wave", "z", 20.0, 1.0),)),)
+            ),
+        )
+        # ADR 0011 Gate A Fix #1: tracks exceeding finite joint_limits fail explicitly instead of silently clamping
+        with self.assertRaises(DSLValidationError):
+            compile_geometry(over_limit_prog)
+
+        prog = replace(
+            over_limit_prog,
+            behavior=BehaviorDecl(
+                clips=(ClipDecl("sway", 1.0, True, tracks=(TrackDecl("arm_l", "wave", "z", 8.0, 1.0),)),)
             ),
         )
         compiled = compile_geometry(prog)

@@ -1,0 +1,1024 @@
+// Stygian Zinogre (Hellwolf Fanged Wyvern) — Stage 3 Sculpted Blockbench Masterwork (V9)
+// Hand-authored progressive Block-DSL v4.1 modeled from Sketchfab sculpted Stygian Zinogre anchor
+// & Capcom Monster Hunter World: Iceborne references: low predatory Hellwolf crouch, sharper upward-hooked
+// dark-silver dragon horns, volcanic obsidian-garnet carapace cracked with crimson Dracophage veins,
+// stark silver-alabaster shock-fur cowl & forearm ruffs, crimson-charged talons, & barbed Dracophage tail club.
+@meta {
+  dsl_version: "4.1",
+  archetype: entity,
+  target_profile: bbmodel_5,
+  texel_density: 32,
+  size_step: 0.5,
+  audit_profile: sculpted
+}
+@layout {
+  budget max_boxes = 420
+  budget max_bones = 96
+  envelope grounded = true
+  envelope ground_y = 0.0
+  envelope ground_tol = 0.25
+}
+@palette {
+  obsidian_hide: ramp(base_lch=[0.28, 0.058, 285], steps=6, hue_shift=[24, -18])
+  volcanic_armor: ramp(base_lch=[0.35, 0.072, 18], steps=6, hue_shift=[26, -16])
+  stygian_slate: ramp(base_lch=[0.46, 0.068, 268], steps=6, hue_shift=[22, -16])
+  dark_silver: ramp(base_lch=[0.66, 0.052, 255], steps=6, hue_shift=[22, -14])
+  ash_charcoal: ramp(base_lch=[0.24, 0.052, 12], steps=6, hue_shift=[20, -14])
+  alabaster_fur: ramp(base_lch=[0.90, 0.032, 250], steps=6, hue_shift=[22, -14])
+  ash_belly: ramp(base_lch=[0.33, 0.068, 16], steps=6, hue_shift=[22, -14])
+  crimson_talon: ramp(base_lch=[0.56, 0.195, 24], steps=6, hue_shift=[18, -14])
+  maw_scarlet: ramp(base_lch=[0.42, 0.165, 20], steps=6, hue_shift=[16, -12])
+  ivory_fang: ramp(base_lch=[0.89, 0.038, 84], steps=6, hue_shift=[18, -10])
+  draco_crimson: ramp(base_lch=[0.68, 0.235, 22], steps=6, hue_shift=[16, -14], emissive=true)
+}
+@rig {
+  root bone root {
+    pivot_local: [0, 0, 0]
+    locator ground_origin { offset: [0, 0, 0] }
+
+    bone pelvis joint(parent=ground_origin, at=[0, 20.36, -14.0]) {
+      rest_euler: [10, 0, 0]
+      box pelvis_core { size: [13.0, 10.5, 13.5], material: obsidian_hide }
+      box pelvis_belly place(base_box=pelvis_core, anchor=[0, -0.96, 0], align=[0, 0.40, 0]) {
+        size: [9.5, 2.0, 11.0], material: ash_belly
+      }
+      box sacrum_volcanic_plate place(base_box=pelvis_core, anchor=[0, 0.98, -0.08], align=[0, -0.58, 0]) {
+        size: [8.0, 2.5, 10.5], material: volcanic_armor, rotate: [6, 0, 0], blend_with: [lumbar_volcanic_plate, tail_1_seg, tail_1_plate]
+      }
+      box sacrum_draco_spire_1 place(base_box=sacrum_volcanic_plate, anchor=[0, 0.96, 0.36], align=[0, -0.76, 0]) {
+        size: [2.5, 3.0, 3.5], material: dark_silver, rotate: [18, 0, 0], blend_with: [pelvis_core, lumbar_volcanic_plate]
+      }
+      box sacrum_draco_spire_2 place(base_box=sacrum_volcanic_plate, anchor=[0, 0.96, -0.38], align=[0, -0.76, 0]) {
+        size: [2.5, 3.0, 3.5], material: dark_silver, rotate: [20, 0, 0], blend_with: [pelvis_core, tail_1_plate]
+      }
+      box haunch_armor_l place(base_box=pelvis_core, anchor=[0.98, 0.22, -0.05], align=[-0.52, 0, 0]) {
+        size: [3.5, 7.5, 10.0], material: volcanic_armor, rotate: [5, 8, -14], blend_with: [thigh_mass, waist_core]
+      }
+      box haunch_armor_r place(base_box=pelvis_core, anchor=[-0.98, 0.22, -0.05], align=[0.52, 0, 0]) {
+        size: [3.5, 7.5, 10.0], material: volcanic_armor, rotate: [5, -8, 14], blend_with: [hind_thigh_r__thigh_mass, waist_core]
+      }
+      box hip_draco_spur_l place(base_box=haunch_armor_l, anchor=[0.92, 0.44, -0.36], align=[-0.68, 0, 0.38]) {
+        size: [2.0, 2.5, 6.0], material: dark_silver, rotate: [16, 26, -14], blend_with: [pelvis_core, thigh_mass, thigh_volcanic_plate]
+      }
+      box hip_draco_spur_r place(base_box=haunch_armor_r, anchor=[-0.92, 0.44, -0.36], align=[0.68, 0, 0.38]) {
+        size: [2.0, 2.5, 6.0], material: dark_silver, rotate: [16, -26, 14], blend_with: [pelvis_core, hind_thigh_r__thigh_mass, hind_thigh_r__thigh_volcanic_plate]
+      }
+
+      bone waist attach(parent_box=pelvis_core, anchor=[0, 0.12, 1], align=[0, 0, -1], seat=0.28) {
+        rest_euler: [-7, 0, 0]
+        box waist_core { size: [15.0, 12.5, 12.5], material: obsidian_hide }
+        box waist_belly place(base_box=waist_core, anchor=[0, -0.96, 0], align=[0, 0.40, 0]) {
+          size: [11.0, 2.0, 10.5], material: ash_belly, blend_with: [pelvis_belly, thigh_mass, hind_thigh_r__thigh_mass]
+        }
+        box lumbar_volcanic_plate place(base_box=waist_core, anchor=[0, 0.96, 0], align=[0, -0.55, 0]) {
+          size: [9.0, 2.5, 10.5], material: volcanic_armor, rotate: [-6, 0, 0], blend_with: [pelvis_core, chest_core]
+        }
+        box lumbar_draco_spire_1 place(base_box=lumbar_volcanic_plate, anchor=[0, 0.96, 0.34], align=[0, -0.78, 0]) {
+          size: [3.0, 3.5, 3.5], material: dark_silver, rotate: [20, 0, 0], blend_with: [waist_core, chest_core, stygian_mantle_c]
+        }
+        box lumbar_draco_spire_2 place(base_box=lumbar_volcanic_plate, anchor=[0, 0.96, -0.36], align=[0, -0.78, 0]) {
+          size: [2.5, 3.0, 3.5], material: dark_silver, rotate: [22, 0, 0], blend_with: [waist_core, pelvis_core, sacrum_volcanic_plate]
+        }
+        box lumbar_crimson_core place(base_box=lumbar_volcanic_plate, anchor=[0, 0.98, 0], align=[0, -0.88, 0]) {
+          size: [2.0, 2.0, 2.5], material: draco_crimson, rotate: [12, 0, 0], blend_with: [waist_core, lumbar_draco_spire_1, lumbar_draco_spire_2]
+        }
+        box flank_draco_shingle_l place(base_box=waist_core, anchor=[0.98, 0.34, 0.24], align=[-0.66, 0, 0]) {
+          size: [2.5, 5.0, 5.5], material: volcanic_armor, rotate: [8, 14, -14], blend_with: [chest_core]
+        }
+        box flank_draco_shingle_r place(base_box=waist_core, anchor=[-0.98, 0.34, 0.24], align=[0.66, 0, 0]) {
+          size: [2.5, 5.0, 5.5], material: volcanic_armor, rotate: [8, -14, 14], blend_with: [chest_core]
+        }
+        box flank_lower_shingle_l place(base_box=waist_core, anchor=[0.98, -0.12, -0.22], align=[-0.68, 0, 0]) {
+          size: [2.0, 4.5, 5.5], material: stygian_slate, rotate: [6, 16, -10], blend_with: [flank_draco_shingle_l, pelvis_core, haunch_armor_l, thigh_mass]
+        }
+        box flank_lower_shingle_r place(base_box=waist_core, anchor=[-0.98, -0.12, -0.22], align=[0.68, 0, 0]) {
+          size: [2.0, 4.5, 5.5], material: stygian_slate, rotate: [6, -16, 10], blend_with: [flank_draco_shingle_r, pelvis_core, haunch_armor_r, hind_thigh_r__thigh_mass]
+        }
+        plane waist_fur_plume_l place(base_box=waist_core, anchor=[1.0, 0.66, -0.10], align=[-1.0, -0.5, 0]) {
+          size: [5.0, 8.5], normal: x, material: alabaster_fur, rotate: [8, 14, -24],
+          edge: spikes(width=4, min_len=3, max_len=7, side=top, seed=11), layer: 1,
+          blend_with: [lumbar_volcanic_plate, flank_draco_shingle_l, chest_core, pelvis_core]
+        }
+        plane waist_fur_plume_r place(base_box=waist_core, anchor=[-1.0, 0.66, -0.10], align=[1.0, -0.5, 0]) {
+          size: [5.0, 8.5], normal: x, material: alabaster_fur, rotate: [8, -14, 24],
+          edge: spikes(width=4, min_len=3, max_len=7, side=top, seed=11), layer: 1,
+          blend_with: [lumbar_volcanic_plate, flank_draco_shingle_r, chest_core, pelvis_core]
+        }
+
+        bone chest attach(parent_box=waist_core, anchor=[0, 0.18, 1], align=[0, 0, -1], seat=0.28) {
+          rest_euler: [-9, 0, 0]
+          box chest_core { size: [20.5, 16.5, 16.5], material: obsidian_hide }
+          // Stark silver-alabaster Hellwolf shoulder mantle wedges
+          box stygian_mantle_c place(base_box=chest_core, anchor=[0, 0.98, 0.12], align=[0, -0.58, 0]) {
+            size: [13.0, 4.5, 14.0], material: alabaster_fur, rotate: [-12, 0, 0], blend_with: [neck_base, lumbar_volcanic_plate, lumbar_draco_spire_1]
+          }
+          box stygian_mantle_l place(base_box=chest_core, anchor=[0.70, 0.88, 0.08], align=[-0.15, -0.58, 0]) {
+            size: [6.0, 4.5, 13.0], material: alabaster_fur, rotate: [-10, -14, -24], blend_with: [stygian_mantle_c, neck_base]
+          }
+          box stygian_mantle_r place(base_box=chest_core, anchor=[-0.70, 0.88, 0.08], align=[0.15, -0.58, 0]) {
+            size: [6.0, 4.5, 13.0], material: alabaster_fur, rotate: [-10, 14, 24], blend_with: [stygian_mantle_c, neck_base]
+          }
+          // Glowing crimson Dracophage conduit nestled between shoulder pylons
+          box dorsal_draco_conduit place(base_box=stygian_mantle_c, anchor=[0, 0.98, -0.18], align=[0, -0.78, 0]) {
+            size: [3.5, 3.0, 8.5], material: draco_crimson, rotate: [6, 0, 0], blend_with: [chest_core, pylon_obsidian_front, draco_pylon_r__pylon_obsidian_front]
+          }
+          // Spiky silver-alabaster shock-fur plane crests & crimson Dracophage lightning arcs!
+          plane mantle_fur_crest_c place(base_box=stygian_mantle_c, anchor=[0, 0.92, 0.46], align=[0, -0.80, 0]) {
+            size: [11.5, 6.5], normal: z, material: alabaster_fur, rotate: [18, 0, 0],
+            edge: spikes(width=4, min_len=4, max_len=9, side=top, seed=19), layer: 1,
+            blend_with: [dorsal_draco_conduit, pylon_obsidian_front, draco_pylon_r__pylon_obsidian_front, neck_base, neck_collar_blade_c]
+          }
+          plane mantle_fur_crest_rear place(base_box=stygian_mantle_c, anchor=[0, 0.90, -0.78], align=[0, -0.80, 0]) {
+            size: [10.0, 6.0], normal: z, material: alabaster_fur, rotate: [26, 0, 0],
+            edge: spikes(width=4, min_len=4, max_len=9, side=top, seed=23), layer: 2,
+            blend_with: [dorsal_draco_conduit, pylon_volcanic_rear, draco_pylon_r__pylon_volcanic_rear, waist_core, lumbar_volcanic_plate, lumbar_draco_spire_1]
+          }
+          plane mantle_fur_plume_l place(base_box=stygian_mantle_l, anchor=[0.85, 1.0, -0.10], align=[0, -1.0, 0]) {
+            size: [6.0, 10.5], normal: x, material: alabaster_fur, rotate: [10, -14, -28],
+            edge: spikes(width=4, min_len=4, max_len=9, side=top, seed=29), layer: 2,
+            blend_with: [stygian_mantle_c, chest_core, pylon_obsidian_front, pylon_silver_outer, pylon_volcanic_rear]
+          }
+          plane mantle_fur_plume_r place(base_box=stygian_mantle_r, anchor=[-0.85, 1.0, -0.10], align=[0, -1.0, 0]) {
+            size: [6.0, 10.5], normal: x, material: alabaster_fur, rotate: [10, 14, 28],
+            edge: spikes(width=4, min_len=4, max_len=9, side=top, seed=29), layer: 2,
+            blend_with: [stygian_mantle_c, chest_core, draco_pylon_r__pylon_obsidian_front, draco_pylon_r__pylon_silver_outer, draco_pylon_r__pylon_volcanic_rear]
+          }
+          plane draco_lightning_arc_l place(base_box=dorsal_draco_conduit, anchor=[0.88, 0.92, -0.10], align=[0, -0.88, 0]) {
+            size: [5.5, 8.0], normal: x, material: draco_crimson, rotate: [14, -10, -18],
+            edge: spikes(width=4, min_len=4, max_len=9, side=top, seed=31), layer: 1,
+            blend_with: [stygian_mantle_c, pylon_obsidian_front, pylon_volcanic_rear]
+          }
+          plane draco_lightning_arc_r place(base_box=dorsal_draco_conduit, anchor=[-0.88, 0.92, -0.10], align=[0, -0.88, 0]) {
+            size: [5.5, 8.0], normal: x, material: draco_crimson, rotate: [14, 10, 18],
+            edge: spikes(width=4, min_len=4, max_len=9, side=top, seed=31), layer: 2,
+            blend_with: [stygian_mantle_c, draco_pylon_r__pylon_obsidian_front, draco_pylon_r__pylon_volcanic_rear, draco_lightning_arc_l]
+          }
+
+          // Ribcage volcanic-garnet & dark-silver carapace flank shingles
+          box rib_volcanic_shingle_l_1 place(base_box=chest_core, anchor=[0.99, 0.26, -0.22], align=[-0.72, 0, 0]) {
+            size: [2.5, 5.5, 6.0], material: volcanic_armor, rotate: [8, 14, -10], blend_with: [stygian_mantle_l, fore_bicep, flank_draco_shingle_l, waist_core]
+          }
+          box rib_volcanic_shingle_r_1 place(base_box=chest_core, anchor=[-0.99, 0.26, -0.22], align=[0.72, 0, 0]) {
+            size: [2.5, 5.5, 6.0], material: volcanic_armor, rotate: [8, -14, 10], blend_with: [stygian_mantle_r, fore_shoulder_r__fore_bicep, flank_draco_shingle_r, waist_core]
+          }
+          box rib_volcanic_shingle_l_2 place(base_box=chest_core, anchor=[0.99, -0.24, -0.34], align=[-0.72, 0, 0]) {
+            size: [2.0, 5.0, 6.0], material: stygian_slate, rotate: [6, 16, -8], blend_with: [rib_volcanic_shingle_l_1, fore_bicep, fore_bracer, flank_draco_shingle_l, flank_lower_shingle_l, waist_core]
+          }
+          box rib_volcanic_shingle_r_2 place(base_box=chest_core, anchor=[-0.99, -0.24, -0.34], align=[0.72, 0, 0]) {
+            size: [2.0, 5.0, 6.0], material: stygian_slate, rotate: [6, -16, 8], blend_with: [rib_volcanic_shingle_r_1, fore_shoulder_r__fore_bicep, fore_shoulder_r__fore_bracer, flank_draco_shingle_r, flank_lower_shingle_r, waist_core]
+          }
+          box rib_silver_stud_l_1 place(base_box=rib_volcanic_shingle_l_1, anchor=[0.96, 0.20, 0], align=[-0.78, 0, 0]) {
+            size: [1.5, 2.0, 3.5], material: dark_silver, rotate: [12, 18, -16], blend_with: [chest_core, fore_bicep]
+          }
+          box rib_silver_stud_r_1 place(base_box=rib_volcanic_shingle_r_1, anchor=[-0.96, 0.20, 0], align=[0.78, 0, 0]) {
+            size: [1.5, 2.0, 3.5], material: dark_silver, rotate: [12, -18, 16], blend_with: [chest_core, fore_shoulder_r__fore_bicep]
+          }
+          box rib_silver_stud_l_2 place(base_box=rib_volcanic_shingle_l_2, anchor=[0.96, 0.15, -0.15], align=[-0.78, 0, 0]) {
+            size: [1.5, 2.0, 3.5], material: dark_silver, rotate: [12, 18, -14], blend_with: [chest_core, waist_core, fore_bicep]
+          }
+          box rib_silver_stud_r_2 place(base_box=rib_volcanic_shingle_r_2, anchor=[-0.96, 0.15, -0.15], align=[0.78, 0, 0]) {
+            size: [1.5, 2.0, 3.5], material: dark_silver, rotate: [12, -18, 14], blend_with: [chest_core, waist_core, fore_shoulder_r__fore_bicep]
+          }
+
+          // Ribbed volcanic-obsidian & crimson-fissured sternum armor (Sketchfab Stygian signature!)
+          box chest_scute_rear place(base_box=chest_core, anchor=[0, -0.96, -0.34], align=[0, 0.40, 0]) {
+            size: [13.5, 2.5, 8.5], material: ash_belly, rotate: [4, 0, 0], blend_with: [waist_belly]
+          }
+          box chest_scute_front place(base_box=chest_core, anchor=[0, -0.96, 0.56], align=[0, 0.48, -0.25]) {
+            size: [12.0, 2.5, 8.0], material: volcanic_armor, rotate: [-18, 0, 0], blend_with: [chest_scute_rear, fore_bracer, fore_shoulder_r__fore_bracer]
+          }
+          box sternum_draco_keel place(base_box=chest_scute_front, anchor=[0, -0.95, 0.25], align=[0, 0.72, 0]) {
+            size: [5.0, 2.5, 6.0], material: alabaster_fur, rotate: [-12, 0, 0], blend_with: [chest_core, neck_throat_shield, fore_bicep, fore_shoulder_r__fore_bicep]
+          }
+          box sternum_fissure_l place(base_box=chest_scute_front, anchor=[0.65, -0.88, 0.18], align=[-0.35, 0.78, 0]) {
+            size: [2.5, 1.5, 4.5], material: crimson_talon, rotate: [-16, -12, -8], blend_with: [chest_core, sternum_draco_keel, fore_bicep]
+          }
+          box sternum_fissure_r place(base_box=chest_scute_front, anchor=[-0.65, -0.88, 0.18], align=[0.35, 0.78, 0]) {
+            size: [2.5, 1.5, 4.5], material: crimson_talon, rotate: [-16, 12, 8], blend_with: [chest_core, sternum_draco_keel, fore_shoulder_r__fore_bicep]
+          }
+          plane chest_ruff_plane_l place(base_box=chest_core, anchor=[0.66, -0.82, 0.92], align=[0, 0.65, -0.85]) {
+            size: [6.5, 5.0], normal: z, material: alabaster_fur, rotate: [-24, -18, -12],
+            edge: spikes(width=4, min_len=3, max_len=7, side=bottom, seed=37), layer: 1,
+            blend_with: [chest_scute_front, sternum_draco_keel, neck_throat_shield, fore_bicep]
+          }
+          plane chest_ruff_plane_r place(base_box=chest_core, anchor=[-0.66, -0.82, 0.92], align=[0, 0.65, -0.85]) {
+            size: [6.5, 5.0], normal: z, material: alabaster_fur, rotate: [-24, 18, 12],
+            edge: spikes(width=4, min_len=3, max_len=7, side=bottom, seed=37), layer: 1,
+            blend_with: [chest_scute_front, sternum_draco_keel, neck_throat_shield, fore_shoulder_r__fore_bicep]
+          }
+
+          // Wide Jagged Volcanic & Dark-Silver Dracophage Shoulder Pylons
+          bone draco_pylon_l attach(parent_box=chest_core, anchor=[0.58, 1.0, -0.16], align=[0, -0.92, 0]) mirror_x(draco_pylon_r) {
+            rest_euler: [22, -16, -22]
+            box pylon_obsidian_front { size: [3.5, 11.5, 5.0], material: volcanic_armor, blend_with: [stygian_mantle_c, stygian_mantle_l, neck_base, neck_collar_blade_l] }
+            box pylon_silver_outer place(base_box=pylon_obsidian_front, anchor=[0.96, 0.14, -0.18], align=[-0.58, 0, 0]) {
+              size: [2.5, 10.0, 4.5], material: dark_silver, rotate: [8, -14, -20], blend_with: [chest_core, stygian_mantle_l]
+            }
+            box pylon_volcanic_rear place(base_box=pylon_obsidian_front, anchor=[0, -0.10, -0.96], align=[0, 0, 0.50]) {
+              size: [3.0, 8.5, 5.0], material: stygian_slate, rotate: [14, 0, 0], blend_with: [chest_core, stygian_mantle_c, stygian_mantle_l, waist_core, lumbar_volcanic_plate, pylon_silver_outer]
+            }
+            box pylon_draco_crystal_1 place(base_box=pylon_obsidian_front, anchor=[-0.88, 0.36, 0.10], align=[0.68, 0, 0]) {
+              size: [1.5, 5.5, 2.5], material: draco_crimson, rotate: [4, 0, 8], blend_with: [dorsal_draco_conduit, stygian_mantle_c]
+            }
+            box pylon_outer_scythe place(base_box=pylon_silver_outer, anchor=[0.92, 0.36, -0.25], align=[-0.78, 0, 0]) {
+              size: [1.5, 6.0, 3.0], material: volcanic_armor, rotate: [10, -16, -24]
+            }
+            box pylon_draco_crystal_2 place(base_box=pylon_volcanic_rear, anchor=[-0.86, 0.32, -0.10], align=[0.76, 0, 0]) {
+              size: [1.5, 4.5, 2.5], material: draco_crimson, rotate: [8, 0, 6], blend_with: [dorsal_draco_conduit, stygian_mantle_c, pylon_obsidian_front]
+            }
+            plane pylon_shock_plume place(base_box=pylon_volcanic_rear, anchor=[0.20, 0.92, -0.85], align=[0, -0.85, 0.85]) {
+              size: [6.0, 7.0], normal: x, material: alabaster_fur, rotate: [22, 0, -8],
+              edge: spikes(width=4, min_len=4, max_len=9, side=top, seed=41), layer: 2,
+              blend_with: [pylon_obsidian_front, pylon_silver_outer, stygian_mantle_l]
+            }
+          }
+
+          bone neck_1 attach(parent_box=chest_core, anchor=[0, 0.28, 1], align=[0, 0, -1], seat=0.26) {
+            rest_euler: [-20, 0, 0]
+            box neck_base { size: [14.0, 12.0, 9.5], material: obsidian_hide }
+            box neck_throat_shield place(base_box=neck_base, anchor=[0, -0.96, 0.12], align=[0, 0.48, 0]) {
+              size: [10.0, 2.5, 8.0], material: volcanic_armor, rotate: [-6, 0, 0], blend_with: [chest_scute_front, chest_core, sternum_draco_keel]
+            }
+            box neck_throat_draco_rib place(base_box=neck_throat_shield, anchor=[0, -0.96, 0.32], align=[0, 0.74, 0]) {
+              size: [7.0, 1.5, 5.5], material: stygian_slate, rotate: [-8, 0, 0], blend_with: [neck_base, chest_scute_front, sternum_draco_keel]
+            }
+            box neck_collar_blade_c place(base_box=neck_base, anchor=[0, 1.0, 0.40], align=[0, -0.86, 0]) {
+              size: [4.5, 9.0, 3.5], material: dark_silver, rotate: [18, 0, 0], blend_with: [stygian_mantle_c, chest_core, neck_upper, nape_fur_crest]
+            }
+            box neck_collar_blade_l place(base_box=neck_base, anchor=[0.70, 0.96, 0.36], align=[-0.35, -0.86, 0]) {
+              size: [3.5, 8.5, 3.5], material: volcanic_armor, rotate: [18, -18, -28], blend_with: [neck_collar_blade_c, stygian_mantle_l, stygian_mantle_c, chest_core, pylon_obsidian_front, neck_upper]
+            }
+            box neck_collar_blade_r place(base_box=neck_base, anchor=[-0.70, 0.96, 0.36], align=[0.35, -0.86, 0]) {
+              size: [3.5, 8.5, 3.5], material: volcanic_armor, rotate: [18, 18, 28], blend_with: [neck_collar_blade_c, stygian_mantle_r, stygian_mantle_c, chest_core, draco_pylon_r__pylon_obsidian_front, neck_upper]
+            }
+            box neck_collar_outer_l place(base_box=neck_base, anchor=[0.98, 0.54, 0.32], align=[-0.72, -0.55, 0]) {
+              size: [3.0, 7.0, 3.5], material: dark_silver, rotate: [14, -22, -40], blend_with: [neck_collar_blade_l, stygian_mantle_l, chest_core, fore_bicep]
+            }
+            box neck_collar_outer_r place(base_box=neck_base, anchor=[-0.98, 0.54, 0.32], align=[0.72, -0.55, 0]) {
+              size: [3.0, 7.0, 3.5], material: dark_silver, rotate: [14, 22, 40], blend_with: [neck_collar_blade_r, stygian_mantle_r, chest_core, fore_shoulder_r__fore_bicep]
+            }
+            plane neck_mane_plane_c place(base_box=neck_collar_blade_c, anchor=[0, 0.95, -0.85], align=[0, -0.85, 0]) {
+              size: [11.5, 6.0], normal: z, material: alabaster_fur, rotate: [12, 0, 0],
+              edge: spikes(width=4, min_len=4, max_len=9, side=top, seed=53), layer: 1,
+              blend_with: [neck_collar_blade_l, neck_collar_blade_r, stygian_mantle_c, mantle_fur_crest_c]
+            }
+            plane neck_side_ruff_l place(base_box=neck_base, anchor=[1.0, 0.05, 0.15], align=[-1.0, 0, 0]) {
+              size: [6.0, 8.0], normal: x, material: alabaster_fur, rotate: [6, 18, -18],
+              edge: spikes(width=4, min_len=3, max_len=7, side=top, seed=59), layer: 1,
+              blend_with: [neck_collar_outer_l, chest_core, fore_bicep]
+            }
+            plane neck_side_ruff_r place(base_box=neck_base, anchor=[-1.0, 0.05, 0.15], align=[1.0, 0, 0]) {
+              size: [6.0, 8.0], normal: x, material: alabaster_fur, rotate: [6, -18, 18],
+              edge: spikes(width=4, min_len=3, max_len=7, side=top, seed=59), layer: 1,
+              blend_with: [neck_collar_outer_r, chest_core, fore_shoulder_r__fore_bicep]
+            }
+
+            bone neck_2 attach(parent_box=neck_base, anchor=[0, 0.14, 1], align=[0, 0, -1], seat=0.26) {
+              rest_euler: [16, 0, 0]
+              box neck_upper { size: [10.5, 9.5, 8.5], material: alabaster_fur }
+              box nape_fur_crest place(base_box=neck_upper, anchor=[0, 0.96, -0.15], align=[0, -0.58, 0.35]) {
+                size: [5.0, 3.5, 8.5], material: alabaster_fur, rotate: [14, 0, 0], blend_with: [neck_base, neck_collar_blade_c, stygian_mantle_c]
+              }
+              box nape_volcanic_l place(base_box=neck_upper, anchor=[0.96, 0.36, 0.05], align=[-0.68, 0, 0]) {
+                size: [2.0, 4.5, 7.0], material: volcanic_armor, rotate: [8, -12, -16], blend_with: [neck_base, neck_collar_blade_l, skull_core, cheek_jowl_l]
+              }
+              box nape_volcanic_r place(base_box=neck_upper, anchor=[-0.96, 0.36, 0.05], align=[0.68, 0, 0]) {
+                size: [2.0, 4.5, 7.0], material: volcanic_armor, rotate: [8, 12, 16], blend_with: [neck_base, neck_collar_blade_r, skull_core, cheek_jowl_r]
+              }
+              plane nape_spike_plane place(base_box=nape_fur_crest, anchor=[0, 1.0, 0], align=[0, -1.0, 0]) {
+                size: [5.0, 8.0], normal: x, material: alabaster_fur, rotate: [8, 0, 0],
+                edge: spikes(width=4, min_len=3, max_len=7, side=top, seed=67), layer: 1,
+                blend_with: [neck_upper, neck_collar_blade_c, skull_core]
+              }
+
+              bone head attach(parent_box=neck_upper, anchor=[0, 0.05, 1], align=[0, 0, -1], seat=0.24) {
+                rest_euler: [18, 0, 0]
+                box skull_core { size: [10.0, 6.5, 8.0], material: obsidian_hide }
+                box skull_volcanic_crown place(base_box=skull_core, anchor=[0, 0.98, -0.14], align=[0, -0.66, 0]) {
+                  size: [5.5, 2.0, 6.5], material: volcanic_armor, rotate: [6, 0, 0], blend_with: [neck_upper, nape_fur_crest, brow_ridge_l, brow_ridge_r]
+                }
+                box brow_ridge_l place(base_box=skull_core, anchor=[0.84, 0.78, 0.56], align=[-0.15, -0.50, -0.30]) {
+                  size: [2.5, 2.0, 6.0], material: volcanic_armor, rotate: [10, -14, -16], blend_with: [skull_volcanic_crown]
+                }
+                box brow_ridge_r place(base_box=skull_core, anchor=[-0.84, 0.78, 0.56], align=[0.15, -0.50, -0.30]) {
+                  size: [2.5, 2.0, 6.0], material: volcanic_armor, rotate: [10, 14, 16], blend_with: [skull_volcanic_crown]
+                }
+                box cheek_jowl_l place(base_box=skull_core, anchor=[0.96, -0.22, 0.14], align=[-0.48, 0, 0]) {
+                  size: [2.5, 4.0, 6.0], material: stygian_slate, rotate: [6, -15, 8], blend_with: [brow_ridge_l, neck_upper]
+                }
+                box cheek_jowl_r place(base_box=skull_core, anchor=[-0.96, -0.22, 0.14], align=[0.48, 0, 0]) {
+                  size: [2.5, 4.0, 6.0], material: stygian_slate, rotate: [6, 15, -8], blend_with: [brow_ridge_r, neck_upper]
+                }
+                box cheek_draco_spur_l place(base_box=cheek_jowl_l, anchor=[0.92, -0.15, -0.66], align=[-0.68, 0, 0.55]) {
+                  size: [1.5, 2.5, 5.0], material: dark_silver, rotate: [10, -28, 12], blend_with: [skull_core, neck_upper, nape_volcanic_l]
+                }
+                box cheek_draco_spur_r place(base_box=cheek_jowl_r, anchor=[-0.92, -0.15, -0.66], align=[0.68, 0, 0.55]) {
+                  size: [1.5, 2.5, 5.0], material: dark_silver, rotate: [10, 28, -12], blend_with: [skull_core, neck_upper, nape_volcanic_r]
+                }
+                plane cheek_fur_tuft_l place(base_box=cheek_jowl_l, anchor=[0.95, -0.55, -0.45], align=[-0.85, 0.5, 0.65]) {
+                  size: [3.5, 5.0], normal: x, material: alabaster_fur, rotate: [-12, -24, 18],
+                  edge: spikes(width=4, min_len=2, max_len=5, side=bottom, seed=71), layer: 1,
+                  blend_with: [cheek_draco_spur_l, neck_upper, jaw_core]
+                }
+                plane cheek_fur_tuft_r place(base_box=cheek_jowl_r, anchor=[-0.95, -0.55, -0.45], align=[0.85, 0.5, 0.65]) {
+                  size: [3.5, 5.0], normal: x, material: alabaster_fur, rotate: [-12, 24, -18],
+                  edge: spikes(width=4, min_len=2, max_len=5, side=bottom, seed=71), layer: 1,
+                  blend_with: [cheek_draco_spur_r, neck_upper, jaw_core]
+                }
+
+                // Searing crimson Dracophage predator slit eyes
+                box eye_slit_l place(base_box=skull_core, anchor=[0.98, 0.46, 0.58], align=[-0.72, 0, 0]) {
+                  size: [1.0, 1.5, 2.5], material: draco_crimson, rotate: [8, -12, 0], blend_with: [brow_ridge_l, cheek_jowl_l]
+                }
+                box eye_slit_r place(base_box=skull_core, anchor=[-0.98, 0.46, 0.58], align=[0.72, 0, 0]) {
+                  size: [1.0, 1.5, 2.5], material: draco_crimson, rotate: [8, 12, 0], blend_with: [brow_ridge_r, cheek_jowl_r]
+                }
+
+                // Sharp 3D Wedged Hellwolf Snout
+                box snout_core place(base_box=skull_core, anchor=[0, -0.16, 1], align=[0, 0, -0.78]) {
+                  size: [4.5, 3.5, 7.0], material: obsidian_hide, rotate: [10, 0, 0], blend_with: [brow_ridge_l, brow_ridge_r, eye_slit_l, eye_slit_r]
+                }
+                box nasal_bridge place(base_box=snout_core, anchor=[0, 0.88, 0.05], align=[0, -0.48, 0]) {
+                  size: [3.5, 2.0, 7.0], material: volcanic_armor, rotate: [6, 0, 0], blend_with: [skull_core, skull_volcanic_crown, brow_ridge_l, brow_ridge_r]
+                }
+                box nasal_draco_horn place(base_box=nasal_bridge, anchor=[0, 0.96, 0.54], align=[0, -0.82, 0]) {
+                  size: [1.5, 1.5, 2.5], material: dark_silver, rotate: [-20, 0, 0], blend_with: [snout_core, nose_tip]
+                }
+                box maxilla_wedge_l place(base_box=snout_core, anchor=[0.96, -0.10, -0.05], align=[-0.48, 0, 0]) {
+                  size: [2.0, 3.0, 6.5], material: stygian_slate, rotate: [8, -19, 8], blend_with: [skull_core, cheek_jowl_l, nasal_bridge, eye_slit_l]
+                }
+                box maxilla_wedge_r place(base_box=snout_core, anchor=[-0.96, -0.10, -0.05], align=[0.48, 0, 0]) {
+                  size: [2.0, 3.0, 6.5], material: stygian_slate, rotate: [8, 19, -8], blend_with: [skull_core, cheek_jowl_r, nasal_bridge, eye_slit_r]
+                }
+                box nose_tip place(base_box=snout_core, anchor=[0, 0.16, 0.96], align=[0, 0, -0.58]) {
+                  size: [3.0, 2.5, 2.5], material: ash_charcoal, rotate: [12, 0, 0], blend_with: [nasal_bridge, maxilla_wedge_l, maxilla_wedge_r, nasal_draco_horn]
+                }
+                box upper_canine_l place(base_box=snout_core, anchor=[0.82, -0.98, 0.64], align=[0, 0.90, 0]) {
+                  size: [1.0, 2.5, 1.5], material: ivory_fang, rotate: [-8, 0, -8], blend_with: [maxilla_wedge_l, jaw_core, palate_upper]
+                }
+                box upper_canine_r place(base_box=snout_core, anchor=[-0.82, -0.98, 0.64], align=[0, 0.90, 0]) {
+                  size: [1.0, 2.5, 1.5], material: ivory_fang, rotate: [-8, 0, 8], blend_with: [maxilla_wedge_r, jaw_core, palate_upper]
+                }
+                box palate_upper place(base_box=snout_core, anchor=[0, -0.98, 0.25], align=[0, 0.78, 0]) {
+                  size: [3.0, 1.0, 5.0], material: maw_scarlet, blend_with: [skull_core, jaw_core]
+                }
+
+                // Swept obsidian-silver Hellwolf ears with shock-fur tufts
+                bone ear_l attach(parent_box=skull_core, anchor=[0.92, 0.46, -0.22], align=[0, 0, 0.88]) mirror_x(ear_r) {
+                  rest_euler: [20, -34, 14]
+                  box ear_blade { size: [2.0, 2.5, 8.0], material: dark_silver, blend_with: [cheek_jowl_l, neck_upper, brow_ridge_l, nape_volcanic_l, nape_volcanic_r] }
+                  box ear_obsidian_tip place(base_box=ear_blade, anchor=[0, 0.12, -0.96], align=[0, 0, 0.78]) {
+                    size: [1.5, 1.5, 4.0], material: volcanic_armor, rotate: [8, 0, 0]
+                  }
+                  plane ear_tuft_plane place(base_box=ear_blade, anchor=[0, -0.95, -0.15], align=[0, 0.85, 0]) {
+                    size: [3.0, 6.0], normal: x, material: alabaster_fur,
+                    edge: spikes(width=4, min_len=2, max_len=5, side=bottom, seed=79), layer: 1
+                  }
+                }
+
+                // Sharper Upward-Hooked Dark-Silver Dragon Horns with serrated dorsal saw-keels!
+                bone horn_l attach(parent_box=skull_core, anchor=[0.54, 0.98, 0.78], align=[0, -0.62, -0.95], seat=0.05) mirror_x(horn_r) {
+                  rest_euler: [-18, 17, -10]
+                  box horn_seg_1 { size: [3.0, 2.5, 5.5], material: dark_silver, blend_with: [brow_ridge_l, snout_core, nasal_bridge, skull_volcanic_crown, horn_r__horn_seg_1] }
+                  box horn_keel_1 place(base_box=horn_seg_1, anchor=[0, 0.96, 0], align=[0, -0.76, 0]) {
+                    size: [1.5, 1.0, 5.0], material: volcanic_armor, blend_with: [horn_seg_2]
+                  }
+                  bone horn_mid_l attach(parent_box=horn_seg_1, anchor=[0, 0.08, 1], align=[0, 0, -1], seat=0.22) {
+                    rest_euler: [-14, -4, 0]
+                    box horn_seg_2 { size: [2.5, 2.0, 5.0], material: dark_silver, blend_with: [nasal_bridge] }
+                    box horn_keel_2 place(base_box=horn_seg_2, anchor=[0, 0.96, 0], align=[0, -0.76, 0]) {
+                      size: [1.0, 1.0, 4.5], material: volcanic_armor, blend_with: [horn_keel_1, horn_seg_3]
+                    }
+                    bone horn_tip_l attach(parent_box=horn_seg_2, anchor=[0, 0.08, 1], align=[0, 0, -1], seat=0.22) {
+                      rest_euler: [-18, -4, 0]
+                      box horn_seg_3 { size: [1.5, 1.5, 4.5], material: volcanic_armor }
+                      box horn_hook_tip place(base_box=horn_seg_3, anchor=[0, 0.12, 0.96], align=[0, 0, -0.82]) {
+                        size: [1.0, 1.0, 3.0], material: ash_charcoal, rotate: [-12, 0, 0]
+                      }
+                    }
+                  }
+                }
+
+                bone jaw attach(parent_box=skull_core, anchor=[0, -0.76, 0.22], align=[0, 0, -1], seat=0.14) {
+                  rest_euler: [22, 0, 0]
+                  box jaw_core { size: [4.0, 2.5, 8.5], material: ash_charcoal, blend_with: [cheek_jowl_l, cheek_jowl_r, snout_core, palate_upper] }
+                  box tongue_bed place(base_box=jaw_core, anchor=[0, 0.98, 0.34], align=[0, -0.82, 0]) {
+                    size: [2.5, 1.0, 5.0], material: maw_scarlet, blend_with: [palate_upper, snout_core, skull_core]
+                  }
+                  box lower_canine_l place(base_box=jaw_core, anchor=[0.84, 0.98, 0.96], align=[0, -0.92, -0.65]) {
+                    size: [1.0, 1.5, 1.0], material: ivory_fang, rotate: [6, 0, 10], blend_with: [snout_core, palate_upper, maxilla_wedge_l, upper_canine_l, nose_tip]
+                  }
+                  box lower_canine_r place(base_box=jaw_core, anchor=[-0.84, 0.98, 0.96], align=[0, -0.92, -0.65]) {
+                    size: [1.0, 1.5, 1.0], material: ivory_fang, rotate: [6, 0, -10], blend_with: [snout_core, palate_upper, maxilla_wedge_r, upper_canine_r, nose_tip]
+                  }
+                  box chin_fur_wedge place(base_box=jaw_core, anchor=[0, -0.92, -0.10], align=[0, 0.45, 0]) {
+                    size: [3.5, 2.5, 6.5], material: alabaster_fur, rotate: [-18, 0, 0], blend_with: [neck_upper]
+                  }
+                  box mandible_tusk_l place(base_box=jaw_core, anchor=[0.90, -0.35, 0.18], align=[-0.15, 0.72, 0]) {
+                    size: [1.5, 4.0, 2.0], material: dark_silver, rotate: [26, -16, 18], blend_with: [chin_fur_wedge]
+                  }
+                  box mandible_tusk_r place(base_box=jaw_core, anchor=[-0.90, -0.35, 0.18], align=[0.15, 0.72, 0]) {
+                    size: [1.5, 4.0, 2.0], material: dark_silver, rotate: [26, 16, -18], blend_with: [chin_fur_wedge]
+                  }
+                  plane chin_beard_plane place(base_box=chin_fur_wedge, anchor=[0, -0.95, -0.15], align=[0, 0.85, 0]) {
+                    size: [3.5, 5.5], normal: x, material: alabaster_fur, rotate: [-10, 0, 0],
+                    edge: spikes(width=4, min_len=2, max_len=5, side=bottom, seed=83), layer: 1,
+                    blend_with: [jaw_core, neck_upper, neck_throat_shield]
+                  }
+                }
+              }
+            }
+          }
+
+          // Wide-Planted Brawling Hellwolf Forelimbs (+Rz splays wide outward!)
+          bone fore_shoulder_l attach(parent_box=chest_core, anchor=[0.96, -0.18, 0.44], align=[-0.55, 0.82, 0], seat=0.12) mirror_x(fore_shoulder_r) {
+            rest_euler: [22, 8, 27]
+            box fore_bicep { size: [8.5, 11.0, 9.0], material: obsidian_hide }
+            box pauldron_volcanic place(base_box=fore_bicep, anchor=[0.98, 0.34, 0.08], align=[-0.50, 0, 0]) {
+              size: [2.5, 7.0, 7.5], material: volcanic_armor, rotate: [-8, 10, -14], blend_with: [chest_core]
+            }
+            box pauldron_silver_spur place(base_box=pauldron_volcanic, anchor=[0.86, 0.88, -0.25], align=[-0.68, -0.68, 0.35]) {
+              size: [2.0, 3.5, 6.0], material: dark_silver, rotate: [18, 24, -18], blend_with: [fore_bicep, chest_core, stygian_mantle_l]
+            }
+            box elbow_silver_fur place(base_box=fore_bicep, anchor=[0.22, -0.78, -0.92], align=[0, 0, 0.65]) {
+              size: [4.5, 5.0, 6.5], material: alabaster_fur, rotate: [24, 0, 0], blend_with: [fore_bracer]
+            }
+            plane elbow_shock_plume place(base_box=elbow_silver_fur, anchor=[0.35, -0.15, -0.96], align=[0, 0, 0.85]) {
+              size: [6.0, 5.5], normal: x, material: alabaster_fur, rotate: [16, 18, 0],
+              edge: spikes(width=4, min_len=4, max_len=9, side=right, seed=89), layer: 1,
+              blend_with: [fore_bicep, fore_bracer, flank_lower_shingle_l, flank_lower_shingle_r, rib_volcanic_shingle_l_2, rib_volcanic_shingle_r_2]
+            }
+
+            bone fore_arm_l attach(parent_box=fore_bicep, anchor=[0.12, -1, -0.05], align=[0, 0.88, 0], seat=0.18) {
+              rest_euler: [-34, 0, -18]
+              box fore_bracer { size: [8.0, 11.5, 8.5], material: stygian_slate, blend_with: [chest_core] }
+              box bracer_front_shield place(base_box=fore_bracer, anchor=[0.10, 0.05, 0.98], align=[0, 0, -0.68]) {
+                size: [6.0, 9.5, 2.0], material: dark_silver, rotate: [4, -6, 0], blend_with: [fore_bicep, fore_paw_pad]
+              }
+              // 4 Wide serrated volcanic/silver forearm scythe-spurs veined with crimson Dracophage energy!
+              box bracer_draco_spur_1 place(base_box=fore_bracer, anchor=[0.96, 0.56, 0.22], align=[-0.52, 0, 0.35]) {
+                size: [3.5, 2.5, 8.0], material: volcanic_armor, rotate: [20, 32, -16], blend_with: [fore_bicep, pauldron_volcanic, elbow_silver_fur]
+              }
+              box bracer_draco_spur_2 place(base_box=fore_bracer, anchor=[0.96, 0.16, 0.22], align=[-0.52, 0, 0.35]) {
+                size: [3.5, 2.5, 8.0], material: dark_silver, rotate: [20, 32, -16], blend_with: [bracer_draco_spur_1, elbow_silver_fur]
+              }
+              box bracer_draco_spur_3 place(base_box=fore_bracer, anchor=[0.96, -0.24, 0.22], align=[-0.60, 0, 0.35]) {
+                size: [3.0, 2.5, 7.5], material: volcanic_armor, rotate: [20, 32, -16], blend_with: [bracer_draco_spur_2]
+              }
+              box bracer_draco_spur_4 place(base_box=fore_bracer, anchor=[0.96, -0.62, 0.18], align=[-0.68, 0, 0.35]) {
+                size: [2.5, 2.0, 6.5], material: dark_silver, rotate: [20, 32, -16], blend_with: [bracer_draco_spur_3, fore_paw_pad]
+              }
+              box bracer_crimson_vein_1 place(base_box=bracer_draco_spur_1, anchor=[0.96, 0.15, 0], align=[-0.76, 0, 0]) {
+                size: [1.0, 1.5, 4.5], material: draco_crimson, rotate: [20, 32, -16]
+              }
+              box bracer_crimson_vein_2 place(base_box=bracer_draco_spur_2, anchor=[0.96, 0.15, 0], align=[-0.76, 0, 0]) {
+                size: [1.0, 1.5, 4.5], material: draco_crimson, rotate: [20, 32, -16]
+              }
+              box bracer_crimson_vein_3 place(base_box=bracer_draco_spur_3, anchor=[0.96, 0.15, 0], align=[-0.76, 0, 0]) {
+                size: [1.0, 1.5, 4.0], material: draco_crimson, rotate: [20, 32, -16]
+              }
+              box bracer_crimson_vein_4 place(base_box=bracer_draco_spur_4, anchor=[0.96, 0.15, 0], align=[-0.76, 0, 0]) {
+                size: [1.0, 1.0, 3.5], material: draco_crimson, rotate: [20, 32, -16]
+              }
+              box f_inner_wrist_spur place(base_box=fore_bracer, anchor=[-0.96, -0.35, -0.25], align=[0.78, 0, 0.35]) {
+                size: [1.5, 2.0, 5.0], material: volcanic_armor, rotate: [14, -24, 12], blend_with: [fore_paw_pad, chest_core, chest_scute_front]
+              }
+              plane forearm_fur_fringe place(base_box=fore_bracer, anchor=[0.45, -0.10, -1.0], align=[0, 0, 0.90]) {
+                size: [9.5, 7.0], normal: x, material: alabaster_fur, rotate: [8, 16, 0],
+                edge: spikes(width=4, min_len=4, max_len=9, side=right, seed=97), layer: 1,
+                blend_with: [elbow_silver_fur, bracer_draco_spur_1, bracer_draco_spur_2, bracer_draco_spur_3, bracer_draco_spur_4, fore_paw_pad]
+              }
+
+              bone fore_paw_l attach(parent_box=fore_bracer, anchor=[0, -1, 0.16], align=[0, 0.85, -0.45], seat=0.16) {
+                rest_euler: [18, 0, -9]
+                box fore_paw_pad { size: [9.0, 3.5, 8.0], material: ash_charcoal }
+                box paw_silver_knuckle place(base_box=fore_paw_pad, anchor=[0, 0.98, 0.62], align=[0, -0.82, 0]) {
+                  size: [7.5, 1.5, 3.5], material: dark_silver, rotate: [12, 0, 0], blend_with: [fore_bracer, bracer_front_shield, f_toe_1, f_toe_2, f_toe_3, f_toe_4]
+                }
+                box f_toe_1 place(base_box=fore_paw_pad, anchor=[-0.68, -0.10, 0.92], align=[0, 0, -0.75]) {
+                  size: [2.0, 2.5, 4.0], material: stygian_slate, rotate: [2, 16, 0]
+                }
+                box f_talon_1 place(base_box=f_toe_1, anchor=[0, 0.02, 0.96], align=[0, 0, -0.82]) {
+                  size: [1.5, 2.0, 3.5], material: crimson_talon, rotate: [6, 4, 0]
+                }
+                box f_toe_2 place(base_box=fore_paw_pad, anchor=[-0.22, -0.10, 0.96], align=[0, 0, -0.78]) {
+                  size: [2.0, 2.5, 4.5], material: stygian_slate, rotate: [2, 5, 0], blend_with: [f_toe_1]
+                }
+                box f_talon_2 place(base_box=f_toe_2, anchor=[0, 0.02, 0.96], align=[0, 0, -0.82]) {
+                  size: [1.5, 2.0, 4.0], material: crimson_talon, rotate: [6, 0, 0], blend_with: [f_talon_1]
+                }
+                box f_toe_3 place(base_box=fore_paw_pad, anchor=[0.24, -0.10, 0.96], align=[0, 0, -0.78]) {
+                  size: [2.0, 2.5, 4.5], material: stygian_slate, rotate: [2, -6, 0], blend_with: [f_toe_2]
+                }
+                box f_talon_3 place(base_box=f_toe_3, anchor=[0, 0.02, 0.96], align=[0, 0, -0.82]) {
+                  size: [1.5, 2.0, 4.0], material: crimson_talon, rotate: [6, 0, 0], blend_with: [f_talon_2]
+                }
+                box f_toe_4 place(base_box=fore_paw_pad, anchor=[0.70, -0.10, 0.90], align=[0, 0, -0.75]) {
+                  size: [2.0, 2.5, 4.0], material: stygian_slate, rotate: [2, -18, 0], blend_with: [f_toe_3]
+                }
+                box f_talon_4 place(base_box=f_toe_4, anchor=[0, 0.02, 0.96], align=[0, 0, -0.82]) {
+                  size: [1.5, 2.0, 3.5], material: crimson_talon, rotate: [6, -4, 0], blend_with: [f_talon_3]
+                }
+                box f_dewclaw_spur place(base_box=fore_paw_pad, anchor=[-0.96, 0.15, -0.35], align=[0.68, 0, 0.35]) {
+                  size: [1.5, 2.0, 3.5], material: crimson_talon, rotate: [12, -28, 0], blend_with: [fore_bracer]
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // Deeply Coiled Digitigrade Hellwolf Hindlimbs
+      bone hind_thigh_l attach(parent_box=pelvis_core, anchor=[0.96, -0.12, -0.06], align=[-0.55, 0.85, 0], seat=0.12) mirror_x(hind_thigh_r) {
+        rest_euler: [-26, -6, 20]
+        box thigh_mass { size: [7.0, 11.5, 8.5], material: obsidian_hide, blend_with: [waist_core, tail_1_seg] }
+        box thigh_volcanic_plate place(base_box=thigh_mass, anchor=[0.98, 0.22, 0.08], align=[-0.48, 0, 0]) {
+          size: [2.5, 6.5, 6.5], material: volcanic_armor, rotate: [6, -8, -12], blend_with: [pelvis_core, haunch_armor_l]
+        }
+        box thigh_silver_spur place(base_box=thigh_volcanic_plate, anchor=[0.92, 0.25, -0.42], align=[-0.68, 0, 0.45]) {
+          size: [2.0, 2.5, 6.0], material: dark_silver, rotate: [16, 26, -12], blend_with: [thigh_mass, hip_draco_spur_l]
+        }
+        box knee_draco_cap place(base_box=thigh_mass, anchor=[0.15, -0.82, 0.96], align=[0, 0, -0.72]) {
+          size: [4.0, 3.5, 2.5], material: dark_silver, rotate: [-14, 0, 0], blend_with: [shin_mass, waist_core, waist_belly]
+        }
+        plane thigh_fur_fringe place(base_box=thigh_mass, anchor=[0.45, -0.15, -1.0], align=[0, 0, 0.88]) {
+          size: [7.5, 6.0], normal: x, material: alabaster_fur, rotate: [-12, 14, 0],
+          edge: spikes(width=4, min_len=3, max_len=7, side=right, seed=103), layer: 1,
+          blend_with: [thigh_volcanic_plate, thigh_silver_spur, shin_mass, hock_silver_spur]
+        }
+
+        bone hind_shin_l attach(parent_box=thigh_mass, anchor=[0.05, -1, -0.10], align=[0, 0.88, 0], seat=0.16) {
+          rest_euler: [44, 0, -12]
+          box shin_mass { size: [5.5, 10.5, 6.0], material: obsidian_hide }
+          box shin_volcanic_guard place(base_box=shin_mass, anchor=[0.20, 0.05, 0.96], align=[0, 0, -0.68]) {
+            size: [3.5, 7.5, 2.0], material: stygian_slate, rotate: [4, 0, 0], blend_with: [thigh_mass, knee_draco_cap, hind_paw_pad]
+          }
+          box hock_silver_spur place(base_box=shin_mass, anchor=[0, 0.65, -0.92], align=[0, 0, 0.68]) {
+            size: [3.5, 3.5, 4.5], material: dark_silver, rotate: [22, 0, 0], blend_with: [thigh_mass]
+          }
+          plane ankle_fur_tuft place(base_box=shin_mass, anchor=[0.25, -0.35, -0.98], align=[0, 0, 0.88]) {
+            size: [5.5, 5.0], normal: x, material: alabaster_fur, rotate: [10, 10, 0],
+            edge: spikes(width=4, min_len=3, max_len=7, side=right, seed=107), layer: 1,
+            blend_with: [hock_silver_spur, hind_paw_pad]
+          }
+
+          bone hind_paw_l attach(parent_box=shin_mass, anchor=[0, -1, 0.15], align=[0, 0.88, -0.42], seat=0.14) {
+            rest_euler: [-28, 0, -8]
+            box hind_paw_pad { size: [7.0, 3.0, 7.0], material: ash_charcoal }
+            box h_toe_1 place(base_box=hind_paw_pad, anchor=[-0.62, -0.08, 0.92], align=[0, 0, -0.75]) {
+              size: [2.0, 2.0, 3.5], material: stygian_slate, rotate: [2, 14, 0]
+            }
+            box h_talon_1 place(base_box=h_toe_1, anchor=[0, 0.02, 0.96], align=[0, 0, -0.82]) {
+              size: [1.5, 1.5, 3.0], material: crimson_talon, rotate: [6, 4, 0]
+            }
+            box h_toe_2 place(base_box=hind_paw_pad, anchor=[0.0, -0.08, 0.96], align=[0, 0, -0.78]) {
+              size: [2.0, 2.0, 4.0], material: stygian_slate, rotate: [2, 0, 0], blend_with: [h_toe_1]
+            }
+            box h_talon_2 place(base_box=h_toe_2, anchor=[0, 0.02, 0.96], align=[0, 0, -0.82]) {
+              size: [1.5, 1.5, 3.5], material: crimson_talon, rotate: [6, 0, 0], blend_with: [h_talon_1]
+            }
+            box h_toe_3 place(base_box=hind_paw_pad, anchor=[0.62, -0.08, 0.92], align=[0, 0, -0.75]) {
+              size: [2.0, 2.0, 3.5], material: stygian_slate, rotate: [2, -14, 0], blend_with: [h_toe_2]
+            }
+            box h_talon_3 place(base_box=h_toe_3, anchor=[0, 0.02, 0.96], align=[0, 0, -0.82]) {
+              size: [1.5, 1.5, 3.0], material: crimson_talon, rotate: [6, -4, 0], blend_with: [h_talon_2]
+            }
+            box h_knuckle_guard place(base_box=hind_paw_pad, anchor=[0, 0.98, 0.62], align=[0, -0.82, 0]) {
+              size: [5.5, 1.0, 3.0], material: dark_silver, rotate: [10, 0, 0], blend_with: [shin_mass, shin_volcanic_guard, h_toe_1, h_toe_2, h_toe_3]
+            }
+            box h_heel_spur place(base_box=hind_paw_pad, anchor=[0, 0.25, -0.96], align=[0, 0, 0.80]) {
+              size: [2.0, 1.5, 3.5], material: crimson_talon, rotate: [14, 0, 0], blend_with: [shin_mass]
+            }
+          }
+        }
+      }
+
+      // Heavy Barbed Volcanic-Obsidian & Dark-Silver Dracophage Tail Club (`tail_1..tail_6`)
+      bone tail_1 attach(parent_box=pelvis_core, anchor=[0, 0.22, -1], align=[0, 0, 1], seat=0.24) {
+        rest_euler: [-8, 0, 0]
+        box tail_1_seg { size: [10.0, 8.5, 9.0], material: obsidian_hide }
+        box tail_1_belly place(base_box=tail_1_seg, anchor=[0, -0.96, 0], align=[0, 0.45, 0]) {
+          size: [7.0, 1.5, 8.0], material: ash_belly, blend_with: [pelvis_belly, pelvis_core]
+        }
+        box tail_1_plate place(base_box=tail_1_seg, anchor=[0, 0.95, 0], align=[0, -0.48, 0]) {
+          size: [7.5, 2.5, 8.0], material: volcanic_armor, rotate: [10, 0, 0], blend_with: [pelvis_core, sacrum_volcanic_plate]
+        }
+        box tail_1_side_l place(base_box=tail_1_seg, anchor=[0.96, 0.15, -0.15], align=[-0.60, 0, 0.35]) {
+          size: [2.5, 3.0, 7.0], material: stygian_slate, rotate: [10, 22, -10], blend_with: [pelvis_core, haunch_armor_l, tail_2_seg, tail_2_scythe_l]
+        }
+        box tail_1_side_r place(base_box=tail_1_seg, anchor=[-0.96, 0.15, -0.15], align=[0.60, 0, 0.35]) {
+          size: [2.5, 3.0, 7.0], material: stygian_slate, rotate: [10, -22, 10], blend_with: [pelvis_core, haunch_armor_r, tail_2_seg, tail_2_scythe_r]
+        }
+
+        bone tail_2 attach(parent_box=tail_1_seg, anchor=[0, 0.08, -1], align=[0, 0, 1], seat=0.24) {
+          rest_euler: [14, 0, 0]
+          box tail_2_seg { size: [9.0, 8.0, 9.0], material: obsidian_hide }
+          box tail_2_belly place(base_box=tail_2_seg, anchor=[0, -0.96, 0], align=[0, 0.45, 0]) {
+            size: [6.0, 1.5, 8.0], material: ash_belly, blend_with: [tail_1_belly, tail_1_seg]
+          }
+          box tail_2_scythe_l place(base_box=tail_2_seg, anchor=[0.96, 0.22, -0.15], align=[-0.48, 0, 0.45]) {
+            size: [3.5, 3.5, 8.5], material: volcanic_armor, rotate: [14, 28, -14], blend_with: [tail_1_seg, tail_3_seg]
+          }
+          box tail_2_scythe_r place(base_box=tail_2_seg, anchor=[-0.96, 0.22, -0.15], align=[0.48, 0, 0.45]) {
+            size: [3.5, 3.5, 8.5], material: volcanic_armor, rotate: [14, -28, 14], blend_with: [tail_1_seg, tail_3_seg]
+          }
+          box tail_2_draco_l place(base_box=tail_2_scythe_l, anchor=[0.94, 0.15, 0], align=[-0.74, 0, 0]) {
+            size: [1.0, 1.5, 5.0], material: draco_crimson, rotate: [14, 28, -14]
+          }
+          box tail_2_draco_r place(base_box=tail_2_scythe_r, anchor=[-0.94, 0.15, 0], align=[0.74, 0, 0]) {
+            size: [1.0, 1.5, 5.0], material: draco_crimson, rotate: [14, -28, 14]
+          }
+          plane tail_2_fur_l place(base_box=tail_2_seg, anchor=[0.24, 0.96, 0], align=[0, -0.85, 0]) {
+            size: [5.0, 8.0], normal: x, material: alabaster_fur, rotate: [10, 0, -14],
+            edge: spikes(width=4, min_len=3, max_len=7, side=top, seed=113), layer: 1,
+            blend_with: [tail_1_plate, tail_3_fur, tail_3_seg]
+          }
+          plane tail_2_fur_r place(base_box=tail_2_seg, anchor=[-0.24, 0.96, 0], align=[0, -0.85, 0]) {
+            size: [5.0, 8.0], normal: x, material: alabaster_fur, rotate: [10, 0, 14],
+            edge: spikes(width=4, min_len=3, max_len=7, side=top, seed=113), layer: 2,
+            blend_with: [tail_1_plate, tail_3_fur, tail_3_seg, tail_2_fur_l]
+          }
+
+          bone tail_3 attach(parent_box=tail_2_seg, anchor=[0, 0.08, -1], align=[0, 0, 1], seat=0.24) {
+            rest_euler: [18, 0, 0]
+            box tail_3_seg { size: [8.0, 7.5, 9.0], material: volcanic_armor }
+            box tail_3_belly place(base_box=tail_3_seg, anchor=[0, -0.96, 0], align=[0, 0.45, 0]) {
+              size: [5.0, 1.5, 8.0], material: ash_belly, blend_with: [tail_2_belly, tail_2_seg]
+            }
+            box tail_3_scythe_l place(base_box=tail_3_seg, anchor=[0.96, 0.20, -0.20], align=[-0.48, 0, 0.55]) {
+              size: [4.5, 4.0, 10.5], material: dark_silver, rotate: [16, 34, -16], blend_with: [tail_2_seg, tail_2_scythe_l, tail_4_seg]
+            }
+            box tail_3_scythe_r place(base_box=tail_3_seg, anchor=[-0.96, 0.20, -0.20], align=[0.48, 0, 0.55]) {
+              size: [4.5, 4.0, 10.5], material: dark_silver, rotate: [16, -34, 16], blend_with: [tail_2_seg, tail_2_scythe_r, tail_4_seg]
+            }
+            box tail_3_draco_l place(base_box=tail_3_scythe_l, anchor=[0.88, 0.88, 0], align=[-0.78, -0.78, 0]) {
+              size: [1.0, 1.5, 5.5], material: draco_crimson
+            }
+            box tail_3_draco_r place(base_box=tail_3_scythe_r, anchor=[-0.88, 0.88, 0], align=[0.78, -0.78, 0]) {
+              size: [1.0, 1.5, 5.5], material: draco_crimson
+            }
+            box tail_3_lower_barb_l place(base_box=tail_3_seg, anchor=[0.78, -0.76, -0.22], align=[-0.55, 0.55, 0.55]) {
+              size: [2.5, 2.5, 8.0], material: volcanic_armor, rotate: [-14, 24, 18], blend_with: [tail_3_scythe_l, tail_3_belly, tail_2_seg, tail_4_seg]
+            }
+            box tail_3_lower_barb_r place(base_box=tail_3_seg, anchor=[-0.78, -0.76, -0.22], align=[0.55, 0.55, 0.55]) {
+              size: [2.5, 2.5, 8.0], material: volcanic_armor, rotate: [-14, -24, -18], blend_with: [tail_3_scythe_r, tail_3_belly, tail_2_seg, tail_4_seg]
+            }
+            box tail_3_fur place(base_box=tail_3_seg, anchor=[0, 0.96, 0], align=[0, -0.48, 0]) {
+              size: [5.0, 3.5, 8.0], material: alabaster_fur, rotate: [12, 0, 0], blend_with: [tail_2_seg]
+            }
+            plane tail_3_fur_l place(base_box=tail_3_fur, anchor=[0.35, 0.92, 0], align=[0, -0.85, 0]) {
+              size: [5.5, 8.0], normal: x, material: alabaster_fur, rotate: [8, 0, -16],
+              edge: spikes(width=4, min_len=4, max_len=9, side=top, seed=127), layer: 2,
+              blend_with: [tail_2_fur_l, tail_4_fur, tail_4_seg]
+            }
+            plane tail_3_fur_r place(base_box=tail_3_fur, anchor=[-0.35, 0.92, 0], align=[0, -0.85, 0]) {
+              size: [5.5, 8.0], normal: x, material: alabaster_fur, rotate: [8, 0, 16],
+              edge: spikes(width=4, min_len=4, max_len=9, side=top, seed=127), layer: 1,
+              blend_with: [tail_2_fur_r, tail_4_fur, tail_4_seg, tail_3_fur_l]
+            }
+
+            bone tail_4 attach(parent_box=tail_3_seg, anchor=[0, 0.08, -1], align=[0, 0, 1], seat=0.24) {
+              rest_euler: [16, 0, 0]
+              box tail_4_seg { size: [7.5, 7.0, 9.0], material: volcanic_armor }
+              box tail_4_scythe_l place(base_box=tail_4_seg, anchor=[0.96, 0.18, -0.22], align=[-0.50, 0, 0.58]) {
+                size: [5.5, 4.5, 12.0], material: volcanic_armor, rotate: [16, 38, -18], blend_with: [tail_3_seg, tail_3_scythe_l, tail_5_seg]
+              }
+              box tail_4_scythe_r place(base_box=tail_4_seg, anchor=[-0.96, 0.18, -0.22], align=[0.50, 0, 0.58]) {
+                size: [5.5, 4.5, 12.0], material: volcanic_armor, rotate: [16, -38, 18], blend_with: [tail_3_seg, tail_3_scythe_r, tail_5_seg]
+              }
+              box tail_4_draco_l place(base_box=tail_4_scythe_l, anchor=[0.88, 0.88, 0], align=[-0.78, -0.78, 0]) {
+                size: [1.0, 1.5, 6.5], material: draco_crimson
+              }
+              box tail_4_draco_r place(base_box=tail_4_scythe_r, anchor=[-0.88, 0.88, 0], align=[0.78, -0.78, 0]) {
+                size: [1.0, 1.5, 6.5], material: draco_crimson
+              }
+              box tail_4_lower_barb_l place(base_box=tail_4_seg, anchor=[0.74, -0.86, -0.25], align=[-0.68, 0.68, 0.55]) {
+                size: [3.0, 2.5, 8.5], material: dark_silver, rotate: [-14, 26, 18], blend_with: [tail_4_scythe_l, tail_3_seg, tail_3_lower_barb_l, tail_5_seg]
+              }
+              box tail_4_lower_barb_r place(base_box=tail_4_seg, anchor=[-0.74, -0.86, -0.25], align=[0.68, 0.68, 0.55]) {
+                size: [3.0, 2.5, 8.5], material: dark_silver, rotate: [-14, -26, -18], blend_with: [tail_4_scythe_r, tail_3_seg, tail_3_lower_barb_r, tail_5_seg]
+              }
+              box tail_4_fur place(base_box=tail_4_seg, anchor=[0, 0.96, 0], align=[0, -0.48, 0]) {
+                size: [5.0, 4.0, 8.5], material: alabaster_fur, rotate: [14, 0, 0], blend_with: [tail_3_fur, tail_3_seg]
+              }
+              plane tail_4_fur_l place(base_box=tail_4_fur, anchor=[0.38, 0.92, 0], align=[0, -0.85, 0]) {
+                size: [6.0, 8.5], normal: x, material: alabaster_fur, rotate: [8, 0, -18],
+                edge: spikes(width=4, min_len=4, max_len=9, side=top, seed=131), layer: 1,
+                blend_with: [tail_3_fur_l, tail_5_seg, tail_5_crimson_core]
+              }
+              plane tail_4_fur_r place(base_box=tail_4_fur, anchor=[-0.38, 0.92, 0], align=[0, -0.85, 0]) {
+                size: [6.0, 8.5], normal: x, material: alabaster_fur, rotate: [8, 0, 18],
+                edge: spikes(width=4, min_len=4, max_len=9, side=top, seed=131), layer: 2,
+                blend_with: [tail_3_fur_r, tail_5_seg, tail_5_crimson_core, tail_4_fur_l]
+              }
+
+              bone tail_5 attach(parent_box=tail_4_seg, anchor=[0, 0.08, -1], align=[0, 0, 1], seat=0.24) {
+                rest_euler: [6, 0, 0]
+                box tail_5_seg { size: [6.5, 6.0, 8.5], material: obsidian_hide }
+                box tail_5_scythe_l place(base_box=tail_5_seg, anchor=[0.95, 0.18, -0.20], align=[-0.48, 0, 0.58]) {
+                  size: [5.0, 4.0, 11.5], material: dark_silver, rotate: [14, 34, -16], blend_with: [tail_4_seg, tail_4_scythe_l, tail_6_club]
+                }
+                box tail_5_scythe_r place(base_box=tail_5_seg, anchor=[-0.95, 0.18, -0.20], align=[0.48, 0, 0.58]) {
+                  size: [5.0, 4.0, 11.5], material: dark_silver, rotate: [14, -34, 16], blend_with: [tail_4_seg, tail_4_scythe_r, tail_6_club]
+                }
+                box tail_5_lower_barb_l place(base_box=tail_5_seg, anchor=[0.76, -0.86, -0.22], align=[-0.68, 0.68, 0.55]) {
+                  size: [2.5, 2.5, 8.0], material: volcanic_armor, rotate: [-14, 24, 16], blend_with: [tail_5_scythe_l, tail_4_seg, tail_4_lower_barb_l, tail_6_club]
+                }
+                box tail_5_lower_barb_r place(base_box=tail_5_seg, anchor=[-0.76, -0.86, -0.22], align=[0.68, 0.68, 0.55]) {
+                  size: [2.5, 2.5, 8.0], material: volcanic_armor, rotate: [-14, -24, -16], blend_with: [tail_5_scythe_r, tail_4_seg, tail_4_lower_barb_r, tail_6_club]
+                }
+                box tail_5_draco_l place(base_box=tail_5_scythe_l, anchor=[0.88, 0.88, 0], align=[-0.78, -0.78, 0]) {
+                  size: [1.0, 1.5, 6.0], material: draco_crimson
+                }
+                box tail_5_draco_r place(base_box=tail_5_scythe_r, anchor=[-0.88, 0.88, 0], align=[0.78, -0.78, 0]) {
+                  size: [1.0, 1.5, 6.0], material: draco_crimson
+                }
+                box tail_5_crimson_core place(base_box=tail_5_seg, anchor=[0, 0.98, 0], align=[0, -0.72, 0]) {
+                  size: [3.0, 2.5, 7.0], material: draco_crimson, rotate: [12, 0, 0], blend_with: [tail_4_fur, tail_6_club]
+                }
+                plane tail_5_fur_l place(base_box=tail_5_crimson_core, anchor=[0.38, 0.92, 0], align=[0, -0.85, 0]) {
+                  size: [5.0, 7.5], normal: x, material: alabaster_fur, rotate: [8, 0, -16],
+                  edge: spikes(width=4, min_len=3, max_len=7, side=top, seed=137), layer: 2,
+                  blend_with: [tail_4_fur_l, tail_6_club]
+                }
+                plane tail_5_fur_r place(base_box=tail_5_crimson_core, anchor=[-0.38, 0.92, 0], align=[0, -0.85, 0]) {
+                  size: [5.0, 7.5], normal: x, material: alabaster_fur, rotate: [8, 0, 16],
+                  edge: spikes(width=4, min_len=3, max_len=7, side=top, seed=137), layer: 1,
+                  blend_with: [tail_4_fur_r, tail_6_club, tail_5_fur_l]
+                }
+
+                bone tail_6 attach(parent_box=tail_5_seg, anchor=[0, 0.05, -1], align=[0, 0, 1], seat=0.22) {
+                  rest_euler: [-8, 0, 0]
+                  box tail_6_club { size: [5.0, 4.5, 9.0], material: volcanic_armor }
+                  box tail_6_scythe_l place(base_box=tail_6_club, anchor=[0.96, 0.12, -0.15], align=[-0.65, 0, 0.45]) {
+                    size: [3.0, 2.5, 8.0], material: volcanic_armor, rotate: [10, 26, -12], blend_with: [tail_5_seg, tail_5_scythe_l, tail_tip_barb_l]
+                  }
+                  box tail_6_scythe_r place(base_box=tail_6_club, anchor=[-0.96, 0.12, -0.15], align=[0.65, 0, 0.45]) {
+                    size: [3.0, 2.5, 8.0], material: volcanic_armor, rotate: [10, -26, 12], blend_with: [tail_5_seg, tail_5_scythe_r, tail_tip_barb_r]
+                  }
+                  box tail_tip_barb_l place(base_box=tail_6_club, anchor=[0.68, 0.10, -0.92], align=[-0.35, 0, 0.72]) {
+                    size: [2.0, 2.5, 7.0], material: dark_silver, rotate: [6, 16, -8], blend_with: [tail_5_seg, tail_5_scythe_l]
+                  }
+                  box tail_tip_barb_r place(base_box=tail_6_club, anchor=[-0.68, 0.10, -0.92], align=[0.35, 0, 0.72]) {
+                    size: [2.0, 2.5, 7.0], material: dark_silver, rotate: [6, -16, 8], blend_with: [tail_5_seg, tail_5_scythe_r, tail_tip_barb_l]
+                  }
+                  box tail_tip_crimson_lance place(base_box=tail_6_club, anchor=[0, 0.88, -0.65], align=[0, -0.78, 0.55]) {
+                    size: [1.5, 2.5, 5.5], material: draco_crimson, rotate: [16, 0, 0], blend_with: [tail_tip_barb_l, tail_tip_barb_r]
+                  }
+                  plane tail_6_fur_l place(base_box=tail_6_club, anchor=[0.35, 0.94, 0], align=[0, -0.85, 0]) {
+                    size: [4.5, 7.0], normal: x, material: alabaster_fur, rotate: [10, 0, -16],
+                    edge: spikes(width=4, min_len=3, max_len=7, side=top, seed=149), layer: 1,
+                    blend_with: [tail_5_fur_l, tail_5_crimson_core, tail_tip_barb_l, tail_tip_crimson_lance]
+                  }
+                  plane tail_6_fur_r place(base_box=tail_6_club, anchor=[-0.35, 0.94, 0], align=[0, -0.85, 0]) {
+                    size: [4.5, 7.0], normal: x, material: alabaster_fur, rotate: [10, 0, 16],
+                    edge: spikes(width=4, min_len=3, max_len=7, side=top, seed=149), layer: 2,
+                    blend_with: [tail_5_fur_r, tail_5_crimson_core, tail_tip_barb_r, tail_tip_crimson_lance, tail_6_fur_l]
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+@materials {
+  obsidian_hide: process(family=keratin_scales, coat=scale_rows, roughness=0.56)
+  volcanic_armor: process(family=keratin_scales, coat=scale_rows, roughness=0.42)
+  stygian_slate: process(family=keratin_scales, coat=banded_limb, roughness=0.52)
+  dark_silver: process(family=brushed_metal, coat=striped, roughness=0.32)
+  ash_charcoal: process(family=weathered_stone, coat=plain, roughness=0.58)
+  alabaster_fur: process(family=woven_fabric, coat=striped, roughness=0.74)
+  ash_belly: process(family=patterned_skin, coat=plain, roughness=0.64)
+  crimson_talon: process(family=painted_metal, coat=striped, roughness=0.28)
+  maw_scarlet: process(family=patterned_skin, coat=plain, roughness=0.45)
+  ivory_fang: process(family=polymer_dielectric, coat=plain, roughness=0.26)
+  draco_crimson: process(family=thin_film_iridescence, coat=plain, roughness=0.16, emissive=0.96)
+}
+@style {
+  target_encoding: vanilla,
+  shade: banded(steps=5, direction=down, cluster=diagonal),
+  glow_bleed: 2
+}
+@stamps {
+  stamp draco_eye_glare on skull_core.east { at: [0.72, 0.35], size: [1.5, 1.0], color: draco_crimson, emissive: 0.96, mirror: true }
+  stamp throat_draco_vein on neck_throat_shield.down { at: [0.50, 0.28], size: [4.5, 1.0], rows: 3, spacing: 1.8, color: draco_crimson, emissive: 0.94 }
+  stamp chest_draco_ribs on chest_scute_front.down { at: [0.50, 0.30], size: [5.5, 1.0], rows: 2, spacing: 2.2, color: draco_crimson, emissive: 0.92 }
+  stamp sternum_draco_ribs on chest_scute_rear.down { at: [0.50, 0.32], size: [6.0, 1.0], rows: 2, spacing: 2.4, color: draco_crimson, emissive: 0.90 }
+  stamp waist_draco_ribs on waist_belly.down { at: [0.50, 0.35], size: [5.0, 1.0], rows: 2, spacing: 2.5, color: draco_crimson, emissive: 0.88 }
+  stamp bracer_draco_crack on bracer_front_shield.south { at: [0.50, 0.42], size: [2.0, 2.5], color: draco_crimson, emissive: 0.90, mirror: true }
+}
+@behavior {
+  spring ear_l { stiffness: 44, damping: 6 }
+  spring ear_r { stiffness: 44, damping: 6 }
+  spring draco_pylon_l { stiffness: 50, damping: 7 }
+  spring draco_pylon_r { stiffness: 50, damping: 7 }
+  spring tail_6 { stiffness: 38, damping: 5 }
+
+  // 1. Low predatory Hellwolf breathing, menacing head scan & barbed Dracophage tail sway
+  clip idle {
+    duration_s: 3.0, loop: true
+    key root.position { 0.0: [0, 0, 0], 0.75: [0, -0.5, 0], 1.5: [0, 0.35, 0], 2.25: [0, -0.5, 0], 3.0: [0, 0, 0], catmullrom }
+    key chest.rotation { 0.0: [0, 0, 0], 0.75: [2.8, 1.8, 0], 1.5: [-2.2, 0, 0], 2.25: [2.8, -1.8, 0], 3.0: [0, 0, 0], catmullrom }
+    key neck_1.rotation { 0.0: [0, 0, 0], 0.75: [-3, 7, 2], 1.5: [2, 0, 0], 2.25: [-3, -7, -2], 3.0: [0, 0, 0], catmullrom }
+    key head.rotation { 0.0: [0, 0, 0], 0.75: [4, 12, -5], 1.5: [-3, 0, 0], 2.25: [4, -12, 5], 3.0: [0, 0, 0], catmullrom }
+    key jaw.rotation { 0.0: [0, 0, 0], 1.5: [8, 0, 0], 3.0: [0, 0, 0], catmullrom }
+    track tail_1: wave(axis=y, amp_deg=9, freq_hz=0.3333, phase_deg=0)
+    track tail_2: wave(axis=y, amp_deg=12, freq_hz=0.3333, phase_deg=-35)
+    track tail_3: wave(axis=y, amp_deg=15, freq_hz=0.3333, phase_deg=-70)
+    track tail_4: wave(axis=y, amp_deg=17, freq_hz=0.3333, phase_deg=-105)
+    track tail_5: wave(axis=y, amp_deg=19, freq_hz=0.3333, phase_deg=-140)
+  }
+
+  // 2. Menacing low-slung Hellwolf prowl with heavy rolling volcanic shoulders
+  clip walk {
+    duration_s: 1.5, loop: true
+    key root.position { 0.0: [0, 0, 0], 0.38: [0, 1.0, 0], 0.75: [0, 0, 0], 1.12: [0, 1.0, 0], 1.5: [0, 0, 0], catmullrom }
+    key pelvis.rotation { 0.0: [0, -7, 3], 0.38: [2, 0, 0], 0.75: [0, 7, -3], 1.12: [2, 0, 0], 1.5: [0, -7, 3], catmullrom }
+    key chest.rotation { 0.0: [0, 9, -7], 0.38: [-2, 0, 0], 0.75: [0, -9, 7], 1.12: [-2, 0, 0], 1.5: [0, 9, -7], catmullrom }
+    key neck_1.rotation { 0.0: [0, -7, 4], 0.75: [0, 7, -4], 1.5: [0, -7, 4], catmullrom }
+    key head.rotation { 0.0: [3, -5, 3], 0.75: [3, 5, -3], 1.5: [3, -5, 3], catmullrom }
+    key fore_shoulder_l.rotation { 0.0: [-26, 0, 0], 0.38: [6, 0, 5], 0.75: [24, 0, 0], 1.12: [-10, 0, 6], 1.5: [-26, 0, 0], catmullrom }
+    key fore_arm_l.rotation { 0.0: [12, 0, 0], 0.38: [4, 0, 0], 0.75: [18, 0, 0], 1.12: [-26, 0, 0], 1.5: [12, 0, 0], catmullrom }
+    key fore_shoulder_r.rotation { 0.0: [24, 0, 0], 0.38: [-10, 0, 6], 0.75: [-26, 0, 0], 1.12: [6, 0, 5], 1.5: [24, 0, 0], catmullrom }
+    key fore_shoulder_r__fore_arm_l.rotation { 0.0: [18, 0, 0], 0.38: [-26, 0, 0], 0.75: [12, 0, 0], 1.12: [4, 0, 0], 1.5: [18, 0, 0], catmullrom }
+    key hind_thigh_l.rotation { 0.0: [22, 0, 0], 0.38: [-10, 0, 4], 0.75: [-24, 0, 0], 1.12: [6, 0, 0], 1.5: [22, 0, 0], catmullrom }
+    key hind_shin_l.rotation { 0.0: [-14, 0, 0], 0.38: [26, 0, 0], 0.75: [8, 0, 0], 1.12: [-6, 0, 0], 1.5: [-14, 0, 0], catmullrom }
+    key hind_thigh_r.rotation { 0.0: [-24, 0, 0], 0.38: [6, 0, 0], 0.75: [22, 0, 0], 1.12: [-10, 0, 4], 1.5: [-24, 0, 0], catmullrom }
+    key hind_thigh_r__hind_shin_l.rotation { 0.0: [8, 0, 0], 0.38: [-6, 0, 0], 0.75: [-14, 0, 0], 1.12: [26, 0, 0], 1.5: [8, 0, 0], catmullrom }
+    track tail_1: wave(axis=y, amp_deg=13, freq_hz=0.6667, phase_deg=0)
+    track tail_3: wave(axis=y, amp_deg=19, freq_hz=0.6667, phase_deg=-60)
+    track tail_5: wave(axis=y, amp_deg=24, freq_hz=0.6667, phase_deg=-120)
+  }
+
+  // 3. Bounding crimson-charged Hellwolf rotary sprint
+  clip run {
+    duration_s: 0.85, loop: true
+    key root.position { 0.0: [0, 1.5, 0], 0.21: [0, 6.0, 3.0], 0.43: [0, 0.5, 0], 0.64: [0, -1.4, -1.5], 0.85: [0, 1.5, 0], catmullrom }
+    key pelvis.rotation { 0.0: [-14, 0, 0], 0.21: [-20, 0, 0], 0.43: [10, 0, 0], 0.64: [18, 0, 0], 0.85: [-14, 0, 0], catmullrom }
+    key waist.rotation { 0.0: [-8, 0, 0], 0.21: [-14, 0, 0], 0.43: [10, 0, 0], 0.64: [15, 0, 0], 0.85: [-8, 0, 0], catmullrom }
+    key chest.rotation { 0.0: [-12, 0, 0], 0.21: [10, 0, 0], 0.43: [18, 0, 0], 0.64: [-8, 0, 0], 0.85: [-12, 0, 0], catmullrom }
+    key neck_1.rotation { 0.0: [14, 0, 0], 0.21: [-12, 0, 0], 0.43: [-18, 0, 0], 0.64: [10, 0, 0], 0.85: [14, 0, 0], catmullrom }
+    key fore_shoulder_l.rotation { 0.0: [-44, 0, 5], 0.26: [-18, 0, 0], 0.52: [38, 0, 0], 0.85: [-44, 0, 5], catmullrom }
+    key fore_arm_l.rotation { 0.0: [-20, 0, 0], 0.26: [12, 0, 0], 0.52: [30, 0, 0], 0.85: [-20, 0, 0], catmullrom }
+    key fore_shoulder_r.rotation { 0.0: [-32, 0, 5], 0.20: [-46, 0, 5], 0.48: [34, 0, 0], 0.85: [-32, 0, 5], catmullrom }
+    key fore_shoulder_r__fore_arm_l.rotation { 0.0: [-14, 0, 0], 0.20: [-22, 0, 0], 0.48: [30, 0, 0], 0.85: [-14, 0, 0], catmullrom }
+    key hind_thigh_l.rotation { 0.0: [38, 0, 0], 0.24: [44, 0, 0], 0.55: [-38, 0, 4], 0.85: [38, 0, 0], catmullrom }
+    key hind_shin_l.rotation { 0.0: [-24, 0, 0], 0.24: [20, 0, 0], 0.55: [34, 0, 0], 0.85: [-24, 0, 0], catmullrom }
+    key hind_thigh_r.rotation { 0.0: [30, 0, 0], 0.30: [42, 0, 0], 0.60: [-36, 0, 4], 0.85: [30, 0, 0], catmullrom }
+    key hind_thigh_r__hind_shin_l.rotation { 0.0: [-18, 0, 0], 0.30: [18, 0, 0], 0.60: [32, 0, 0], 0.85: [-18, 0, 0], catmullrom }
+    track tail_1: wave(axis=x, amp_deg=20, freq_hz=1.1765, phase_deg=0)
+    track tail_3: wave(axis=x, amp_deg=26, freq_hz=1.1765, phase_deg=-55)
+    track tail_5: wave(axis=x, amp_deg=30, freq_hz=1.1765, phase_deg=-110)
+  }
+
+  // 4. Stygian Hellwolf Dragon Roar — coils low, hurls hooked silver horns skyward, Dracophage pylons flare!
+  clip roar {
+    duration_s: 2.4, loop: false
+    key root.position { 0.0: [0, 0, 0], 0.45: [0, -3.0, -2.5], 0.95: [0, 3.5, 1.5], 1.70: [0, 2.8, 1.0], 2.4: [0, 0, 0], catmullrom }
+    key pelvis.rotation { 0.0: [0, 0, 0], 0.45: [14, 0, 0], 0.95: [-20, 0, 0], 1.70: [-16, 0, 0], 2.4: [0, 0, 0], catmullrom }
+    key waist.rotation { 0.0: [0, 0, 0], 0.45: [12, 0, 0], 0.95: [-18, 0, 0], 1.70: [-14, 0, 0], 2.4: [0, 0, 0], catmullrom }
+    key chest.rotation { 0.0: [0, 0, 0], 0.45: [16, 0, 0], 0.95: [-24, 0, 0], 1.32: [-22, 6, 0], 1.70: [-24, -6, 0], 2.4: [0, 0, 0], catmullrom }
+    key neck_1.rotation { 0.0: [0, 0, 0], 0.45: [20, 0, 0], 0.95: [-30, 0, 0], 1.32: [-28, 10, 0], 1.70: [-30, -10, 0], 2.4: [0, 0, 0], catmullrom }
+    key neck_2.rotation { 0.0: [0, 0, 0], 0.45: [14, 0, 0], 0.95: [-26, 0, 0], 1.70: [-24, 0, 0], 2.4: [0, 0, 0], catmullrom }
+    key head.rotation { 0.0: [0, 0, 0], 0.45: [18, 0, 0], 0.95: [-34, 0, 0], 1.32: [-32, 12, -8], 1.70: [-34, -12, 8], 2.4: [0, 0, 0], catmullrom }
+    key jaw.rotation { 0.0: [0, 0, 0], 0.45: [-6, 0, 0], 0.90: [44, 0, 0], 1.75: [42, 0, 0], 2.4: [0, 0, 0], catmullrom }
+    key draco_pylon_l.rotation { 0.0: [0, 0, 0], 0.95: [-18, 10, -22], 1.75: [-20, 10, -24], 2.4: [0, 0, 0], catmullrom }
+    key draco_pylon_r.rotation { 0.0: [0, 0, 0], 0.95: [-18, 10, -22], 1.75: [-20, 10, -24], 2.4: [0, 0, 0], catmullrom }
+    key fore_shoulder_l.rotation { 0.0: [0, 0, 0], 0.45: [20, 0, 12], 0.95: [-16, 0, 18], 1.70: [-14, 0, 18], 2.4: [0, 0, 0], catmullrom }
+    key fore_shoulder_r.rotation { 0.0: [0, 0, 0], 0.45: [20, 0, 12], 0.95: [-16, 0, 18], 1.70: [-14, 0, 18], 2.4: [0, 0, 0], catmullrom }
+    key tail_2.rotation { 0.0: [0, 0, 0], 0.95: [20, 0, 0], 1.70: [24, 14, 0], 2.4: [0, 0, 0], catmullrom }
+    key tail_4.rotation { 0.0: [0, 0, 0], 0.95: [24, 0, 0], 1.70: [28, -16, 0], 2.4: [0, 0, 0], catmullrom }
+  }
+
+  // 5. SIGNATURE GIF CLIP: Airborne Acrobatic Dracophage Backflip Barbed Tail Slam!
+  clip dracophage_backflip_slam {
+    duration_s: 2.1, loop: false
+    key root.position { 0.0: [0, 0, 0], 0.34: [0, -4.0, -3.5], 0.75: [0, 24.0, 4.5], 1.18: [0, 14.5, 12.5], 1.48: [0, -2.5, 16.5], 2.1: [0, 0, 0], catmullrom }
+    key pelvis.rotation { 0.0: [0, 0, 0], 0.34: [20, 0, 0], 0.75: [-78, 32, 24], 1.18: [58, -16, -12], 1.48: [26, 0, 0], 2.1: [0, 0, 0], catmullrom }
+    key waist.rotation { 0.0: [0, 0, 0], 0.34: [14, 0, 0], 0.75: [-26, 16, 8], 1.18: [24, 0, 0], 1.48: [12, 0, 0], 2.1: [0, 0, 0], catmullrom }
+    key chest.rotation { 0.0: [0, 0, 0], 0.34: [18, 0, 0], 0.75: [-28, 22, 14], 1.18: [26, -10, 0], 1.48: [16, 0, 0], 2.1: [0, 0, 0], catmullrom }
+    key neck_1.rotation { 0.0: [0, 0, 0], 0.75: [-24, 12, 0], 1.18: [24, 0, 0], 2.1: [0, 0, 0], catmullrom }
+    key jaw.rotation { 0.0: [0, 0, 0], 0.75: [42, 0, 0], 1.48: [14, 0, 0], 2.1: [0, 0, 0], catmullrom }
+    key fore_shoulder_l.rotation { 0.0: [0, 0, 0], 0.34: [28, 0, 10], 0.75: [-54, 0, 28], 1.18: [-22, 0, 16], 1.48: [18, 0, 6], 2.1: [0, 0, 0], catmullrom }
+    key fore_shoulder_r.rotation { 0.0: [0, 0, 0], 0.34: [28, 0, 10], 0.75: [-54, 0, 28], 1.18: [-22, 0, 16], 1.48: [18, 0, 6], 2.1: [0, 0, 0], catmullrom }
+    key hind_thigh_l.rotation { 0.0: [0, 0, 0], 0.34: [-26, 0, 6], 0.75: [44, 0, 18], 1.18: [-24, 0, 10], 1.48: [-16, 0, 4], 2.1: [0, 0, 0], catmullrom }
+    key hind_thigh_r.rotation { 0.0: [0, 0, 0], 0.34: [-26, 0, 6], 0.75: [44, 0, 18], 1.18: [-24, 0, 10], 1.48: [-16, 0, 4], 2.1: [0, 0, 0], catmullrom }
+    // Barbed Dracophage tail club whips overhead and crashes violently into Y=0 in front!
+    key tail_1.rotation { 0.0: [0, 0, 0], 0.34: [-20, 0, 0], 0.75: [42, 14, 0], 1.18: [-46, 0, 0], 1.48: [-40, 0, 0], 2.1: [0, 0, 0], catmullrom }
+    key tail_2.rotation { 0.0: [0, 0, 0], 0.34: [-18, 0, 0], 0.75: [40, 12, 0], 1.18: [-44, 0, 0], 1.48: [-38, 0, 0], 2.1: [0, 0, 0], catmullrom }
+    key tail_3.rotation { 0.0: [0, 0, 0], 0.34: [-16, 0, 0], 0.75: [38, 10, 0], 1.18: [-42, 0, 0], 1.48: [-36, 0, 0], 2.1: [0, 0, 0], catmullrom }
+    key tail_4.rotation { 0.0: [0, 0, 0], 0.34: [-14, 0, 0], 0.75: [34, 8, 0], 1.18: [-40, 0, 0], 1.48: [-34, 0, 0], 2.1: [0, 0, 0], catmullrom }
+    key tail_5.rotation { 0.0: [0, 0, 0], 0.34: [-12, 0, 0], 0.75: [28, 6, 0], 1.18: [-34, 0, 0], 1.48: [-28, 0, 0], 2.1: [0, 0, 0], catmullrom }
+  }
+
+  // 6. Advancing 3-Hit Crimson Claw Dragon-Lightning Crush Combo!
+  clip crimson_claw_triple_crush {
+    duration_s: 2.6, loop: false
+    key root.position { 0.0: [0, 0, 0], 0.38: [-2.0, 5.5, 2.5], 0.65: [1.5, -2.5, 7.0], 1.08: [2.5, 6.0, 9.5], 1.36: [-1.5, -3.0, 14.5], 1.78: [0, 8.5, 16.0], 2.08: [0, -3.5, 21.0], 2.6: [0, 0, 0], catmullrom }
+    key pelvis.rotation { 0.0: [0, 0, 0], 0.38: [-22, -14, 8], 0.65: [14, 16, -6], 1.08: [-24, 16, -8], 1.36: [16, -16, 6], 1.78: [-28, 0, 0], 2.08: [22, 0, 0], 2.6: [0, 0, 0], catmullrom }
+    key chest.rotation { 0.0: [0, 0, 0], 0.38: [-28, -24, 16], 0.65: [22, 26, -14], 1.08: [-30, 26, -16], 1.36: [24, -26, 14], 1.78: [-36, 0, 0], 2.08: [28, 0, 0], 2.6: [0, 0, 0], catmullrom }
+    key jaw.rotation { 0.0: [0, 0, 0], 0.38: [28, 0, 0], 1.08: [32, 0, 0], 1.78: [44, 0, 0], 2.08: [12, 0, 0], 2.6: [0, 0, 0], catmullrom }
+    key fore_shoulder_l.rotation { 0.0: [0, 0, 0], 0.38: [-70, -16, 28], 0.65: [20, 8, -8], 1.08: [24, 0, 10], 1.78: [-74, 0, 30], 2.08: [22, 0, -6], 2.6: [0, 0, 0], catmullrom }
+    key fore_arm_l.rotation { 0.0: [0, 0, 0], 0.38: [-28, 0, 0], 0.65: [26, 0, 0], 1.78: [-32, 0, 0], 2.08: [28, 0, 0], 2.6: [0, 0, 0], catmullrom }
+    key fore_shoulder_r.rotation { 0.0: [0, 0, 0], 0.65: [24, 0, 10], 1.08: [-72, -18, 30], 1.36: [22, 8, -10], 1.78: [-74, 0, 30], 2.08: [22, 0, -6], 2.6: [0, 0, 0], catmullrom }
+    key fore_shoulder_r__fore_arm_l.rotation { 0.0: [0, 0, 0], 1.08: [-30, 0, 0], 1.36: [26, 0, 0], 1.78: [-32, 0, 0], 2.08: [28, 0, 0], 2.6: [0, 0, 0], catmullrom }
+  }
+
+  // 7. Dracophage Homing Dragon-Orb Summoning Howl
+  clip dracophage_homing_howl {
+    duration_s: 2.8, loop: false
+    key root.position { 0.0: [0, 0, 0], 0.55: [0, -2.5, -2.0], 1.15: [0, 2.5, 0], 2.15: [0, 2.8, 0], 2.8: [0, 0, 0], catmullrom }
+    key pelvis.rotation { 0.0: [0, 0, 0], 0.55: [16, 0, 0], 1.15: [-16, 0, 0], 2.15: [-16, 0, 0], 2.8: [0, 0, 0], catmullrom }
+    key chest.rotation { 0.0: [0, 0, 0], 0.55: [18, 0, 0], 1.15: [-28, 0, 0], 1.65: [-30, 0, 0], 2.15: [-28, 0, 0], 2.8: [0, 0, 0], catmullrom }
+    key neck_1.rotation { 0.0: [0, 0, 0], 0.55: [20, 0, 0], 1.15: [-36, 0, 0], 2.15: [-36, 0, 0], 2.8: [0, 0, 0], catmullrom }
+    key neck_2.rotation { 0.0: [0, 0, 0], 0.55: [14, 0, 0], 1.15: [-28, 0, 0], 2.15: [-28, 0, 0], 2.8: [0, 0, 0], catmullrom }
+    key head.rotation { 0.0: [0, 0, 0], 0.55: [18, 0, 0], 1.15: [-38, 0, 0], 1.65: [-40, 6, 0], 2.15: [-38, -6, 0], 2.8: [0, 0, 0], catmullrom }
+    key jaw.rotation { 0.0: [0, 0, 0], 0.55: [-4, 0, 0], 1.10: [38, 0, 0], 2.15: [40, 0, 0], 2.8: [0, 0, 0], catmullrom }
+    key draco_pylon_l.rotation { 0.0: [0, 0, 0], 1.10: [-26, 14, -28], 1.65: [-30, 16, -32], 2.15: [-26, 14, -28], 2.8: [0, 0, 0], catmullrom }
+    key draco_pylon_r.rotation { 0.0: [0, 0, 0], 1.10: [-26, 14, -28], 1.65: [-30, 16, -32], 2.15: [-26, 14, -28], 2.8: [0, 0, 0], catmullrom }
+    key tail_2.rotation { 0.0: [0, 0, 0], 1.15: [22, 0, 0], 2.15: [26, 0, 0], 2.8: [0, 0, 0], catmullrom }
+    key tail_4.rotation { 0.0: [0, 0, 0], 1.15: [26, 0, 0], 2.15: [30, 0, 0], 2.8: [0, 0, 0], catmullrom }
+  }
+
+  // 8. Iceborne Signature Spiraling Aerial Corkscrew Dragon Lunge!
+  clip dragon_corkscrew_lunge {
+    duration_s: 1.6, loop: false
+    key root.position { 0.0: [0, 0, 0], 0.36: [-3.0, -3.0, -5.0], 0.80: [2.5, 11.5, 18.0], 1.15: [0, -1.5, 22.0], 1.6: [0, 0, 0], catmullrom }
+    key pelvis.rotation { 0.0: [0, 0, 0], 0.36: [14, -24, -18], 0.80: [-10, 20, 108], 1.15: [12, 6, 20], 1.6: [0, 0, 0], catmullrom }
+    key chest.rotation { 0.0: [0, 0, 0], 0.36: [18, -28, -24], 0.80: [-14, 24, 46], 1.15: [14, 8, 10], 1.6: [0, 0, 0], catmullrom }
+    key head.rotation { 0.0: [0, 0, 0], 0.36: [-16, 20, 0], 0.80: [12, -14, -26], 1.6: [0, 0, 0], catmullrom }
+    key fore_shoulder_l.rotation { 0.0: [0, 0, 0], 0.80: [38, 0, -18], 1.6: [0, 0, 0], catmullrom }
+    key fore_shoulder_r.rotation { 0.0: [0, 0, 0], 0.80: [-46, 0, 24], 1.6: [0, 0, 0], catmullrom }
+  }
+
+  // 9. Ferocious Lunging Hellwolf Fang Snap & Upward Horn Gore
+  clip hellwolf_fang_ripper {
+    duration_s: 1.5, loop: false
+    key root.position { 0.0: [0, 0, 0], 0.35: [0, -3.5, -5.5], 0.70: [0, 2.0, 15.0], 1.02: [0, 4.5, 16.5], 1.5: [0, 0, 0], catmullrom }
+    key pelvis.rotation { 0.0: [0, 0, 0], 0.35: [16, -8, 0], 0.70: [-8, 10, 0], 1.02: [-18, 0, 0], 1.5: [0, 0, 0], catmullrom }
+    key chest.rotation { 0.0: [0, 0, 0], 0.35: [20, -14, -6], 0.70: [10, 14, 8], 1.02: [-24, 0, 0], 1.5: [0, 0, 0], catmullrom }
+    key neck_1.rotation { 0.0: [0, 0, 0], 0.35: [-14, -18, 0], 0.70: [16, 12, -10], 1.02: [-34, 0, 0], 1.5: [0, 0, 0], catmullrom }
+    key head.rotation { 0.0: [0, 0, 0], 0.35: [-18, -14, -18], 0.70: [20, 10, 18], 1.02: [-36, 0, 0], 1.5: [0, 0, 0], catmullrom }
+    key jaw.rotation { 0.0: [0, 0, 0], 0.35: [42, 0, 0], 0.70: [-6, 0, 0], 1.02: [32, 0, 0], 1.5: [0, 0, 0], catmullrom }
+    key fore_shoulder_l.rotation { 0.0: [0, 0, 0], 0.35: [26, 0, 8], 0.70: [-38, 0, 12], 1.02: [-18, 0, 16], 1.5: [0, 0, 0], catmullrom }
+    key fore_shoulder_r.rotation { 0.0: [0, 0, 0], 0.35: [26, 0, 8], 0.70: [-28, 0, 12], 1.02: [-18, 0, 16], 1.5: [0, 0, 0], catmullrom }
+  }
+
+  // 10. Sweeping Barbed Dracophage Tail Whirlwind Cleave
+  clip barbed_tail_whirlwind {
+    duration_s: 1.7, loop: false
+    key root.position { 0.0: [0, 0, 0], 0.42: [-3.0, -2.0, -2.5], 0.90: [4.0, 3.0, 4.5], 1.7: [0, 0, 0], catmullrom }
+    key pelvis.rotation { 0.0: [0, 0, 0], 0.42: [10, -54, -8], 0.90: [-10, 76, 12], 1.28: [0, 44, 4], 1.7: [0, 0, 0], catmullrom }
+    key waist.rotation { 0.0: [0, 0, 0], 0.42: [0, -26, 0], 0.90: [0, 36, 0], 1.7: [0, 0, 0], catmullrom }
+    key chest.rotation { 0.0: [0, 0, 0], 0.42: [8, -20, 0], 0.90: [10, 26, -10], 1.7: [0, 0, 0], catmullrom }
+    key head.rotation { 0.0: [0, 0, 0], 0.42: [0, 34, 0], 0.90: [0, -38, 0], 1.7: [0, 0, 0], catmullrom }
+    key tail_1.rotation { 0.0: [0, 0, 0], 0.42: [-12, -36, 0], 0.86: [-16, 46, 0], 1.24: [-6, 20, 0], 1.7: [0, 0, 0], catmullrom }
+    key tail_2.rotation { 0.0: [0, 0, 0], 0.42: [-10, -34, 0], 0.88: [-14, 44, 0], 1.26: [-4, 18, 0], 1.7: [0, 0, 0], catmullrom }
+    key tail_3.rotation { 0.0: [0, 0, 0], 0.42: [-8, -32, 0], 0.90: [-12, 42, 0], 1.28: [-4, 16, 0], 1.7: [0, 0, 0], catmullrom }
+    key tail_4.rotation { 0.0: [0, 0, 0], 0.42: [-6, -30, 0], 0.92: [-10, 38, 0], 1.30: [-2, 14, 0], 1.7: [0, 0, 0], catmullrom }
+    key tail_5.rotation { 0.0: [0, 0, 0], 0.42: [-4, -26, 0], 0.94: [-8, 34, 0], 1.32: [0, 12, 0], 1.7: [0, 0, 0], catmullrom }
+  }
+
+  // 11. Ultra-Charged Stygian Dracophage Crimson Nova Eruption
+  clip stygian_supernova_discharge {
+    duration_s: 2.3, loop: false
+    key root.position { 0.0: [0, 0, 0], 0.58: [0, -4.0, 0], 1.00: [0, 9.5, 0], 1.52: [0, 7.0, 0], 1.85: [0, -1.8, 0], 2.3: [0, 0, 0], catmullrom }
+    key pelvis.rotation { 0.0: [0, 0, 0], 0.58: [18, 0, 0], 1.00: [-18, 0, 0], 1.52: [-14, 0, 0], 2.3: [0, 0, 0], catmullrom }
+    key chest.rotation { 0.0: [0, 0, 0], 0.58: [24, 0, 0], 1.00: [-30, 0, 0], 1.26: [-28, 7, 0], 1.52: [-30, -7, 0], 2.3: [0, 0, 0], catmullrom }
+    key neck_1.rotation { 0.0: [0, 0, 0], 0.58: [26, 0, 0], 1.00: [-32, 0, 0], 1.52: [-30, 0, 0], 2.3: [0, 0, 0], catmullrom }
+    key head.rotation { 0.0: [0, 0, 0], 0.58: [22, 0, 0], 1.00: [-34, 0, 0], 1.52: [-32, 0, 0], 2.3: [0, 0, 0], catmullrom }
+    key jaw.rotation { 0.0: [0, 0, 0], 0.58: [-6, 0, 0], 1.00: [46, 0, 0], 1.60: [42, 0, 0], 2.3: [0, 0, 0], catmullrom }
+    key draco_pylon_l.rotation { 0.0: [0, 0, 0], 0.58: [14, 0, 10], 1.00: [-30, 18, -34], 1.60: [-28, 18, -32], 2.3: [0, 0, 0], catmullrom }
+    key draco_pylon_r.rotation { 0.0: [0, 0, 0], 0.58: [14, 0, 10], 1.00: [-30, 18, -34], 1.60: [-28, 18, -32], 2.3: [0, 0, 0], catmullrom }
+    key fore_shoulder_l.rotation { 0.0: [0, 0, 0], 0.58: [26, 0, -8], 1.00: [-30, 0, 36], 1.52: [-26, 0, 34], 2.3: [0, 0, 0], catmullrom }
+    key fore_shoulder_r.rotation { 0.0: [0, 0, 0], 0.58: [26, 0, -8], 1.00: [-30, 0, 36], 1.52: [-26, 0, 34], 2.3: [0, 0, 0], catmullrom }
+    key hind_thigh_l.rotation { 0.0: [0, 0, 0], 0.58: [-24, 0, -6], 1.00: [28, 0, 28], 1.52: [24, 0, 26], 2.3: [0, 0, 0], catmullrom }
+    key hind_thigh_r.rotation { 0.0: [0, 0, 0], 0.58: [-24, 0, -6], 1.00: [28, 0, 28], 1.52: [24, 0, 26], 2.3: [0, 0, 0], catmullrom }
+    key tail_2.rotation { 0.0: [0, 0, 0], 0.58: [-20, 0, 0], 1.00: [30, 0, 0], 1.52: [28, 0, 0], 2.3: [0, 0, 0], catmullrom }
+    key tail_4.rotation { 0.0: [0, 0, 0], 0.58: [-20, 0, 0], 1.00: [32, 0, 0], 1.52: [30, 0, 0], 2.3: [0, 0, 0], catmullrom }
+  }
+
+  // 12. Low Snarling Hellwolf Side-Stalk & Crimson Talon Ground Scrape
+  clip predatory_stalk_taunt {
+    duration_s: 2.0, loop: false
+    key root.position { 0.0: [0, 0, 0], 0.55: [3.0, -1.2, 0], 1.35: [-2.5, -0.8, 0], 2.0: [0, 0, 0], catmullrom }
+    key chest.rotation { 0.0: [0, 0, 0], 0.55: [8, 18, -10], 1.35: [6, -16, 10], 2.0: [0, 0, 0], catmullrom }
+    key neck_1.rotation { 0.0: [0, 0, 0], 0.55: [-8, 20, 14], 1.35: [-6, -14, -12], 2.0: [0, 0, 0], catmullrom }
+    key head.rotation { 0.0: [0, 0, 0], 0.55: [10, 18, -28], 1.05: [12, 20, -30], 1.45: [-6, -16, 20], 2.0: [0, 0, 0], catmullrom }
+    key jaw.rotation { 0.0: [0, 0, 0], 0.55: [20, 0, 0], 1.35: [26, 0, 0], 2.0: [0, 0, 0], catmullrom }
+    key fore_shoulder_l.rotation { 0.0: [0, 0, 0], 0.45: [-30, 0, 14], 0.85: [24, 0, 4], 1.25: [-20, 0, 12], 1.60: [18, 0, 4], 2.0: [0, 0, 0], catmullrom }
+    key fore_arm_l.rotation { 0.0: [0, 0, 0], 0.45: [-24, 0, 0], 0.85: [20, 0, 0], 1.25: [-18, 0, 0], 2.0: [0, 0, 0], catmullrom }
+  }
+}
+@controller {
+  initial: idle
+  idle -> walk when speed > 0.15, blend 0.20
+  walk -> run when speed > 0.55, blend 0.18
+  run -> walk when speed <= 0.45, blend 0.22
+  walk -> idle when speed <= 0.08, blend 0.25
+  idle -> roar when enraged > 0.5, blend 0.15
+  roar -> idle when enraged <= 0.5, blend 0.25
+}
