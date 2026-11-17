@@ -441,6 +441,40 @@ def _serialize_behavior_animations(
             "animation_length": round(float(clip.duration_s), 4),
             "bones": bones_payload,
         }
+        if getattr(clip, "effects", ()):
+            from synccraft.kinematics.musculoskeletal import resolve_clip_effect_events
+
+            eff_events = resolve_clip_effect_events(program, clip)
+            sound_fx: dict[str, Any] = {}
+            particle_fx: dict[str, Any] = {}
+            timeline_fx: dict[str, Any] = {}
+            for ev in eff_events:
+                tk = _fmt_time_key(float(ev["time_s"]))
+                if ev.get("sound"):
+                    entry_s = {"effect": ev["sound"]}
+                    if tk in sound_fx:
+                        cur_s = sound_fx[tk]
+                        sound_fx[tk] = [*cur_s, entry_s] if isinstance(cur_s, list) else [cur_s, entry_s]
+                    else:
+                        sound_fx[tk] = entry_s
+                if ev.get("particle"):
+                    entry_p: dict[str, Any] = {"effect": ev["particle"]}
+                    if ev.get("locator"):
+                        entry_p["locator"] = ev["locator"]
+                    if tk in particle_fx:
+                        cur_p = particle_fx[tk]
+                        particle_fx[tk] = [*cur_p, entry_p] if isinstance(cur_p, list) else [cur_p, entry_p]
+                    else:
+                        particle_fx[tk] = entry_p
+                if ev.get("instruction"):
+                    cur_i = timeline_fx.get(tk, [])
+                    timeline_fx[tk] = [*cur_i, f"{ev['instruction']};"]
+            if sound_fx:
+                clip_entry["sound_effects"] = sound_fx
+            if particle_fx:
+                clip_entry["particle_effects"] = particle_fx
+            if timeline_fx:
+                clip_entry["timeline"] = timeline_fx
         if samples and any(abs(float(c)) > 1e-6 for c in getattr(samples[0], "root_motion_velocity", (0.0, 0.0, 0.0))):
             rm_v = samples[0].root_motion_velocity
             upb = float(getattr(program.meta, "units_per_block", 16))

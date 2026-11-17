@@ -72,6 +72,14 @@ from .trajectory_dataset import (
     evaluate_world_capability_benchmark,
     score_world_capability_completion,
 )
+from .proposer_tasks import (
+    PROPOSER_TASK_TYPES,
+    ProposerTaskRecord,
+    build_proposer_supervision_dataset,
+    evaluate_gate_d_proposer,
+    style_phrase_to_gait_preset,
+    verify_body_plan_and_author_split_isolation,
+)
 from .transitions import (
     ActivateBehaviorStateAction,
     ApplyRubbingAction,
@@ -118,7 +126,9 @@ __all__ = [
     "LicenseGateError",
     "MaterialHypothesis",
     "NoOpEnvironmentAction",
+    "PROPOSER_TASK_TYPES",
     "ProgressiveStageRecord",
+    "ProposerTaskRecord",
     "RawSourceRenderBundle",
     "RepackUVAction",
     "SetLightingAction",
@@ -139,6 +149,7 @@ __all__ = [
     "build_modular_assembly_supervision_suite",
     "build_modular_sculpted_dragon_v4_world",
     "build_progressive_from_scratch_trajectory",
+    "build_proposer_supervision_dataset",
     "build_quarantined_research_nc_dataset",
     "build_sculpted_elder_wyvern_world",
     "build_unlabeled_workspace_provenance",
@@ -148,6 +159,7 @@ __all__ = [
     "decompile_bbmodel_animations_to_behavior",
     "decompile_bedrock_animation_to_behavior",
     "enhance_artist_project_step",
+    "evaluate_gate_d_proposer",
     "evaluate_matched_budget_world_baselines",
     "evaluate_modular_assembly_world_tasks",
     "evaluate_world_capability_benchmark",
@@ -167,5 +179,7 @@ __all__ = [
     "run_seven_interventions_suite",
     "score_world_capability_completion",
     "step_world",
+    "style_phrase_to_gait_preset",
     "verify_asset_provenance",
+    "verify_body_plan_and_author_split_isolation",
 ]

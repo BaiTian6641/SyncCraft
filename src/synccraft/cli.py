@@ -108,6 +108,12 @@ def main(argv=None):
     compile_parser.add_argument("--allow-audit-failures", action="store_true")
     gate = subs.add_parser("gate-g2", help="calculate the conditional refiner branch from recorded evidence")
     gate.add_argument("evidence", type=Path)
+    bb_srv = subs.add_parser(
+        "serve-blockbench",
+        help="run the 127.0.0.1 HTTP bridge for the SyncCraft Blockbench 5 plugin",
+    )
+    bb_srv.add_argument("--host", default="127.0.0.1")
+    bb_srv.add_argument("--port", type=int, default=18765)
     args = parser.parse_args(argv)
     try:
         if args.command == "doctor":
@@ -135,6 +141,10 @@ def main(argv=None):
             result = decide_gate(json.loads(args.evidence.read_text(encoding="utf-8")))
             print(_json(result))
             return 2 if result["decision"] == "blocked" else 0
+        elif args.command == "serve-blockbench":
+            from synccraft.backends.blockbench_plugin_bridge import serve_blockbench_bridge
+            serve_blockbench_bridge(host=args.host, port=args.port)
+            return 0
         return 0
     except (ValueError, OSError, NotImplementedError, RecursionError) as error:
         print(_json({"error": type(error).__name__, "message": str(error)}), file=sys.stderr)

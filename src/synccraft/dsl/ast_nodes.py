@@ -616,6 +616,30 @@ class GaitDecl:
 
 
 @dataclass(frozen=True)
+class ClipLayerDecl:
+    """Additive secondary motion layer referencing another @behavior clip (ADR 0013)."""
+
+    source_clip: str
+    weight: float = 1.0
+
+
+@dataclass(frozen=True)
+class EffectTriggerDecl:
+    """Audio, particle, or custom instruction keyframe trigger in a @behavior clip (ADR 0013).
+
+    ``trigger`` is either ``"time"`` (evaluated at ``time_s``) or ``"touchdown"`` (expanded
+    automatically at each limb stance touchdown in a ``gait`` clip).
+    """
+
+    trigger: str = "time"
+    time_s: float = 0.0
+    sound: str | None = None
+    particle: str | None = None
+    locator: str | None = None
+    instruction: str | None = None
+
+
+@dataclass(frozen=True)
 class ClipDecl:
     """Named multi-channel biomechanical/mechanical/keyframe/gait animation clip in @behavior."""
 
@@ -628,6 +652,8 @@ class ClipDecl:
     keyframes: tuple[KeyframeTrackDecl, ...] = ()
     slide_drives: tuple[SlideDriveDecl, ...] = ()
     gaits: tuple[GaitDecl, ...] = ()
+    layers: tuple[ClipLayerDecl, ...] = ()
+    effects: tuple[EffectTriggerDecl, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1477,10 +1503,28 @@ def validate_program(program: Program) -> Program:
                 and not clip.keyframes
                 and not clip.slide_drives
                 and not clip.gaits
+                and not getattr(clip, "layers", ())
             ):
                 raise DSLValidationError(
-                    f"clip {clip.name}: must contain at least one gait, track, slide, key, muscle_drive, or ik_drive"
+                    f"clip {clip.name}: must contain at least one gait, layer, track, slide, key, muscle_drive, or ik_drive"
                 )
+            for lyr in getattr(clip, "layers", ()):
+                if not isinstance(lyr, ClipLayerDecl):
+                    raise DSLValidationError("layers must contain ClipLayerDecl objects")
+                if not _valid_ident(lyr.source_clip):
+                    raise DSLValidationError(f"clip {clip.name}: invalid layer source_clip {lyr.source_clip!r}")
+                if not _finite_number(lyr.weight) or not (0.0 <= float(lyr.weight) <= 2.0):
+                    raise DSLValidationError(f"clip {clip.name}: layer weight must lie in [0.0, 2.0]")
+            for eff in getattr(clip, "effects", ()):
+                if not isinstance(eff, EffectTriggerDecl):
+                    raise DSLValidationError("effects must contain EffectTriggerDecl objects")
+                if eff.trigger not in ("time", "touchdown"):
+                    raise DSLValidationError(f"clip {clip.name}: effect trigger must be 'time' or 'touchdown'")
+                if eff.trigger == "time":
+                    if not _finite_number(eff.time_s) or eff.time_s < -1e-6 or eff.time_s > clip.duration_s + 1e-4:
+                        raise DSLValidationError(f"clip {clip.name}: effect time_s must lie in [0, duration_s]")
+                if not any((eff.sound, eff.particle, eff.instruction)):
+                    raise DSLValidationError(f"clip {clip.name}: effect must declare sound, particle, or instruction")
             for gd in clip.gaits:
                 if not isinstance(gd, GaitDecl):
                     raise DSLValidationError("gaits must contain GaitDecl objects")
@@ -1650,6 +1694,31 @@ def validate_program(program: Program) -> Program:
                     raise DSLValidationError(f"clip {clip.name}: ik_drive stride must lie in [0, 24]")
                 if not _finite_number(ikd.lift) or not (0.0 <= ikd.lift <= 16.0) or not _finite_number(ikd.phase_deg):
                     raise DSLValidationError(f"clip {clip.name}: invalid ik_drive lift or phase_deg")
+        clip_by_name = {c.name: c for c in bdecl.clips}
+        for clip in bdecl.clips:
+            for lyr in getattr(clip, "layers", ()):
+                if lyr.source_clip not in clip_by_name:
+                    raise DSLValidationError(
+                        f"clip {clip.name}: layer references undeclared clip {lyr.source_clip!r}"
+                    )
+        # Reject cyclic clip layer graphs
+        visiting_clips: set[str] = set()
+        visited_clips: set[str] = set()
+
+        def _dfs_clip_layers(cname: str) -> None:
+            if cname in visited_clips:
+                return
+            if cname in visiting_clips:
+                raise DSLValidationError(f"Cyclic clip layer dependency involving {cname!r}")
+            visiting_clips.add(cname)
+            for lyr_ref in getattr(clip_by_name[cname], "layers", ()):
+                _dfs_clip_layers(lyr_ref.source_clip)
+            visiting_clips.remove(cname)
+            visited_clips.add(cname)
+
+        for cname_k in clip_by_name:
+            _dfs_clip_layers(cname_k)
+
         for st in bdecl.states:
             if not isinstance(st, BehaviorStateDecl):
                 raise DSLValidationError("states must contain BehaviorStateDecl objects")

@@ -1,0 +1,14 @@
+{
+  "name": "blockbench-synccraft-assistant",
+  "version": "0.4.1",
+  "description": "Blockbench 5 plugin connecting to SyncCraft's 127.0.0.1 Python bridge for verified locomotion, zero-ML motion audits, retargeting, and non-destructive painted texture layers.",
+  "main": "synccraft_assistant.js",
+  "license": "Apache-2.0",
+  "keywords": [
+    "blockbench",
+    "minecraft",
+    "synccraft",
+    "animation",
+    "pixel-art"
+  ]
+}

@@ -201,6 +201,7 @@ def evaluate_gait_clip(
     from synccraft.data_gen.ik_motion_templates import solve_n_bone_ik
     from synccraft.kinematics.musculoskeletal import (
         BehaviorFrameSample,
+        _batch_sample_clip_layer_deltas,
         _clamp_pose_vec,
         _collect_expanded_joint_limits,
         _evaluate_track_angle,
@@ -247,6 +248,13 @@ def evaluate_gait_clip(
     axis_idx = {"x": 0, "y": 1, "z": 2}
     root_bone_name = rest_scene.bones[0].name
 
+    # Pre-batch secondary motion `layers` once across all phases
+    all_times_s = [float(p) * float(clip.duration_s) for p in phases]
+    batched_layers = [
+        _batch_sample_clip_layer_deltas(program, lyr.source_clip, all_times_s, float(lyr.weight), parent_clip=clip)
+        for lyr in getattr(clip, "layers", ())
+    ]
+
     samples: list[BehaviorFrameSample] = []
     for f_idx, phi_raw in enumerate(phases):
         phi_clip = float(phi_raw)
@@ -289,6 +297,16 @@ def evaluate_gait_clip(
             elif kf.channel == "scale":
                 prev_s = frame_scale_factors.get(kf.bone, (1.0, 1.0, 1.0))
                 frame_scale_factors[kf.bone] = (prev_s[0] * kv[0], prev_s[1] * kv[1], prev_s[2] * kv[2])
+
+        # Apply additive secondary motion layers BEFORE world limb IK so feet stay planted (< 0.02u slip)
+        for lyr_batch in batched_layers:
+            l_eul, l_pos = lyr_batch[f_idx]
+            for lb_n, lv in l_eul.items():
+                vec = pose_map.setdefault(lb_n, np.zeros(3, dtype=np.float64))
+                vec += np.asarray(lv, dtype=np.float64)
+            for lb_n, lpv in l_pos.items():
+                prev_p = frame_pos_deltas.get(lb_n, (0.0, 0.0, 0.0))
+                frame_pos_deltas[lb_n] = (prev_p[0] + lpv[0], prev_p[1] + lpv[1], prev_p[2] + lpv[2])
 
         # Root / spine pitch & lateral S-wave (scaled safely within joint_limits)
         two_pi = 2.0 * math.pi * cyc_phi

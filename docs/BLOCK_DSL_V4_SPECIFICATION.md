@@ -142,3 +142,30 @@ A `plane` has zero thickness along its `normal` axis and takes the **remaining t
 
 - **Plane Alpha Cut-Outs (`edge`)**: `ragged`, `spikes`, `drip`, `scallop`, and `triangle_bay` bake binary `{0, 255}` cut-out alpha onto `plane` UV islands; `render_world_observation` performs order-independent alpha-tested (`A >= 128`) ray-OBB traversal so cut-out silhouettes and membrane holes reveal geometry behind them.
 - **Banded Cel Shading (`shade: banded(...)`)**: Centers discrete OKLCH value bands directly on `palette.base_lch` (preventing unwanted darkening), adds stepped diagonal pixel clusters, 1-px top highlight and bottom contact-shadow rows, and optional `glow_bleed: 1..6` px around emissive features while keeping physical GGX (`shade: physical`, default) available.
+
+---
+
+## 7. Additive Secondary Motion `layer` & Stance-Touchdown `effect` Triggers (`ADR 0013`)
+
+```blockdsl
+@behavior {
+  clip breathe {
+    duration_s: 2.4
+    track lumbar: wave(axis=x, amp_deg=2.0, freq_hz=0.4167)
+  }
+  clip walk {
+    duration_s: 1.6
+    gait prowl {
+      pattern: lateral_sequence,
+      froude: 0.18,
+      duty: 0.68
+    }
+    layer breathe: weight=0.8
+    effect touchdown: { sound: "mob.wyvern.step", particle: "synccraft:dust_puff" }
+    effect 0.40: { instruction: "mantle_shimmer" }
+  }
+}
+```
+
+- **Additive Motion Layers (`layer <clip>: weight=W`)**: Evaluates secondary clips (`breathe`, `tail_sway`, `wing_settle`) additively; when layered inside a `gait` clip, axial spine/neck deltas are applied **before** closed-loop world limb IK so stance feet maintain `< 0.02u` slip. Cyclic layer graphs are rejected by `validate_program`.
+- **Audio, Particle, & Timeline Triggers (`effect <time_s | touchdown>: { ... }`)**: Explicit timestamps (`0 <= t <= duration_s`) emit at `t`; `effect touchdown` expands deterministically across every `@morphology` limb's stance touchdown instant and exports natively to Bedrock `1.8.0` (`sound_effects`, `particle_effects`, `timeline`), GeckoLib, and Blockbench 5 `.bbmodel` (`animators["effects"]`).

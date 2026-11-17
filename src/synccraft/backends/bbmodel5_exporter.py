@@ -196,6 +196,49 @@ def _serialize_bbmodel_animations(
                 {"name": bname, "type": "bone", "keyframes": []},
             )["keyframes"].extend(p_kfs)
 
+        if getattr(clip, "effects", ()):
+            from synccraft.kinematics.musculoskeletal import resolve_clip_effect_events
+
+            eff_events = resolve_clip_effect_events(program, clip)
+            eff_kfs: list[dict[str, Any]] = []
+            for idx_e, ev in enumerate(eff_events):
+                t_e = round(float(ev["time_s"]), 4)
+                if ev.get("sound"):
+                    eff_kfs.append(
+                        {
+                            "channel": "sound",
+                            "data_points": [{"effect": ev["sound"], "file": ""}],
+                            "uuid": stable_uuid("bb_eff_snd", f"{clip.name}:{idx_e}", asset_name),
+                            "time": t_e,
+                            "color": -1,
+                            "interpolation": "linear",
+                        }
+                    )
+                if ev.get("particle"):
+                    eff_kfs.append(
+                        {
+                            "channel": "particle",
+                            "data_points": [{"effect": ev["particle"], "locator": ev.get("locator") or "", "script": ""}],
+                            "uuid": stable_uuid("bb_eff_prt", f"{clip.name}:{idx_e}", asset_name),
+                            "time": t_e,
+                            "color": -1,
+                            "interpolation": "linear",
+                        }
+                    )
+                if ev.get("instruction"):
+                    eff_kfs.append(
+                        {
+                            "channel": "timeline",
+                            "data_points": [{"script": ev["instruction"]}],
+                            "uuid": stable_uuid("bb_eff_ins", f"{clip.name}:{idx_e}", asset_name),
+                            "time": t_e,
+                            "color": -1,
+                            "interpolation": "linear",
+                        }
+                    )
+            if eff_kfs:
+                animators["effects"] = {"name": "Effects", "type": "effect", "keyframes": eff_kfs}
+
         anim_dict_bb: dict[str, Any] = {
             "uuid": stable_uuid("animation", clip.name, asset_name),
             "name": clip.name,

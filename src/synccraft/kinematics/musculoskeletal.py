@@ -807,6 +807,146 @@ def _integrate_spring_follow_through(
     return out_poses
 
 
+def resolve_clip_effect_events(program: Program, clip: ClipDecl) -> list[dict[str, Any]]:
+    """Expand explicit timestamp and stance-touchdown `effect` triggers into sorted event dicts (ADR 0013)."""
+    effects = getattr(clip, "effects", ())
+    if not effects:
+        return []
+    events: list[dict[str, Any]] = []
+    touchdown_times: list[tuple[float, str | None]] | None = None
+
+    for eff in effects:
+        if eff.trigger == "time":
+            events.append(
+                {
+                    "time_s": round(float(eff.time_s), 4),
+                    "sound": eff.sound,
+                    "particle": eff.particle,
+                    "locator": eff.locator,
+                    "instruction": eff.instruction,
+                }
+            )
+        elif eff.trigger == "touchdown":
+            if touchdown_times is None:
+                touchdown_times = []
+                if getattr(clip, "gaits", ()):
+                    from synccraft.kinematics.gait_solver import (
+                        analyze_morphology,
+                        compute_froude_kinematics,
+                        resolve_limb_phases,
+                    )
+
+                    rs = compile_geometry(program, validate=False)
+                    morph = analyze_morphology(program, rs)
+                    gd = clip.gaits[0]
+                    l_phases = resolve_limb_phases(gd, morph)
+                    kin = compute_froude_kinematics(program, gd, morph, float(clip.duration_s))
+                    n_cyc = max(1, int(kin["cycles_in_clip"]))
+                    period_s = float(clip.duration_s) / float(n_cyc)
+                    for lb in morph.limbs:
+                        ph_off = l_phases.get(lb.role, 0.0)
+                        base_u = (-ph_off) % 1.0
+                        for c_i in range(n_cyc):
+                            t_td = (c_i + base_u) * period_s
+                            if 0.0 <= t_td <= float(clip.duration_s) + 1e-6:
+                                touchdown_times.append((round(t_td, 4), eff.locator or lb.role))
+                elif clip.ik_drives:
+                    for ikd in clip.ik_drives:
+                        u_td = (-float(ikd.phase_deg) / 360.0) % 1.0
+                        touchdown_times.append((round(u_td * float(clip.duration_s), 4), eff.locator or ikd.chain))
+                else:
+                    touchdown_times.append((0.0, eff.locator))
+                touchdown_times.sort(key=lambda item: (item[0], item[1] or ""))
+            for t_td, loc_hint in touchdown_times:
+                events.append(
+                    {
+                        "time_s": t_td,
+                        "sound": eff.sound,
+                        "particle": eff.particle,
+                        "locator": eff.locator or loc_hint,
+                        "instruction": eff.instruction,
+                    }
+                )
+    events.sort(key=lambda ev: (ev["time_s"], ev.get("sound") or "", ev.get("particle") or ""))
+    return events
+
+
+def _batch_sample_clip_layer_deltas(
+    program: Program,
+    layer_clip_name: str,
+    times_s: list[float],
+    weight: float,
+    *,
+    parent_clip: ClipDecl | None = None,
+) -> list[tuple[dict[str, Vec3], dict[str, Vec3]]]:
+    """Batch-sample `(euler_deltas, pos_deltas)` across all `times_s` with a single `compile_geometry` pass."""
+    if not times_s or program.behavior is None or abs(float(weight)) <= 1e-9:
+        return [({}, {}) for _ in times_s]
+    cmap = {c.name: c for c in program.behavior.clips}
+    src = cmap[layer_clip_name]
+    dur = max(1e-6, float(src.duration_s))
+    phis: list[float] = []
+    if parent_clip is not None and parent_clip.loop and src.loop:
+        p_dur = max(1e-6, float(parent_clip.duration_s))
+        n_cyc = max(1, int(round(p_dur / dur)))
+        for t_s in times_s:
+            phis.append((((float(t_s) / p_dur) * float(n_cyc)) % 1.0))
+    else:
+        for t_s in times_s:
+            phis.append(((float(t_s) / dur) % 1.0) if src.loop else min(1.0, max(0.0, float(t_s) / dur)))
+
+    w = float(weight)
+    # Fast analytic path when `src` contains only `tracks` / `keyframes` (no IK, muscles, springs, or nested layers)
+    if (
+        not src.muscle_drives
+        and not src.ik_drives
+        and not getattr(src, "slide_drives", ())
+        and not getattr(src, "gaits", ())
+        and not getattr(src, "layers", ())
+        and not (program.behavior.springs or (program.kinematics and program.kinematics.springs))
+    ):
+        ax_map = {"x": 0, "y": 1, "z": 2}
+        out_fast: list[tuple[dict[str, Vec3], dict[str, Vec3]]] = []
+        for phi in phis:
+            ts_src = phi * dur
+            e_map: dict[str, list[float]] = {}
+            p_map: dict[str, list[float]] = {}
+            for tr in src.tracks:
+                ang = _evaluate_track_angle(
+                    tr.law, ts_src, dur, tr.amp_deg, tr.freq_hz, tr.phase_deg, tr.bias_deg
+                )
+                v = e_map.setdefault(tr.bone, [0.0, 0.0, 0.0])
+                v[ax_map[tr.axis]] += ang
+            for kf in src.keyframes:
+                kv = evaluate_keyframe_track(kf, ts_src)
+                if kf.channel == "rotation":
+                    v = e_map.setdefault(kf.bone, [0.0, 0.0, 0.0])
+                    v[0] += float(kv[0])
+                    v[1] += float(kv[1])
+                    v[2] += float(kv[2])
+                elif kf.channel == "position":
+                    vp = p_map.setdefault(kf.bone, [0.0, 0.0, 0.0])
+                    vp[0] += float(kv[0])
+                    vp[1] += float(kv[1])
+                    vp[2] += float(kv[2])
+            out_fast.append(
+                (
+                    {b: (w * v[0], w * v[1], w * v[2]) for b, v in e_map.items()},
+                    {b: (w * v[0], w * v[1], w * v[2]) for b, v in p_map.items()},
+                )
+            )
+        return out_fast
+
+    subs = evaluate_behavior_clip(program, layer_clip_name, sample_phases=phis, _validate=False)
+    return [
+        (
+            {b: (w * float(v[0]), w * float(v[1]), w * float(v[2])) for b, v in sub.pose_euler_deltas.items()},
+            {b: (w * float(v[0]), w * float(v[1]), w * float(v[2])) for b, v in sub.pose_position_deltas.items()},
+        )
+        for sub in subs
+    ]
+
+
 def evaluate_behavior_clip(
     program: Program,
     clip_name: str,
@@ -982,6 +1122,17 @@ def evaluate_behavior_clip(
             elif kf.channel == "scale":
                 prev_s = frame_scale_factors.get(kf.bone, (1.0, 1.0, 1.0))
                 frame_scale_factors[kf.bone] = (prev_s[0] * kv[0], prev_s[1] * kv[1], prev_s[2] * kv[2])
+
+        for lyr in getattr(clip, "layers", ()):
+            l_eul, l_pos = _batch_sample_clip_layer_deltas(
+                program, lyr.source_clip, [t_s], float(lyr.weight), parent_clip=clip
+            )[0]
+            for lb_n, lv in l_eul.items():
+                vec = track_poses.setdefault(lb_n, np.zeros(3, dtype=np.float64))
+                vec += np.asarray(lv, dtype=np.float64)
+            for lb_n, lpv in l_pos.items():
+                prev_p = frame_pos_deltas.get(lb_n, (0.0, 0.0, 0.0))
+                frame_pos_deltas[lb_n] = (prev_p[0] + lpv[0], prev_p[1] + lpv[1], prev_p[2] + lpv[2])
 
         for sd in getattr(clip, "slide_drives", ()):
             u_sd = (t_s * float(sd.freq_hz) + float(sd.phase_deg) / 360.0) % 1.0

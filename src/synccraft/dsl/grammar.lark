@@ -207,7 +207,10 @@ pj_field: "axis" ":" IDENT
         | "limits" ":" vec2
 
 behavior: "@behavior" "{" (let_decl | clip_def | gait_def | state_def | spring_def)+ "}"
-clip_def: "clip" IDENT "{" ("duration_s" ":" expr ("," "loop" ":" BOOL)?)? (gait_def | track_def | slide_def | key_def | muscle_drive_def | ik_drive_def)+ "}"
+clip_def: "clip" IDENT "{" ("duration_s" ":" expr ("," "loop" ":" BOOL)?)? (gait_def | layer_def | effect_def | track_def | slide_def | key_def | muscle_drive_def | ik_drive_def)+ "}"
+layer_def: "layer" IDENT (":" "weight" "=" expr)? ";"?
+effect_def: "effect" (IDENT | expr) ":" "{" effect_field* "}"
+effect_field: IDENT ":" (STRING | IDENT) ","?
 gait_def: "gait" IDENT "{" gait_field* "}"
 gait_field: "phase" ":" "{" (IDENT ":" expr ","?)* "}" ","? ";"?
           | "style" ":" "{" (IDENT ":" expr ","?)* "}" ","? ";"?

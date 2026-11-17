@@ -10,6 +10,13 @@ from .se3_chain import (
     euler_xyz_matrix,
 )
 from .sat_potential import SATResult, sat_obb
+from .gait_inversion import (
+    GaitSearchResult,
+    InvertedGaitResult,
+    invert_clip_to_gait,
+    retarget_clip_across_models,
+    search_or_repair_gait,
+)
 from .gait_solver import (
     audit_gait_clip_contracts,
     compute_froude_kinematics,
@@ -73,4 +80,9 @@ __all__ = [
     "compute_froude_kinematics",
     "evaluate_gait_clip",
     "resolve_limb_phases",
+    "GaitSearchResult",
+    "InvertedGaitResult",
+    "invert_clip_to_gait",
+    "retarget_clip_across_models",
+    "search_or_repair_gait",
 ]

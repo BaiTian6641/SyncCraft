@@ -41,9 +41,12 @@ from .ast_nodes import (
     Bone,
     Box,
     ClipDecl,
+    ClipLayerDecl,
     ControllerDecl,
     ControllerTransitionDecl,
+    DSLValidationError,
     EdgeCutoutDecl,
+    EffectTriggerDecl,
     GaitDecl,
     IKChainDecl,
     IKDriveDecl,
@@ -2311,6 +2314,8 @@ class _Parser:
         ik_drives: list[IKDriveDecl] = []
         keyframes: list[KeyframeTrackDecl] = []
         gaits: list[GaitDecl] = []
+        layers: list[ClipLayerDecl] = []
+        effects: list[EffectTriggerDecl] = []
         gait_default_dur: float | None = None
         while not self.at("}"):
             if self.at("gait"):
@@ -2318,6 +2323,56 @@ class _Parser:
                 gaits.append(gd)
                 if gait_default_dur is None:
                     gait_default_dur = g_dur
+            elif self.at("layer"):
+                self.take("layer")
+                src_clip = self.ident()
+                w_val = 1.0
+                if self.maybe_take(":"):
+                    self.field("weight", "=")
+                    w_val = float(self.number())
+                self.maybe_take(";")
+                layers.append(ClipLayerDecl(source_clip=src_clip, weight=w_val))
+            elif self.at("effect"):
+                self.take("effect")
+                if self.at("touchdown"):
+                    self.take("touchdown")
+                    trig_kind = "touchdown"
+                    eff_t = 0.0
+                else:
+                    trig_kind = "time"
+                    eff_t = float(self.number())
+                self.take(":")
+                self.take("{")
+                eff_sound: str | None = None
+                eff_particle: str | None = None
+                eff_loc: str | None = None
+                eff_instr: str | None = None
+                while not self.at("}"):
+                    ek = self.ident()
+                    self.take(":")
+                    ev = self.string_literal() if self.token.kind == "STRING" else self.ident_or_dotted()
+                    if ek == "sound":
+                        eff_sound = ev
+                    elif ek == "particle":
+                        eff_particle = ev
+                    elif ek == "locator":
+                        eff_loc = ev
+                    elif ek == "instruction":
+                        eff_instr = ev
+                    else:
+                        self.fail(f"unexpected effect field {ek!r}")
+                    self.maybe_take(",")
+                self.take("}")
+                effects.append(
+                    EffectTriggerDecl(
+                        trigger=trig_kind,
+                        time_s=eff_t,
+                        sound=eff_sound,
+                        particle=eff_particle,
+                        locator=eff_loc,
+                        instruction=eff_instr,
+                    )
+                )
             elif self.at("track"):
                 self.take("track")
                 bone = self.ident_or_dotted()
@@ -2456,7 +2511,7 @@ class _Parser:
                 self.take(")")
                 ik_drives.append(IKDriveDecl(chain=chain, stride=stride, lift=lift, phase_deg=phase_deg))
             else:
-                self.fail("expected gait, track, slide, key, muscle_drive, ik_drive, or closing brace in clip")
+                self.fail("expected gait, layer, effect, track, slide, key, muscle_drive, ik_drive, or closing brace in clip")
         self.take("}")
         final_dur = duration_s if duration_s is not None else (gait_default_dur if gait_default_dur is not None else None)
         if final_dur is None:
@@ -2471,6 +2526,8 @@ class _Parser:
             keyframes=tuple(keyframes),
             slide_drives=tuple(slide_drives),
             gaits=tuple(gaits),
+            layers=tuple(layers),
+            effects=tuple(effects),
         )
 
     def behavior_state_decl(self) -> BehaviorStateDecl:
@@ -3849,6 +3906,23 @@ def format_program(program: Program) -> str:
                 if float(ikd.phase_deg) != 0.0:
                     ikd_args.append(f"phase_deg={fmt_num(ikd.phase_deg)}")
                 lines.append(f"    ik_drive {ikd.chain}: foot_cycle({', '.join(ikd_args)})")
+            for lyr in getattr(clip, "layers", ()):
+                if float(lyr.weight) != 1.0:
+                    lines.append(f"    layer {lyr.source_clip}: weight={fmt_num(lyr.weight)}")
+                else:
+                    lines.append(f"    layer {lyr.source_clip}")
+            for eff in getattr(clip, "effects", ()):
+                head_e = "touchdown" if eff.trigger == "touchdown" else fmt_num(eff.time_s)
+                e_parts: list[str] = []
+                if eff.sound is not None:
+                    e_parts.append(f'sound: "{eff.sound}"')
+                if eff.particle is not None:
+                    e_parts.append(f'particle: "{eff.particle}"')
+                if eff.locator is not None:
+                    e_parts.append(f'locator: "{eff.locator}"')
+                if eff.instruction is not None:
+                    e_parts.append(f'instruction: "{eff.instruction}"')
+                lines.append(f"    effect {head_e}: {{ {', '.join(e_parts)} }}")
             lines.append("  }")
         for sp in program.behavior.springs:
             lines.append(
