@@ -64,6 +64,7 @@ from .ast_nodes import (
     Palette,
     Place,
     Plane,
+    inset_carve,
     PrismaticJointDecl,
     Program,
     RadialSpec,
@@ -2776,6 +2777,8 @@ class _Parser:
         return mirror_name, mirror_axis, radial
 
     def place(self) -> Place:
+        if self.at("inset_carve"):
+            return self.inset_carve_spec()
         self.take("place")
         self.take("(")
         base = None
@@ -2795,6 +2798,40 @@ class _Parser:
             offset = self.vector()
         self.take(")")
         return Place(base, anchor, align, offset)
+
+    def _parse_sculpt_group_val(self) -> str:
+        if self.at("["):
+            return "|".join(self.ident_list())
+        return self.string_literal() if self.token.kind == "STRING" else self.ident()
+
+    def inset_carve_spec(self) -> Place:
+        self.take("inset_carve")
+        self.take("(")
+        self.field("base_box", "=")
+        base = self.ident()
+        self.take(",")
+        self.field("anchor", "=")
+        anchor = self.vector()
+        protrude = 1.5
+        align: Vec3 | None = None
+        offset: Vec3 = (0.0, 0.0, 0.0)
+        while self.maybe_take(","):
+            if self.at(")"):
+                break
+            k = self.ident()
+            self.take("=")
+            if k == "protrude":
+                protrude = float(self.number())
+            elif k == "align":
+                av = self.vector()
+                align = (float(av[0]), float(av[1]), float(av[2]))
+            elif k == "offset":
+                ov = self.vector()
+                offset = (float(ov[0]), float(ov[1]), float(ov[2]))
+            else:
+                self.fail(f"unexpected inset_carve(...) argument {k!r}")
+        self.take(")")
+        return inset_carve(base_box=base, anchor=anchor, protrude=protrude, align=align, offset=offset)
 
     def _parse_uv_faces_dict(self) -> tuple[tuple[str, UVRect], ...]:
         self.take("{")
@@ -2852,6 +2889,7 @@ class _Parser:
         edge_decl: EdgeCutoutDecl | None = None
         layer_v = 0
         prism_grp: str | None = None
+        sculpt_grp: str | None = None
         seen_f: set[str] = set()
 
         while not self.at("}"):
@@ -2905,7 +2943,9 @@ class _Parser:
                 layer_v = int(self.number(integer=True))
             elif canon_key == "prism_group":
                 prism_grp = self.string_literal() if self.token.kind == "STRING" else self.ident()
-            elif canon_key == "place" and place is None:
+            elif canon_key == "sculpt_group":
+                sculpt_grp = self._parse_sculpt_group_val()
+            elif canon_key in ("place", "inset_carve") and place is None:
                 place = self.place()
             else:
                 self.fail(f"unexpected box/plane field {key!r}")
@@ -2932,6 +2972,7 @@ class _Parser:
                 blend_with=blend_with,
                 edge=edge_decl,
                 layer=layer_v,
+                sculpt_group=sculpt_grp,
             )
         if len(size_raw) != 3:
             self.fail(f"box {name}: size must have 3 components")
@@ -2952,18 +2993,19 @@ class _Parser:
             edge=edge_decl,
             layer=layer_v,
             prism_group=prism_grp,
+            sculpt_group=sculpt_grp,
         )
 
     def box(self) -> Box:
         self.take("box")
         name = self.ident()
-        place = self.place() if self.at("place") else None
+        place = self.place() if (self.at("place") or self.at("inset_carve")) else None
         return self._parse_box_or_plane_fields(name, place, is_plane_kw=False)
 
     def plane(self) -> Box:
         self.take("plane")
         name = self.ident()
-        place = self.place() if self.at("place") else None
+        place = self.place() if (self.at("place") or self.at("inset_carve")) else None
         return self._parse_box_or_plane_fields(name, place, is_plane_kw=True)
 
     def octagon_or_prism(self, is_prism: bool) -> list[Box]:
@@ -3401,12 +3443,16 @@ class _Parser:
         pivot: Vec3 = (0.0, 0.0, 0.0)
         rest: Vec3 = (0.0, 0.0, 0.0)
         joint_limits: JointLimits | None = None
+        sculpt_grp: str | None = None
         self._consume_preamble_decls(allow_def=False)
         if root:
             if self.at("pivot_local"):
                 self.field("pivot_local")
                 pv = self.vector()
                 pivot = (float(pv[0]), float(pv[1]), float(pv[2]))
+            if self.at("sculpt_group"):
+                self.field("sculpt_group")
+                sculpt_grp = self._parse_sculpt_group_val()
         else:
             if self.at("rest_euler"):
                 self.field("rest_euler")
@@ -3415,6 +3461,9 @@ class _Parser:
             if self.at("joint_limits"):
                 self.field("joint_limits")
                 joint_limits = self.joint_limits_matrix()
+            if self.at("sculpt_group"):
+                self.field("sculpt_group")
+                sculpt_grp = self._parse_sculpt_group_val()
         items: list[Box | Locator | Bone] = []
         while not self.at("}"):
             if self.at("let"):
@@ -3452,6 +3501,7 @@ class _Parser:
             joint_limits=joint_limits,
             mirror_axis=mirror_axis,
             radial=radial,
+            sculpt_group=sculpt_grp,
         )
 
     def bone(self, root: bool = False, depth: int = 0) -> Bone:
@@ -3607,6 +3657,10 @@ def format_program(program: Program) -> str:
                 else:
                     jl_str = "[" + ", ".join("continuous" if _is_continuous_limit_pair(pair) else vector(pair) for pair in jl) + "]"
                     lines.append(f"{pad}  joint_limits: {jl_str}")
+        if getattr(bone, "sculpt_group", None) is not None:
+            sg_b = bone.sculpt_group
+            sg_b_fmt = f"[{', '.join(sg_b.split('|'))}]" if "|" in sg_b else sg_b
+            lines.append(f"{pad}  sculpt_group: {sg_b_fmt}")
         for item in bone.items:
             if isinstance(item, Bone):
                 write_bone(item, indent + 2)
@@ -3622,13 +3676,22 @@ def format_program(program: Program) -> str:
             if item.place:
                 p = item.place
                 p_args: list[str] = []
-                if p.base_box:
-                    p_args.append(f"base_box={p.base_box}")
-                p_args.append(f"anchor={vector(p.anchor)}")
-                p_args.append(f"align={vector(p.align)}")
-                if not is_zero_vec(p.offset):
-                    p_args.append(f"offset={vector(p.offset)}")
-                b_start += f" place({', '.join(p_args)})"
+                if getattr(p, "protrude", None) is not None:
+                    if p.base_box:
+                        p_args.append(f"base_box={p.base_box}")
+                    p_args.append(f"anchor={vector(p.anchor)}")
+                    p_args.append(f"protrude={fmt_num(p.protrude)}")
+                    if not is_zero_vec(p.offset):
+                        p_args.append(f"offset={vector(p.offset)}")
+                    b_start += f" inset_carve({', '.join(p_args)})"
+                else:
+                    if p.base_box:
+                        p_args.append(f"base_box={p.base_box}")
+                    p_args.append(f"anchor={vector(p.anchor)}")
+                    p_args.append(f"align={vector(p.align)}")
+                    if not is_zero_vec(p.offset):
+                        p_args.append(f"offset={vector(p.offset)}")
+                    b_start += f" place({', '.join(p_args)})"
 
             b_fields: list[str] = []
             if item.plane_normal is not None:
@@ -3662,6 +3725,10 @@ def format_program(program: Program) -> str:
                 b_fields.append(f"layer: {int(item.layer)}")
             if getattr(item, "prism_group", None) is not None:
                 b_fields.append(f"prism_group: {item.prism_group}")
+            if getattr(item, "sculpt_group", None) is not None:
+                sg_i = item.sculpt_group
+                sg_i_fmt = f"[{', '.join(sg_i.split('|'))}]" if "|" in sg_i else sg_i
+                b_fields.append(f"sculpt_group: {sg_i_fmt}")
             lines.append(f"{b_start} {{ {', '.join(b_fields)} }}")
         lines.append(pad + "}")
 

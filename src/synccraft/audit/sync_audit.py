@@ -17,6 +17,7 @@ MAX_HINGE_ALLOWANCE_UNITS: float = 2.5
 MAX_SCULPTED_OVERLAP_RATIO: float = 0.85
 MAX_SCULPTED_PARALLEL_OVERLAP_RATIO: float = 0.65
 MAX_SCULPTED_BURIED_VOLUME_RATIO: float = 0.65
+MAX_SCULPT_GROUP_BURIED_VOLUME_RATIO: float = 0.88
 MAX_SCULPTED_HINGE_ANGLE_DEG: float = 135.0
 MAX_SCULPTED_HINGE_ALLOWANCE_UNITS: float = 6.0
 
@@ -359,6 +360,14 @@ def _min_exterior_protrusion(left: WorldBox, right: WorldBox) -> tuple[float, fl
     return prot_left, prot_right
 
 
+def _sculpt_groups_match(sg_l: str | None, sg_r: str | None) -> bool:
+    if not sg_l or not sg_r:
+        return False
+    set_l = {s for s in str(sg_l).split("|") if s}
+    set_r = {s for s in str(sg_r).split("|") if s}
+    return bool(set_l & set_r)
+
+
 def _sculpted_exemption_reason(
     left_bone: str,
     right_bone: str,
@@ -370,10 +379,20 @@ def _sculpted_exemption_reason(
     right_instance: str | None = None,
     left_prism_group: str | None = None,
     right_prism_group: str | None = None,
+    left_sculpt_group: str | None = None,
+    right_sculpt_group: str | None = None,
+    left_mirrored: bool = False,
+    right_mirrored: bool = False,
+    either_centred_midline: bool = False,
 ) -> str | None:
-    """Return explicit ADR 0007/0008/0011 sculpted-overlap contract category, or None (never sibling/instance immunity)."""
+    """Return explicit ADR 0007/0008/0011/v20 sculpted-overlap contract category, or None."""
     if left_prism_group is not None and left_prism_group == right_prism_group:
         return "sculpted_prism_hub"
+    if (
+        _sculpt_groups_match(left_sculpt_group, right_sculpt_group)
+        and (left_mirrored == right_mirrored or either_centred_midline)
+    ):
+        return "sculpted_anatomical_cluster"
     if is_blend_pair:
         return "declared_blend"
     if left_bone not in bone_parent_map or right_bone not in bone_parent_map:
@@ -403,7 +422,7 @@ def _evaluate_sculpted_overlap(
     max_inset_depth: float,
     enforce_gap: bool,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
-    """Verify ADR 0007/0011 sculpted partial-overlap bounds and anti-swallowing buried-volume invariant."""
+    """Verify ADR 0007/0011/v20 sculpted partial-overlap bounds and anti-swallowing buried-volume invariant."""
     rel_rot = left.rotation.T @ right.rotation
     cos_theta = float(np.clip((np.trace(rel_rot) - 1.0) * 0.5, -1.0, 1.0))
     theta = math.acos(cos_theta)
@@ -426,6 +445,18 @@ def _evaluate_sculpted_overlap(
     pg_r = getattr(right, "prism_group", None)
     is_prism_hub = (pg_l is not None and pg_l == pg_r) or (reason == "sculpted_prism_hub")
 
+    sg_l = getattr(left, "sculpt_group", None)
+    sg_r = getattr(right, "sculpt_group", None)
+    same_side_or_mid = (
+        bool(getattr(left, "mirrored", False)) == bool(getattr(right, "mirrored", False))
+        or (abs(float(left.center[0])) < 1e-3 and not getattr(left, "mirrored", False))
+        or (abs(float(right.center[0])) < 1e-3 and not getattr(right, "mirrored", False))
+    )
+    is_sculpt_cluster = (
+        (_sculpt_groups_match(sg_l, sg_r) and same_side_or_mid)
+        or reason in ("sculpted_anatomical_cluster", "declared_inset_carve")
+    )
+
     inflate_allowance = float(left.inflate + right.inflate)
     hinge_allowance = compute_delta_hinge(
         theta,
@@ -435,7 +466,7 @@ def _evaluate_sculpted_overlap(
         max_hinge_allowance=MAX_SCULPTED_HINGE_ALLOWANCE_UNITS,
     )
     eff_ratio = MAX_SCULPTED_PARALLEL_OVERLAP_RATIO if theta_deg < 5.0 else MAX_SCULPTED_OVERLAP_RATIO
-    if is_prism_hub:
+    if is_prism_hub or is_sculpt_cluster:
         t_max_any = max(float(np.max(left_pos)), float(np.max(right_pos))) if (left_pos.size > 0 and right_pos.size > 0) else 0.0
         max_allowed_overlap = t_max_any + inflate_allowance + collision_tolerance
     else:
@@ -448,16 +479,26 @@ def _evaluate_sculpted_overlap(
     prot_l, prot_r = _min_exterior_protrusion(left, right)
     min_prot = min(prot_l, prot_r)
     has_plane = (getattr(left, "plane_normal", None) is not None) or (getattr(right, "plane_normal", None) is not None)
-    min_req_prot = collision_tolerance if (has_plane or is_prism_hub) else min(0.25, 0.15 * t_thin)
+    min_req_prot = (
+        collision_tolerance
+        if (has_plane or is_prism_hub)
+        else (min(0.25, 0.12 * t_thin) if is_sculpt_cluster else min(0.25, 0.15 * t_thin))
+    )
     buried_frac = (
         0.0
         if (has_plane or is_prism_hub or raw_min_overlap <= collision_tolerance)
         else _max_buried_volume_fraction(left, right, tol=collision_tolerance)
     )
+    eff_buried_cap = MAX_SCULPT_GROUP_BURIED_VOLUME_RATIO if is_sculpt_cluster else MAX_SCULPTED_BURIED_VOLUME_RATIO
 
+    eff_exemption = (
+        "sculpted_prism_hub"
+        if is_prism_hub
+        else ("sculpted_anatomical_cluster" if (is_sculpt_cluster and reason != "declared_inset_carve") else reason)
+    )
     telemetry = {
         "pair": list(pair),
-        "exemption_reason": "sculpted_prism_hub" if is_prism_hub else reason,
+        "exemption_reason": eff_exemption,
         "raw_min_overlap": raw_min_overlap,
         "max_allowed_overlap": max_allowed_overlap,
         "relative_angle_deg": theta_deg,
@@ -481,7 +522,7 @@ def _evaluate_sculpted_overlap(
 
     if raw_min_overlap > collision_tolerance and (
         min_prot <= min_req_prot
-        or (not has_plane and not is_prism_hub and buried_frac > MAX_SCULPTED_BURIED_VOLUME_RATIO)
+        or (not has_plane and not is_prism_hub and buried_frac > eff_buried_cap)
     ):
         return (
             {
@@ -492,7 +533,7 @@ def _evaluate_sculpted_overlap(
                 "min_protrusion_units": min_prot,
                 "min_required_protrusion": min_req_prot,
                 "buried_volume_fraction": buried_frac,
-                "max_buried_volume_ratio": MAX_SCULPTED_BURIED_VOLUME_RATIO,
+                "max_buried_volume_ratio": eff_buried_cap,
             },
             telemetry,
         )
@@ -757,6 +798,10 @@ def audit_scene(
                     else:
                         collisions.append(entry)
                 elif is_sculpted:
+                    either_mid = (
+                        (abs(float(left.center[0])) < 1e-3 and not getattr(left, "mirrored", False))
+                        or (abs(float(right.center[0])) < 1e-3 and not getattr(right, "mirrored", False))
+                    )
                     sc_reason = _sculpted_exemption_reason(
                         left.bone_name,
                         right.bone_name,
@@ -767,6 +812,11 @@ def audit_scene(
                         right_instance=getattr(right, "instance_name", None),
                         left_prism_group=getattr(left, "prism_group", None),
                         right_prism_group=getattr(right, "prism_group", None),
+                        left_sculpt_group=getattr(left, "sculpt_group", None),
+                        right_sculpt_group=getattr(right, "sculpt_group", None),
+                        left_mirrored=bool(getattr(left, "mirrored", False)),
+                        right_mirrored=bool(getattr(right, "mirrored", False)),
+                        either_centred_midline=either_mid,
                     )
                     if sc_reason is not None and z_fight is None:
                         sc_viol, sc_tel = _evaluate_sculpted_overlap(

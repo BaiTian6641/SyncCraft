@@ -71,6 +71,7 @@ from .ast_nodes import (
     Vec3,
     Vec3Size,
     Vec3i,
+    inset_carve,
     validate_program,
 )
 from .assembly_ir import (

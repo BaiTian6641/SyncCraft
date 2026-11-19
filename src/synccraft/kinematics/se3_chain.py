@@ -160,6 +160,7 @@ class WorldBox:
     edge: Any = None
     layer: int = 0
     prism_group: str | None = None
+    sculpt_group: str | None = None
 
     @property
     def half_extents(self) -> np.ndarray:
@@ -554,6 +555,7 @@ def compile_geometry(
                                 raise ValueError(
                                     f"{item.name}: place relative to locator {spec.base_box!r} requires anchor=[0,0,0]"
                                 )
+                            r_base_local = np.eye(3, dtype=np.float64)
                             reference = local_locators[spec.base_box].local_offset
                         else:
                             raise ValueError(
@@ -562,11 +564,19 @@ def compile_geometry(
                     else:
                         if np.any(_vec(spec.anchor) != 0):
                             raise ValueError("place without base_box requires anchor=[0,0,0]")
+                        r_base_local = np.eye(3, dtype=np.float64)
                         reference = np.zeros(3)
+                    protrude_vec = np.zeros(3, dtype=np.float64)
+                    if getattr(spec, "protrude", None) is not None:
+                        anc_s = _vec(spec.anchor) * sign
+                        dom = int(np.argmax(np.abs(anc_s)))
+                        f_loc = np.zeros(3, dtype=np.float64)
+                        f_loc[dom] = 1.0 if float(anc_s[dom]) >= 0.0 else -1.0
+                        protrude_vec = (r_base_local @ f_loc) * float(spec.protrude)
                     unrot_local_center = (
                         reference
                         - 0.5 * size * _vec(spec.align) * sign
-                        + _vec(spec.offset) * sign * cumulative_scale
+                        + (protrude_vec + _vec(spec.offset) * sign) * cumulative_scale
                     )
 
                 box_local_euler = _vec(item.rotate) * angle_sign
@@ -606,6 +616,15 @@ def compile_geometry(
                     if (mirrored and item.uv_share_key is not None)
                     else item.uv_share_key
                 )
+                def _sg_tokens(val: Any) -> tuple[str, ...]:
+                    if not val:
+                        return ()
+                    if isinstance(val, (tuple, list)):
+                        return tuple(str(x) for x in val if x)
+                    return tuple(s for s in str(val).split("|") if s)
+
+                combined_sg = tuple(dict.fromkeys(_sg_tokens(getattr(bone, "sculpt_group", None)) + _sg_tokens(getattr(item, "sculpt_group", None))))
+                raw_sg = "|".join(combined_sg) if combined_sg else None
                 compiled_box = WorldBox(
                     box_name,
                     name,
@@ -631,6 +650,7 @@ def compile_geometry(
                     edge=getattr(item, "edge", None),
                     layer=item_layer,
                     prism_group=f"{prefix}__{item.prism_group}" if (prefix and getattr(item, "prism_group", None)) else getattr(item, "prism_group", None),
+                    sculpt_group=raw_sg,
                 )
                 box_idx = len(boxes)
                 boxes.append(compiled_box)
@@ -645,7 +665,8 @@ def compile_geometry(
                         reason = "joint" if bone.attach.joint_mode else "attach"
                         edge(attachment_base.name, box_name, reason)
                 if item.place is not None and item.place.base_box and item.place.base_box in local_boxes:
-                    edge(local_boxes[item.place.base_box].name, box_name, "place")
+                    pl_reason = "inset_carve" if getattr(item.place, "protrude", None) is not None else "place"
+                    edge(local_boxes[item.place.base_box].name, box_name, pl_reason)
             elif isinstance(item, Locator):
                 loc_name = f"{prefix}__{item.name}" if prefix else item.name
                 reserve(loc_name)

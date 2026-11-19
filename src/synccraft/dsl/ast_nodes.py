@@ -153,6 +153,32 @@ class Place:
     anchor: Vec3
     align: Vec3
     offset: Vec3 = (0.0, 0.0, 0.0)
+    protrude: float | None = None
+
+
+def inset_carve(
+    base_box: str,
+    anchor: Vec3,
+    protrude: float = 1.5,
+    *,
+    align: Vec3 | None = None,
+    offset: Vec3 = (0.0, 0.0, 0.0),
+) -> Place:
+    """Embed a secondary muscle, chamfer, or osteoderm cuboid into ``base_box`` protruding ``protrude`` units."""
+    ax, ay, az = float(anchor[0]), float(anchor[1]), float(anchor[2])
+    abs_v = (abs(ax), abs(ay), abs(az))
+    dom = 0 if (abs_v[0] >= abs_v[1] and abs_v[0] >= abs_v[2]) else (1 if abs_v[1] >= abs_v[2] else 2)
+    sgn = 1.0 if (ax, ay, az)[dom] >= 0.0 else -1.0
+    f_hat = [0.0, 0.0, 0.0]
+    f_hat[dom] = sgn
+    eff_align: Vec3 = align if align is not None else (f_hat[0], f_hat[1], f_hat[2])
+    return Place(
+        base_box=base_box,
+        anchor=(ax, ay, az),
+        align=eff_align,
+        offset=(float(offset[0]), float(offset[1]), float(offset[2])),
+        protrude=float(protrude),
+    )
 
 
 def _normalize_single_uv_rect(vals: Any) -> UVRect | None:
@@ -267,6 +293,7 @@ class Box:
     edge: EdgeCutoutDecl | None = None
     layer: int = 0
     prism_group: str | None = None
+    sculpt_group: str | None = None
 
     def __post_init__(self) -> None:
         if isinstance(self.uv_faces, (dict, list)) or self.uv_faces is None:
@@ -297,6 +324,7 @@ def Plane(
     blend_with: tuple[str, ...] = (),
     edge: EdgeCutoutDecl | None = None,
     layer: int = 0,
+    sculpt_group: str | None = None,
 ) -> Box:
     """Construct a zero-thickness planar quad Box with 0 physical thickness along ``normal``.
 
@@ -336,6 +364,7 @@ def Plane(
         blend_with=blend_with,
         edge=edge,
         layer=layer,
+        sculpt_group=sculpt_group,
     )
 
 
@@ -368,6 +397,7 @@ class Bone:
     joint_limits: JointLimits | None = None
     mirror_axis: str = "x"
     radial: RadialSpec | None = None
+    sculpt_group: str | None = None
 
 
 @dataclass(frozen=True)

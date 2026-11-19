@@ -95,9 +95,9 @@ conn_field: "type" ":" IDENT
 bind_def: "bind" IDENT "to" dotted_ident ";"?
 
 rig: "@rig" "{" preamble_decl* "root" root_bone preamble_decl* "}"
-root_bone: "bone" IDENT "{" let_decl* ("pivot_local" ":" vec3)? rig_node* "}"
+root_bone: "bone" IDENT "{" let_decl* ("pivot_local" ":" vec3)? ("sculpt_group" ":" (STRING | IDENT | ident_list))? rig_node* "}"
 child_bone: "bone" IDENT attach_or_joint symmetry_mod* "{" bone_interior "}"
-bone_interior: let_decl* ("rest_euler" ":" vec3)? ("joint_limits" ":" joint_limits_mat)? rig_node*
+bone_interior: let_decl* ("rest_euler" ":" vec3)? ("joint_limits" ":" joint_limits_mat)? ("sculpt_group" ":" (STRING | IDENT | ident_list))? rig_node*
 
 ?rig_node: let_decl | box | plane | octagon | prism | locator | child_bone | use_macro | chain_decl
 
@@ -139,6 +139,10 @@ chain_prop: let_decl
           | "joint_limits" ":" joint_limits_mat ","?
 
 place: "place" "(" ("base_box" "=" IDENT ",")? "anchor" "=" vec3 "," "align" "=" vec3 ("," "offset" "=" vec3)? ")"
+     | "inset_carve" "(" "base_box" "=" IDENT "," "anchor" "=" vec3 ("," inset_carve_opt)* ")"
+inset_carve_opt: "protrude" "=" expr
+               | "align" "=" vec3
+               | "offset" "=" vec3
 
 box: "box" IDENT place? "{" box_field ("," box_field)* ","? "}"
 plane: "plane" IDENT place? "{" box_field ("," box_field)* ","? "}"
@@ -160,7 +164,9 @@ box_field: "size" ":" (vec2 | vec3)
          | "edge" ":" edge_spec
          | "layer" ":" expr
          | "prism_group" ":" (STRING | IDENT)
+         | "sculpt_group" ":" (STRING | IDENT | ident_list)
          | "place" ":" place
+         | "inset_carve" ":" place
 edge_spec: IDENT ("(" edge_arg ("," edge_arg)* ")")?
 edge_arg: IDENT "=" (expr RANGE expr | vec2 | IDENT | expr)
 uv_face_entry: IDENT ":" (vec4 | vec5) ","?
