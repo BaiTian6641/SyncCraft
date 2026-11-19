@@ -1433,6 +1433,7 @@ def audit_behavior_clip(
     max_step_deg: float = 10.0,
     max_step_units: float = 0.5,
     max_frames: int = 144,
+    audit_profile: str | None = None,
 ) -> dict[str, Any]:
     """Run unified adaptive discrete-step swept 15-axis OBB SAT + stance foot-skating audit on a @behavior clip."""
     from synccraft.audit.sync_audit import audit_scene
@@ -1516,11 +1517,18 @@ def audit_behavior_clip(
     colliding_frames: list[dict[str, Any]] = []
     total_collision_events = 0
 
+    eff_profile = audit_profile
+    if eff_profile is None:
+        meta_style = str(getattr(getattr(program, "meta", None), "style", "") or "")
+        has_sg = bool(frames) and any(bool(getattr(b, "sculpt_group", ())) for b in frames[0].scene.boxes)
+        eff_profile = "sculpted" if ("sculpted" in meta_style or has_sg) else "strict"
+
     for fr in frames:
         aud = audit_scene(
             fr.scene,
             collision_tolerance=collision_tolerance,
             enforce_physical_contact=False,
+            audit_profile=eff_profile,
         )
         if aud["collision_pairs"]:
             total_collision_events += len(aud["collision_pairs"])
