@@ -381,17 +381,12 @@ def _sculpted_exemption_reason(
     right_prism_group: str | None = None,
     left_sculpt_group: str | None = None,
     right_sculpt_group: str | None = None,
-    left_mirrored: bool = False,
-    right_mirrored: bool = False,
-    either_centred_midline: bool = False,
+    same_side_or_axial: bool = True,
 ) -> str | None:
     """Return explicit ADR 0007/0008/0011/v20 sculpted-overlap contract category, or None."""
     if left_prism_group is not None and left_prism_group == right_prism_group:
         return "sculpted_prism_hub"
-    if (
-        _sculpt_groups_match(left_sculpt_group, right_sculpt_group)
-        and (left_mirrored == right_mirrored or either_centred_midline)
-    ):
+    if _sculpt_groups_match(left_sculpt_group, right_sculpt_group) and same_side_or_axial:
         return "sculpted_anatomical_cluster"
     if is_blend_pair:
         return "declared_blend"
@@ -421,6 +416,7 @@ def _evaluate_sculpted_overlap(
     max_contact_gap: float,
     max_inset_depth: float,
     enforce_gap: bool,
+    same_side_or_axial: bool = True,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     """Verify ADR 0007/0011/v20 sculpted partial-overlap bounds and anti-swallowing buried-volume invariant."""
     rel_rot = left.rotation.T @ right.rotation
@@ -447,13 +443,8 @@ def _evaluate_sculpted_overlap(
 
     sg_l = getattr(left, "sculpt_group", None)
     sg_r = getattr(right, "sculpt_group", None)
-    same_side_or_mid = (
-        bool(getattr(left, "mirrored", False)) == bool(getattr(right, "mirrored", False))
-        or (abs(float(left.center[0])) < 1e-3 and not getattr(left, "mirrored", False))
-        or (abs(float(right.center[0])) < 1e-3 and not getattr(right, "mirrored", False))
-    )
     is_sculpt_cluster = (
-        (_sculpt_groups_match(sg_l, sg_r) and same_side_or_mid)
+        (_sculpt_groups_match(sg_l, sg_r) and same_side_or_axial)
         or reason in ("sculpted_anatomical_cluster", "declared_inset_carve")
     )
 
@@ -668,6 +659,46 @@ def audit_scene(
         errors.append("Scene has no boxes")
 
     bone_parent_map: dict[str, str | None] = {bone.name: bone.parent_name for bone in scene.bones}
+    bone_by_name = {bone.name: bone for bone in scene.bones}
+    bone_laterality: dict[str, str] = {}
+
+    def _resolve_bone_side(bname: str) -> str:
+        if bname in bone_laterality:
+            return bone_laterality[bname]
+        b_obj = bone_by_name.get(bname)
+        if b_obj is None:
+            bone_laterality[bname] = "axial"
+            return "axial"
+        if b_obj.parent_name is None:
+            side = "right" if b_obj.mirrored else "axial"
+        else:
+            p_side = _resolve_bone_side(b_obj.parent_name)
+            if p_side != "axial":
+                side = p_side
+            elif b_obj.mirrored:
+                side = "right"
+            elif abs(float(b_obj.local_translation[0])) > 1e-3:
+                side = "left" if float(b_obj.local_translation[0]) < 0.0 else "right"
+            else:
+                side = "axial"
+        bone_laterality[bname] = side
+        return side
+
+    for bone in scene.bones:
+        _resolve_bone_side(bone.name)
+
+    box_laterality: dict[str, str] = {}
+    for box in boxes:
+        b_side = bone_laterality.get(box.bone_name, "axial")
+        if b_side != "axial":
+            box_laterality[box.name] = b_side
+        elif box.mirrored:
+            box_laterality[box.name] = "right"
+        elif abs(float(box.local_center[0])) > 1e-3:
+            box_laterality[box.name] = "left" if float(box.local_center[0]) < 0.0 else "right"
+        else:
+            box_laterality[box.name] = "axial"
+
     bone_has_boxes: set[str] = {box.bone_name for box in boxes}
     effective_box_parent_map = _effective_box_parent_map(bone_parent_map, bone_has_boxes)
 
@@ -726,6 +757,10 @@ def audit_scene(
 
         z_fight = _detect_coplanar_z_fighting(left, right, collision_tolerance=collision_tolerance)
         is_blend_pair = pair in scene_blend_pairs
+        same_side_or_axial = {
+            box_laterality.get(left.name, "axial"),
+            box_laterality.get(right.name, "axial"),
+        } != {"left", "right"}
 
         entry = {"pair": list(pair), **result.to_dict()}
         if is_declared:
@@ -750,6 +785,7 @@ def audit_scene(
                     max_contact_gap=max_contact_gap,
                     max_inset_depth=max_inset_depth,
                     enforce_gap=enforce_physical_contact,
+                    same_side_or_axial=same_side_or_axial,
                 )
                 if violation is not None:
                     contact_violations.append(violation)
@@ -798,10 +834,6 @@ def audit_scene(
                     else:
                         collisions.append(entry)
                 elif is_sculpted:
-                    either_mid = (
-                        (abs(float(left.center[0])) < 1e-3 and not getattr(left, "mirrored", False))
-                        or (abs(float(right.center[0])) < 1e-3 and not getattr(right, "mirrored", False))
-                    )
                     sc_reason = _sculpted_exemption_reason(
                         left.bone_name,
                         right.bone_name,
@@ -814,9 +846,7 @@ def audit_scene(
                         right_prism_group=getattr(right, "prism_group", None),
                         left_sculpt_group=getattr(left, "sculpt_group", None),
                         right_sculpt_group=getattr(right, "sculpt_group", None),
-                        left_mirrored=bool(getattr(left, "mirrored", False)),
-                        right_mirrored=bool(getattr(right, "mirrored", False)),
-                        either_centred_midline=either_mid,
+                        same_side_or_axial=same_side_or_axial,
                     )
                     if sc_reason is not None and z_fight is None:
                         sc_viol, sc_tel = _evaluate_sculpted_overlap(
@@ -829,6 +859,7 @@ def audit_scene(
                             max_contact_gap=max_contact_gap,
                             max_inset_depth=max_inset_depth,
                             enforce_gap=False,
+                            same_side_or_axial=same_side_or_axial,
                         )
                         if sc_viol is None:
                             sculpted_overlap_pairs.append({**entry, **sc_tel})
