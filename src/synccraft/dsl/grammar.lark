@@ -163,6 +163,7 @@ box_field: "size" ":" (vec2 | vec3)
          | "pivot" ":" vec3
          | "uv" ":" ("box" "(" expr "," expr ")" | vec2)
          | "uv_faces" ":" "{" uv_face_entry* "}"
+         | "uv_scale" ":" expr
          | "texture" ":" IDENT
          | "cullface" ":" ident_list
          | "blend_with" ":" ident_list

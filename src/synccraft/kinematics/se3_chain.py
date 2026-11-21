@@ -161,6 +161,7 @@ class WorldBox:
     layer: int = 0
     prism_group: str | None = None
     sculpt_group: str | None = None
+    uv_scale: float = 1.0
 
     @property
     def half_extents(self) -> np.ndarray:
@@ -656,6 +657,7 @@ def compile_geometry(
                     layer=item_layer,
                     prism_group=f"{prefix}__{item.prism_group}" if (prefix and getattr(item, "prism_group", None)) else getattr(item, "prism_group", None),
                     sculpt_group=raw_sg,
+                    uv_scale=float(getattr(item, "uv_scale", 1.0)),
                 )
                 box_idx = len(boxes)
                 boxes.append(compiled_box)

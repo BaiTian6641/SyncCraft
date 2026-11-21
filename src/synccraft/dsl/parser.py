@@ -3103,6 +3103,7 @@ class _Parser:
         layer_v = 0
         prism_grp: str | None = None
         sculpt_grp: str | None = None
+        uv_scale_v = 1.0
         seen_f: set[str] = set()
 
         while not self.at("}"):
@@ -3148,6 +3149,8 @@ class _Parser:
                     uv = (float(uv_v[0]), float(uv_v[1]))
             elif canon_key == "uv_faces":
                 uv_faces = self._parse_uv_faces_dict()
+            elif canon_key == "uv_scale":
+                uv_scale_v = float(self.number())
             elif canon_key == "texture":
                 texture = self.ident()
             elif canon_key == "edge":
@@ -3186,6 +3189,7 @@ class _Parser:
                 edge=edge_decl,
                 layer=layer_v,
                 sculpt_group=sculpt_grp,
+                uv_scale=uv_scale_v,
             )
         if len(size_raw) != 3:
             self.fail(f"box {name}: size must have 3 components")
@@ -3207,6 +3211,7 @@ class _Parser:
             layer=layer_v,
             prism_group=prism_grp,
             sculpt_group=sculpt_grp,
+            uv_scale=uv_scale_v,
         )
 
     def box(self) -> Box:
@@ -3956,6 +3961,8 @@ def format_program(program: Program) -> str:
                 sg_i = item.sculpt_group
                 sg_i_fmt = f"[{', '.join(sg_i.split('|'))}]" if "|" in sg_i else sg_i
                 b_fields.append(f"sculpt_group: {sg_i_fmt}")
+            if abs(float(getattr(item, "uv_scale", 1.0)) - 1.0) > 1e-6:
+                b_fields.append(f"uv_scale: {fmt_num(float(item.uv_scale))}")
             lines.append(f"{b_start} {{ {', '.join(b_fields)} }}")
         lines.append(pad + "}")
 

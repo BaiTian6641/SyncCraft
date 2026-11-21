@@ -81,12 +81,15 @@ def downsample_optical_fields(
     out_patches: dict[FaceKey, FaceOpticalPatch] = {}
 
     is_authored = getattr(domain.rest_scene.meta, "audit_profile", "strict") == "authored"
+    boxes_by_name = {b.name: b for b in domain.rest_scene.boxes}
     for fk, patch in optical_fields.patches.items():
         grid = domain.faces[fk]
+        b_obj = boxes_by_name.get(fk.box_name)
+        eff_density = density * float(getattr(b_obj, "uv_scale", 1.0)) if b_obj is not None else density
         w_is_int = math.isclose(float(grid.width_units), round(float(grid.width_units)), abs_tol=1e-9) and float(grid.width_units) > 0.0
         h_is_int = math.isclose(float(grid.height_units), round(float(grid.height_units)), abs_tol=1e-9) and float(grid.height_units) > 0.0
-        fw = float(grid.width_units) * density
-        fh = float(grid.height_units) * density
+        fw = float(grid.width_units) * eff_density
+        fh = float(grid.height_units) * eff_density
         if not is_authored and (
             (w_is_int and not math.isclose(fw, round(fw), abs_tol=1e-7))
             or (h_is_int and not math.isclose(fh, round(fh), abs_tol=1e-7))

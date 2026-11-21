@@ -306,6 +306,7 @@ class Box:
     layer: int = 0
     prism_group: str | None = None
     sculpt_group: str | None = None
+    uv_scale: float = 1.0
 
     def __post_init__(self) -> None:
         if isinstance(self.uv_faces, (dict, list)) or self.uv_faces is None:
@@ -337,6 +338,7 @@ def Plane(
     edge: EdgeCutoutDecl | None = None,
     layer: int = 0,
     sculpt_group: str | None = None,
+    uv_scale: float = 1.0,
 ) -> Box:
     """Construct a zero-thickness planar quad Box with 0 physical thickness along ``normal``.
 
@@ -377,6 +379,7 @@ def Plane(
         edge=edge,
         layer=layer,
         sculpt_group=sculpt_group,
+        uv_scale=uv_scale,
     )
 
 
@@ -1204,6 +1207,11 @@ def validate_program(program: Program) -> Program:
                 _vec(item.pivot, f"{item.name}.pivot")
             if item.uv is not None:
                 _vec(item.uv, f"{item.name}.uv", 2)
+            uv_scl = getattr(item, "uv_scale", 1.0)
+            if not _finite_number(uv_scl) or not (0.25 <= float(uv_scl) <= 8.0):
+                raise DSLValidationError(
+                    f"box {item.name}: uv_scale must be a finite number in [0.25, 8.0], got {uv_scl!r}"
+                )
             if not isinstance(item.uv_faces, tuple):
                 raise DSLValidationError(f"box {item.name}: uv_faces must be a tuple of (face, rect) pairs")
             seen_uv_faces: set[str] = set()

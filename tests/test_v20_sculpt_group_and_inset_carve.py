@@ -92,3 +92,58 @@ def test_completely_swallowed_box_and_cross_midline_still_rejected() -> None:
     aud_cr = audit_scene(compile_geometry(parse_program(cross_dsl)), audit_profile="sculpted")
     assert not aud_cr["passed"]
     assert any(c["pair"] == ["spar", "wing_r__spar"] for c in aud_cr["collision_pairs"])
+
+
+def test_per_element_uv_scale_focal_density_roundtrip_and_export() -> None:
+    from pathlib import Path
+    from synccraft.backends import export_bbmodel, export_bedrock
+    from synccraft.dsl.ast_nodes import DSLValidationError
+    from synccraft.shading.uv_packer import allocate_uv_layout, build_atlas
+
+    dsl = """
+@meta { archetype: entity, target_profile: bedrock_entity, texel_density: 32, size_step: 0.5, audit_profile: sculpted }
+@palette {
+  hide: ramp(base_lch=[0.5, 0.08, 195], steps=5)
+  eye:  ramp(base_lch=[0.8, 0.16, 80], steps=5)
+}
+@rig {
+  root bone head {
+    pivot_local: [0, 6, 0]
+    box skull { size: [8, 6, 8], material: hide }
+    box eye_l place(base_box=skull, anchor=[-1, 0.2, 0.2], align=[0.5, 0, 0]) {
+      size: [1.5, 2, 3], material: eye, uv_scale: 2
+    }
+  }
+}
+"""
+    prog = parse_program(dsl)
+    rt = format_program(prog)
+    assert "uv_scale: 2" in rt
+    assert parse_program(rt) == prog
+
+    scene = compile_geometry(prog)
+    layout = allocate_uv_layout(prog, scene)
+    sk_r = layout["faces"]["skull"]["west"]
+    ey_r = layout["faces"]["eye_l"]["west"]
+    assert (sk_r[2] - sk_r[0], sk_r[3] - sk_r[1]) == (16, 12)
+    assert (ey_r[2] - ey_r[0], ey_r[3] - ey_r[1]) == (12, 8)
+
+    atlas, _ = build_atlas(prog, scene)
+    bb = export_bbmodel(scene, atlas=atlas, program=prog)
+    bed = export_bedrock(scene, atlas=atlas, program=prog)
+    assert bed["serialized_vertex_max_error"] <= 1e-6
+    assert any(el["name"] == "eye_l" for el in bb["elements"])
+
+    try:
+        from lark import Lark
+        grammar = (Path(__file__).resolve().parents[1] / "src/synccraft/dsl/grammar.lark").read_text()
+        Lark(grammar, start="start", parser="earley").parse(dsl)
+        Lark(grammar, start="start", parser="earley").parse(rt)
+    except ImportError:
+        pass
+
+    try:
+        parse_program(dsl.replace("uv_scale: 2", "uv_scale: 16"))
+        raise AssertionError("Expected DSLValidationError for uv_scale > 8.0")
+    except DSLValidationError:
+        pass

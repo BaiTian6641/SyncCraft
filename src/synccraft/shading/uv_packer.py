@@ -92,11 +92,13 @@ def allocate_uv_layout(
         sizes = {"north": (sx, sy), "south": (sx, sy), "east": (sz, sy),
                  "west": (sz, sy), "up": (sx, sz), "down": (sx, sz)}
         share_key = getattr(box, "uv_share_key", None)
+        box_uv_scale = float(getattr(box, "uv_scale", 1.0))
+        eff_density = density * box_uv_scale
         for face in ordered_faces:
             u, v = sizes[face]
             u_is_pos_int = math.isclose(u, round(u), abs_tol=1e-9) and u > 0.0
             v_is_pos_int = math.isclose(v, round(v), abs_tol=1e-9) and v > 0.0
-            fw, fh = u * density, v * density
+            fw, fh = u * eff_density, v * eff_density
             if not is_authored and (
                 (u_is_pos_int and not math.isclose(fw, round(fw), abs_tol=1e-7))
                 or (v_is_pos_int and not math.isclose(fh, round(fh), abs_tol=1e-7))
