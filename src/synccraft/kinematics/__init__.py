@@ -10,6 +10,32 @@ from .se3_chain import (
     euler_xyz_matrix,
 )
 from .sat_potential import SATResult, sat_obb
+from .bio_constraints import (
+    BIO_JOINT_NAMES,
+    BIO_JOINT_PRESETS,
+    analyze_motion_capabilities,
+    infer_universal_bio_constraints,
+    resolve_bone_joint_limits,
+    soft_clamp_euler_to_limits,
+    solve_vestibulo_ocular_stabilization,
+)
+from .flight_solver import (
+    audit_flight_clip_contracts,
+    evaluate_flight_clip,
+)
+from .whole_body_solver import (
+    AutoMuscleGroup,
+    BiomechanicalRigAssembly,
+    LimbAssembly,
+    NeckAssembly,
+    WingAssembly,
+    auto_assemble_biomechanical_rig,
+    solve_com_balance_and_counterweight,
+    solve_foot_roll_and_digit_articulation,
+    solve_full_body_antagonist_muscle_bulge,
+    solve_spine_neck_spline_ik,
+    solve_wing_full_anatomy,
+)
 from .gait_inversion import (
     GaitSearchResult,
     InvertedGaitResult,
@@ -85,4 +111,24 @@ __all__ = [
     "invert_clip_to_gait",
     "retarget_clip_across_models",
     "search_or_repair_gait",
+    "BIO_JOINT_NAMES",
+    "BIO_JOINT_PRESETS",
+    "analyze_motion_capabilities",
+    "infer_universal_bio_constraints",
+    "resolve_bone_joint_limits",
+    "soft_clamp_euler_to_limits",
+    "solve_vestibulo_ocular_stabilization",
+    "audit_flight_clip_contracts",
+    "evaluate_flight_clip",
+    "AutoMuscleGroup",
+    "BiomechanicalRigAssembly",
+    "LimbAssembly",
+    "NeckAssembly",
+    "WingAssembly",
+    "auto_assemble_biomechanical_rig",
+    "solve_com_balance_and_counterweight",
+    "solve_foot_roll_and_digit_articulation",
+    "solve_full_body_antagonist_muscle_bulge",
+    "solve_spine_neck_spline_ik",
+    "solve_wing_full_anatomy",
 ]

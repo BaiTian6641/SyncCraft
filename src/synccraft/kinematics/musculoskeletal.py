@@ -157,7 +157,9 @@ def _bone_anchor_point_world(scene: Scene, bone_name: str, preferred_box: str | 
 
 
 def _collect_expanded_joint_limits(program: Program) -> dict[str, tuple[Any, np.ndarray]]:
-    """Map expanded bone name -> (joint_limits, angle_sign) matching compile_geometry."""
+    """Map expanded bone name -> (joint_limits, angle_sign) matching compile_geometry (including bio_joint presets)."""
+    from synccraft.kinematics.bio_constraints import resolve_bone_joint_limits
+
     out: dict[str, tuple[Any, np.ndarray]] = {}
 
     def _walk(
@@ -168,8 +170,9 @@ def _collect_expanded_joint_limits(program: Program) -> dict[str, tuple[Any, np.
         renamed_root: str | None = None,
     ) -> None:
         name = renamed_root or (f"{prefix}__{bone.name}" if prefix else bone.name)
-        if bone.joint_limits is not None:
-            out[name] = (bone.joint_limits, _angle_sign_from_reflection(sign))
+        eff_lim = resolve_bone_joint_limits(bone)
+        if eff_lim is not None:
+            out[name] = (eff_lim, _angle_sign_from_reflection(sign))
         for item in bone.items:
             if isinstance(item, Bone):
                 _walk(item, sign=sign, prefix=prefix)
@@ -969,6 +972,18 @@ def evaluate_behavior_clip(
         raise KeyError(f"Unknown @behavior clip {clip_name!r}; available: {sorted(clip_map)}")
     clip = clip_map[clip_name]
 
+    if getattr(clip, "flights", ()):
+        from synccraft.kinematics.flight_solver import evaluate_flight_clip
+
+        return evaluate_flight_clip(
+            program,
+            clip,
+            num_frames=num_frames,
+            active_state=active_state,
+            sample_phases=sample_phases,
+            _phase_cache=_pre_spring_cache,
+        )
+
     if getattr(clip, "gaits", ()):
         from synccraft.kinematics.gait_solver import evaluate_gait_clip
 
@@ -992,7 +1007,37 @@ def evaluate_behavior_clip(
         state_muscle_tone = dict(st.muscle_tones)
 
     rest_scene = compile_geometry(program, validate=False)
-    limits_map = _collect_expanded_joint_limits(program)
+    explicit_limits = _collect_expanded_joint_limits(program)
+    auto_rig = bool(getattr(clip, "auto_rig", False))
+    com_g = float(getattr(clip, "com_balance", 0.0)) or (0.50 if auto_rig else 0.0)
+    grasp_g = float(getattr(clip, "digit_grasp", 0.0))
+    antag_g = float(getattr(clip, "antagonist_bulge", 0.0)) or (0.65 if auto_rig else 0.0)
+    neck_aim_tgt = getattr(clip, "neck_aim", None)
+    spine_coil_deg = float(getattr(clip, "spine_coil", 0.0))
+    pin_spec = getattr(clip, "ground_pin_limbs", False)
+    has_ground_pin = bool(pin_spec is True or (isinstance(pin_spec, (tuple, list)) and len(pin_spec) > 0))
+    use_auto_bio = bool(getattr(clip, "auto_bio_limits", False) or auto_rig or has_ground_pin)
+    need_rig_asm = bool(
+        auto_rig
+        or has_ground_pin
+        or com_g > 1e-4
+        or grasp_g > 1e-4
+        or antag_g > 1e-4
+        or neck_aim_tgt is not None
+        or abs(spine_coil_deg) > 1e-4
+    )
+    rig_asm = None
+    if need_rig_asm:
+        from synccraft.kinematics.whole_body_solver import auto_assemble_biomechanical_rig
+
+        rig_asm = auto_assemble_biomechanical_rig(program, rest_scene, explicit_limits=explicit_limits)
+        limits_map = rig_asm.bio_constraints if use_auto_bio else explicit_limits
+    elif use_auto_bio:
+        from synccraft.kinematics.bio_constraints import infer_universal_bio_constraints
+
+        limits_map = infer_universal_bio_constraints(program, rest_scene, explicit_limits=explicit_limits)
+    else:
+        limits_map = explicit_limits
     prismatic_map: dict[str, tuple[str, tuple[float, float], Vec3 | None]] = {}
     if program.kinematics is not None:
         for pj in getattr(program.kinematics, "prismatic_joints", ()):
@@ -1159,6 +1204,9 @@ def evaluate_behavior_clip(
                 p_arr[axis_idx[sd.axis]] += disp
             frame_pos_deltas[sd.bone] = (float(p_arr[0]), float(p_arr[1]), float(p_arr[2]))
 
+        from synccraft.kinematics.flight_solver import _apply_muscle_scale_bulge
+
+        _apply_muscle_scale_bulge(program, rest_scene, acts, frame_scale_factors)
         pos_deltas_list.append(frame_pos_deltas)
         scale_factors_list.append(frame_scale_factors)
 
@@ -1167,6 +1215,8 @@ def evaluate_behavior_clip(
         }
 
         # 3. Musculoskeletal + biarticular tendon solve
+        clip_stab = max(float(getattr(clip, "head_stabilize", 0.0)), 0.70 if auto_rig else 0.0)
+        needs_post_scene = bool(clip.ik_drives or all_springs or clip_stab > 1e-4 or rig_asm is not None)
         ms_res = evaluate_muscles_at_activations(
             program,
             acts,
@@ -1177,9 +1227,126 @@ def evaluate_behavior_clip(
             validate=False,
             _rest_scene=rest_scene,
             _limits_map=limits_map,
-            _skip_scene=bool(clip.ik_drives or all_springs),
+            _skip_scene=needs_post_scene,
         )
         cur_poses = dict(ms_res.pose_euler_deltas)
+        if rig_asm is not None:
+            from synccraft.kinematics.whole_body_solver import (
+                solve_com_balance_and_counterweight,
+                solve_foot_roll_and_digit_articulation,
+                solve_full_body_antagonist_muscle_bulge,
+                solve_serpentine_cervical_wave,
+                solve_spine_neck_spline_ik,
+            )
+
+            if auto_rig and neck_aim_tgt is None and abs(spine_coil_deg) <= 1e-4:
+                for na in rig_asm.neck_assemblies:
+                    if len(na.chain) >= 3:
+                        cur_poses = solve_serpentine_cervical_wave(
+                            rest_scene,
+                            na.chain,
+                            cur_poses,
+                            phase_rad=2.0 * math.pi * phi,
+                            pitch_amp_deg=3.5,
+                            yaw_amp_deg=3.2,
+                            roll_amp_deg=1.4,
+                            limits_map=limits_map,
+                        )
+            if neck_aim_tgt is not None or abs(spine_coil_deg) > 1e-4:
+                for na in rig_asm.neck_assemblies:
+                    cur_poses = solve_spine_neck_spline_ik(
+                        program,
+                        rest_scene,
+                        na.chain,
+                        cur_poses,
+                        aim_target_world=neck_aim_tgt,
+                        s_coil_deg=spine_coil_deg,
+                        limits_map=limits_map,
+                        root_translation_delta=root_delta,
+                        pose_position_deltas=frame_pos_deltas or None,
+                        pose_scale_factors=frame_scale_factors or None,
+                        forward_sign_z=float(rig_asm.morphology.forward_sign_z),
+                    )
+            if com_g > 1e-4:
+                cur_poses, root_delta = solve_com_balance_and_counterweight(
+                    program,
+                    rest_scene,
+                    rig_asm,
+                    cur_poses,
+                    root_delta,
+                    strength=com_g,
+                    in_place=bool(getattr(clip, "in_place", False)),
+                    grounded=True,
+                    limits_map=limits_map,
+                    pose_position_deltas=frame_pos_deltas or None,
+                    pose_scale_factors=frame_scale_factors or None,
+                )
+                root_deltas_list[-1] = root_delta
+            if grasp_g > 1e-4 or auto_rig:
+                pin_stance_map: dict[str, bool] | None = None
+                if has_ground_pin:
+                    from synccraft.kinematics.whole_body_solver import limb_matches_pin_spec
+
+                    grounded_las = [la for la in rig_asm.limb_assemblies if not la.is_free]
+                    pin_stance_map = {
+                        la.role: limb_matches_pin_spec(la, lb, pin_spec)
+                        for la, lb in zip(grounded_las, rig_asm.morphology.limbs)
+                    }
+                cur_poses = solve_foot_roll_and_digit_articulation(
+                    rig_asm,
+                    cur_poses,
+                    limb_in_stance=pin_stance_map,
+                    foot_roll_strength=0.0,
+                    digit_strength=0.45 if auto_rig else 0.0,
+                    grasp_amount=grasp_g,
+                    aerial_tuck=False,
+                    limits_map=limits_map,
+                )
+            if antag_g > 1e-4:
+                frame_scale_factors = solve_full_body_antagonist_muscle_bulge(
+                    rig_asm,
+                    cur_poses,
+                    frame_scale_factors,
+                    strength=antag_g,
+                    preserve_grounded_limb_length=bool(clip.ik_drives or has_ground_pin),
+                )
+                scale_factors_list[-1] = frame_scale_factors
+        if clip_stab > 1e-4 and neck_aim_tgt is None:
+            from synccraft.kinematics.bio_constraints import solve_vestibulo_ocular_stabilization
+            from synccraft.kinematics.morphology import analyze_morphology
+
+            if program.kinematics is not None and program.kinematics.look_chains:
+                for lkc in program.kinematics.look_chains:
+                    stab_bones = lkc.bones[-2:] if len(lkc.bones) >= 4 else lkc.bones
+                    eff_stab = min(0.38, clip_stab) if len(lkc.bones) >= 4 else clip_stab
+                    cur_poses = solve_vestibulo_ocular_stabilization(
+                        program,
+                        rest_scene,
+                        stab_bones,
+                        cur_poses,
+                        strength=eff_stab,
+                        weight_decay=float(lkc.weight_decay),
+                        limits_map=limits_map,
+                        root_translation_delta=root_delta,
+                        pose_position_deltas=frame_pos_deltas or None,
+                        pose_scale_factors=frame_scale_factors or None,
+                    )
+            else:
+                morph_c = analyze_morphology(program, rest_scene)
+                for n_ch in (morph_c.neck_chains or ((morph_c.neck,) if morph_c.neck else ())):
+                    stab_bones = n_ch[-2:] if len(n_ch) >= 4 else n_ch
+                    eff_stab = min(0.38, clip_stab) if len(n_ch) >= 4 else clip_stab
+                    cur_poses = solve_vestibulo_ocular_stabilization(
+                        program,
+                        rest_scene,
+                        stab_bones,
+                        cur_poses,
+                        strength=eff_stab,
+                        limits_map=limits_map,
+                        root_translation_delta=root_delta,
+                        pose_position_deltas=frame_pos_deltas or None,
+                        pose_scale_factors=frame_scale_factors or None,
+                    )
         eff_positions = {}
         eff_stance = {}
         eff_step_ids = {}
@@ -1226,6 +1393,25 @@ def evaluate_behavior_clip(
             eff_stance[ikd.chain] = in_stance
             eff_step_ids[ikd.chain] = step_id
 
+        # 4b. Standing Limb IK Pinning (`ground_pin_limbs: true` or `[hind_l, hind_r]`)
+        if has_ground_pin and rig_asm is not None and not all_springs:
+            from synccraft.kinematics.whole_body_solver import solve_standing_limb_ik_pinning
+
+            cur_poses, pin_pos, pin_st, pin_sid = solve_standing_limb_ik_pinning(
+                program,
+                rest_scene,
+                rig_asm,
+                cur_poses,
+                pin_spec=pin_spec,
+                root_translation_delta=root_delta,
+                pose_position_deltas=frame_pos_deltas or None,
+                pose_scale_factors=frame_scale_factors or None,
+                limits_map=limits_map,
+            )
+            eff_positions.update(pin_pos)
+            eff_stance.update(pin_st)
+            eff_step_ids.update(pin_sid)
+
         if _pre_spring_cache is not None:
             _pre_spring_cache[phi_key] = (
                 t_s,
@@ -1270,7 +1456,25 @@ def evaluate_behavior_clip(
         f_pos = pos_deltas_list[f_idx]
         f_scl = scale_factors_list[f_idx]
 
-        if clip.ik_drives or all_springs:
+        if has_ground_pin and rig_asm is not None and all_springs:
+            from synccraft.kinematics.whole_body_solver import solve_standing_limb_ik_pinning
+
+            cur_poses, pin_pos, pin_st, pin_sid = solve_standing_limb_ik_pinning(
+                program,
+                rest_scene,
+                rig_asm,
+                cur_poses,
+                pin_spec=pin_spec,
+                root_translation_delta=root_delta,
+                pose_position_deltas=f_pos or None,
+                pose_scale_factors=f_scl or None,
+                limits_map=limits_map,
+            )
+            eff_pos_list[f_idx].update(pin_pos)
+            eff_stance_list[f_idx].update(pin_st)
+            eff_step_list[f_idx].update(pin_sid)
+
+        if clip.ik_drives or all_springs or float(getattr(clip, "head_stabilize", 0.0)) > 1e-4 or rig_asm is not None:
             final_cache_key = ("__final__", round(phases_list[f_idx], 8))
             if not all_springs and _pre_spring_cache is not None and final_cache_key in _pre_spring_cache:
                 frame_inflate_deltas, final_scene = _pre_spring_cache[final_cache_key]
@@ -1519,9 +1723,15 @@ def audit_behavior_clip(
 
     eff_profile = audit_profile
     if eff_profile is None:
+        meta_profile = str(getattr(getattr(program, "meta", None), "audit_profile", "") or "")
         meta_style = str(getattr(getattr(program, "meta", None), "style", "") or "")
         has_sg = bool(frames) and any(bool(getattr(b, "sculpt_group", ())) for b in frames[0].scene.boxes)
-        eff_profile = "sculpted" if ("sculpted" in meta_style or has_sg) else "strict"
+        if meta_profile in ("sculpted", "authored"):
+            eff_profile = meta_profile
+        elif "sculpted" in meta_style or has_sg:
+            eff_profile = "sculpted"
+        else:
+            eff_profile = meta_profile or "strict"
 
     for fr in frames:
         aud = audit_scene(
@@ -1593,6 +1803,19 @@ def audit_behavior_clip(
         "per_chain_stance_slip": {k: round(v, 6) for k, v in sorted(per_chain_slip.items())},
         "bone_angular_excursion_deg": {k: round(v, 3) for k, v in sorted(bone_excursion_deg.items())},
     }
+    if clip_obj is not None and getattr(clip_obj, "flights", ()):
+        from synccraft.kinematics.flight_solver import audit_flight_clip_contracts
+
+        flight_audit = audit_flight_clip_contracts(
+            program,
+            clip_obj,
+            frames,
+            precomputed_collision_events=total_collision_events,
+        )
+        result_dict["flight_audit"] = flight_audit
+        result_dict["root_motion"] = flight_audit.get("root_motion")
+        if not flight_audit["passed"]:
+            result_dict["passed"] = False
     if clip_obj is not None and getattr(clip_obj, "gaits", ()):
         from synccraft.kinematics.gait_solver import audit_gait_clip_contracts
 

@@ -97,7 +97,11 @@ bind_def: "bind" IDENT "to" dotted_ident ";"?
 rig: "@rig" "{" preamble_decl* "root" root_bone preamble_decl* "}"
 root_bone: "bone" IDENT "{" let_decl* ("pivot_local" ":" vec3)? ("sculpt_group" ":" (STRING | IDENT | ident_list))? rig_node* "}"
 child_bone: "bone" IDENT attach_or_joint symmetry_mod* "{" bone_interior "}"
-bone_interior: let_decl* ("rest_euler" ":" vec3)? ("joint_limits" ":" joint_limits_mat)? ("sculpt_group" ":" (STRING | IDENT | ident_list))? rig_node*
+bone_interior: let_decl* bone_header_prop* rig_node*
+bone_header_prop: "rest_euler" ":" vec3
+                | "joint_limits" ":" joint_limits_mat
+                | "bio_joint" ":" IDENT
+                | "sculpt_group" ":" (STRING | IDENT | ident_list)
 
 ?rig_node: let_decl | box | plane | octagon | prism | locator | child_bone | use_macro | chain_decl
 
@@ -137,6 +141,7 @@ chain_prop: let_decl
           | "axis" ":" ("+" | "-")? IDENT ","?
           | "rest_euler" ":" vec3 ","?
           | "joint_limits" ":" joint_limits_mat ","?
+          | "bio_joint" ":" IDENT ","?
 
 place: "place" "(" ("base_box" "=" IDENT ",")? "anchor" "=" vec3 "," "align" "=" vec3 ("," "offset" "=" vec3)? ")"
      | "inset_carve" "(" "base_box" "=" IDENT "," "anchor" "=" vec3 ("," inset_carve_opt)* ")"
@@ -195,6 +200,7 @@ muscle_def: "muscle" IDENT "{" "origin_bone" ":" dotted_ident "," "insertion_bon
 muscle_opt: "tendon_coupling" ":" "[" dotted_ident "," IDENT "," expr "]"
           | "belly_box" ":" dotted_ident
           | "bulge_inflate" ":" expr
+          | "scale_bulge" ":" expr
 
 kinematics: "@kinematics" "{" (let_decl | ik_chain_def | look_chain_def | spring_def | prismatic_joint_def)+ "}"
 ik_chain_def: "ik_chain" IDENT "{" ik_field ("," ik_field)* "}"
@@ -212,8 +218,12 @@ prismatic_joint_def: "prismatic_joint" dotted_ident "{" pj_field ("," pj_field)*
 pj_field: "axis" ":" IDENT
         | "limits" ":" vec2
 
-behavior: "@behavior" "{" (let_decl | clip_def | gait_def | state_def | spring_def)+ "}"
-clip_def: "clip" IDENT "{" ("duration_s" ":" expr ("," "loop" ":" BOOL)?)? (gait_def | layer_def | effect_def | track_def | slide_def | key_def | muscle_drive_def | ik_drive_def)+ "}"
+behavior: "@behavior" "{" (let_decl | clip_def | gait_def | flight_def | state_def | spring_def)+ "}"
+clip_def: "clip" IDENT "{" clip_hdr_prop* (gait_def | flight_def | layer_def | effect_def | track_def | slide_def | key_def | muscle_drive_def | ik_drive_def)+ "}"
+clip_hdr_prop: ("duration_s" | "head_stabilize" | "com_balance" | "digit_grasp" | "antagonist_bulge" | "spine_coil") ":" expr ","?
+             | ("loop" | "in_place" | "auto_bio_limits" | "auto_rig") ":" BOOL ","?
+             | "ground_pin_limbs" ":" (BOOL | ident_list) ","?
+             | "neck_aim" ":" vec3 ","?
 layer_def: "layer" IDENT (":" "weight" "=" expr)? ";"?
 effect_def: "effect" (IDENT | expr) ":" "{" effect_field* "}"
 effect_field: IDENT ":" (STRING | IDENT) ","?
@@ -221,6 +231,8 @@ gait_def: "gait" IDENT "{" gait_field* "}"
 gait_field: "phase" ":" "{" (IDENT ":" expr ","?)* "}" ","? ";"?
           | "style" ":" "{" (IDENT ":" expr ","?)* "}" ","? ";"?
           | IDENT ":" (BOOL | IDENT | expr) ","? ";"?
+flight_def: "flight" IDENT "{" flight_field* "}"
+flight_field: IDENT ":" (BOOL | IDENT | expr) ","? ";"?
 track_def: "track" dotted_ident ":" IDENT "(" "axis" "=" IDENT "," "amp_deg" "=" expr "," "freq_hz" "=" expr ("," ("phase_deg" | "bias_deg") "=" expr)* ")"
 slide_def: "slide" dotted_ident ":" IDENT "(" "axis" "=" IDENT "," "amp_units" "=" expr "," "freq_hz" "=" expr ("," ("phase_deg" | "bias_units") "=" expr)* ")"
 key_def: "key" dotted_ident "{" key_entry+ (IDENT ","?)? "}"

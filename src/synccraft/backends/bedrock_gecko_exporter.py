@@ -301,28 +301,52 @@ def _serialize_behavior_animations(
         samples = evaluate_behavior_clip(program, clip.name, num_frames=n_frames)
         bones_payload: dict[str, dict[str, Any]] = {}
         explicit_kf_channels: set[tuple[str, str]] = set()
+        has_procedural_solvers = bool(
+            getattr(clip, "auto_rig", False)
+            or getattr(clip, "ground_pin_limbs", False)
+            or getattr(clip, "flights", ())
+            or getattr(clip, "gaits", ())
+            or getattr(clip, "ik_drives", ())
+            or getattr(clip, "muscle_drives", ())
+            or getattr(clip, "layers", ())
+            or float(getattr(clip, "com_balance", 0.0)) > 1e-5
+            or float(getattr(clip, "spine_coil", 0.0)) != 0.0
+            or getattr(clip, "neck_aim", None) is not None
+            or float(getattr(clip, "head_stabilize", 0.0)) > 1e-5
+            or getattr(program.behavior, "springs", ())
+            or (getattr(program, "kinematics", None) is not None and getattr(program.kinematics, "springs", ()))
+        )
 
-        for kf_tr in getattr(clip, "keyframes", ()):
-            explicit_kf_channels.add((kf_tr.bone, kf_tr.channel))
-            ch_dict: dict[str, Any] = {}
-            is_catmull = getattr(kf_tr, "interpolation", "linear") == "catmullrom"
-            for t_s, vec_v in kf_tr.keys:
-                if kf_tr.channel == "rotation":
-                    bed_v = sync_euler_to_bedrock(vec_v)
-                elif kf_tr.channel == "position":
-                    p_b = sync_point_to_bedrock(vec_v)
-                    bed_v = (float(p_b[0]), float(p_b[1]), float(p_b[2]))
-                else:
-                    bed_v = (float(vec_v[0]), float(vec_v[1]), float(vec_v[2]))
-                vec_fmt = vector([round(bed_v[0], 4), round(bed_v[1], 4), round(bed_v[2], 4)])
-                ch_dict[_fmt_time_key(t_s)] = (
-                    {"post": vec_fmt, "lerp_mode": "catmullrom"} if is_catmull else vec_fmt
-                )
-            if ch_dict:
-                bones_payload.setdefault(kf_tr.bone, {})[kf_tr.channel] = ch_dict
+        if not has_procedural_solvers:
+            for kf_tr in getattr(clip, "keyframes", ()):
+                explicit_kf_channels.add((kf_tr.bone, kf_tr.channel))
+                ch_dict: dict[str, Any] = {}
+                is_catmull = getattr(kf_tr, "interpolation", "linear") == "catmullrom"
+                for t_s, vec_v in kf_tr.keys:
+                    if kf_tr.channel == "rotation":
+                        bed_v = sync_euler_to_bedrock(vec_v)
+                    elif kf_tr.channel == "position":
+                        p_b = sync_point_to_bedrock(vec_v)
+                        bed_v = (float(p_b[0]), float(p_b[1]), float(p_b[2]))
+                    else:
+                        bed_v = (float(vec_v[0]), float(vec_v[1]), float(vec_v[2]))
+                    vec_fmt = vector([round(bed_v[0], 4), round(bed_v[1], 4), round(bed_v[2], 4)])
+                    ch_dict[_fmt_time_key(t_s)] = (
+                        {"post": vec_fmt, "lerp_mode": "catmullrom"} if is_catmull else vec_fmt
+                    )
+                if ch_dict:
+                    bones_payload.setdefault(kf_tr.bone, {})[kf_tr.channel] = ch_dict
 
         # Root translation keyframes when forward gait / heave is non-zero (Bedrock negates position X!)
-        has_forward_locomotion = any(abs(d.stride) > 1e-6 for d in clip.ik_drives) or bool(getattr(clip, "gaits", ()))
+        is_in_place = bool(
+            getattr(clip, "in_place", False)
+            or any(getattr(g, "in_place", False) for g in getattr(clip, "gaits", ()))
+            or any(getattr(fl, "in_place", False) for fl in getattr(clip, "flights", ()))
+        )
+        has_forward_locomotion = (
+            not is_in_place
+            and (any(abs(d.stride) > 1e-6 for d in clip.ik_drives) or bool(getattr(clip, "gaits", ())))
+        )
         if (root_bone_name, "position") not in explicit_kf_channels and any(
             math.hypot(s.root_translation_delta[0], math.hypot(s.root_translation_delta[1], s.root_translation_delta[2])) > 1e-5
             for s in samples
@@ -435,6 +459,26 @@ def _serialize_behavior_animations(
                 pos_kfs_b[_fmt_time_key(clip.duration_s)] = vector([round(float(x), 4) for x in p0_bed])
             bones_payload.setdefault(bname, {})["position"] = pos_kfs_b
 
+        # Export Sim(3) bone scale channels (volume-preserving muscle bulge / breathing)
+        for bone in scene.bones:
+            bname = bone.name
+            if (bname, "scale") in explicit_kf_channels:
+                continue
+            if not any(
+                bname in s.pose_scale_factors
+                and any(abs(float(c) - 1.0) > 1e-4 for c in s.pose_scale_factors[bname])
+                for s in samples
+            ):
+                continue
+            scl_kfs_b: dict[str, list[float]] = {}
+            for s in samples:
+                sx, sy, sz = s.pose_scale_factors.get(bname, (1.0, 1.0, 1.0))
+                scl_kfs_b[_fmt_time_key(s.time_s)] = vector([round(float(sx), 4), round(float(sy), 4), round(float(sz), 4)])
+            if clip.loop:
+                sx0, sy0, sz0 = samples[0].pose_scale_factors.get(bname, (1.0, 1.0, 1.0))
+                scl_kfs_b[_fmt_time_key(clip.duration_s)] = vector([round(float(sx0), 4), round(float(sy0), 4), round(float(sz0), 4)])
+            bones_payload.setdefault(bname, {})["scale"] = scl_kfs_b
+
         full_clip_key = clip.name if clip.name.startswith("animation.") else f"animation.{short_asset_id}.{clip.name}"
         clip_entry: dict[str, Any] = {
             "loop": bool(clip.loop),
@@ -475,11 +519,12 @@ def _serialize_behavior_animations(
                 clip_entry["particle_effects"] = particle_fx
             if timeline_fx:
                 clip_entry["timeline"] = timeline_fx
-        if samples and any(abs(float(c)) > 1e-6 for c in getattr(samples[0], "root_motion_velocity", (0.0, 0.0, 0.0))):
+        if samples and (is_in_place or any(abs(float(c)) > 1e-6 for c in getattr(samples[0], "root_motion_velocity", (0.0, 0.0, 0.0)))):
             rm_v = samples[0].root_motion_velocity
             upb = float(getattr(program.meta, "units_per_block", 16))
             spd_u = math.hypot(rm_v[0], math.hypot(rm_v[1], rm_v[2]))
             clip_entry["synccraft_root_motion"] = {
+                "in_place": is_in_place,
                 "speed_units_per_s": round(spd_u, 4),
                 "speed_blocks_per_s": round(spd_u / max(1.0, upb), 4),
                 "velocity_vec": [round(float(rm_v[0]), 4), round(float(rm_v[1]), 4), round(float(rm_v[2]), 4)],

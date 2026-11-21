@@ -454,9 +454,14 @@ def compile_geometry(
         local_rotation = euler_xyz_matrix(euler)
         if pose_euler_deltas and name in pose_euler_deltas:
             delta_euler = _vec(pose_euler_deltas[name])
-            if clamp_joint_limits and bone.joint_limits is not None:
+            eff_jlim = bone.joint_limits
+            if eff_jlim is None and getattr(bone, "bio_joint", None) is not None:
+                from synccraft.kinematics.bio_constraints import resolve_bone_joint_limits
+
+                eff_jlim = resolve_bone_joint_limits(bone)
+            if clamp_joint_limits and eff_jlim is not None:
                 delta_euler = _clamp_delta_to_joint_limits(
-                    delta_euler, bone.joint_limits, angle_sign=angle_sign
+                    delta_euler, eff_jlim, angle_sign=angle_sign
                 )
             local_rotation = local_rotation @ euler_xyz_matrix(delta_euler)
             euler = _recover_euler_xyz_degrees(local_rotation)

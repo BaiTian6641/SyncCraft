@@ -53,6 +53,18 @@ GAIT_PATTERNS = frozenset({
     "biped_alternate",
     "sprawl_diagonal",
     "hexapod_tripod",
+    "metachronal_wave",
+    "serpentine_wave",
+    "swim_undulate",
+})
+FLIGHT_MODES = frozenset({
+    "hover",
+    "cruise",
+    "glide",
+    "soar",
+    "takeoff_burst",
+    "mantle",
+    "swim_fins",
 })
 STAMP_FACE_ALIASES = frozenset({"side", "front", "back", "top", "bottom"})
 CONTINUOUS_AXIS_LIMIT: tuple[float, float] = (-float("inf"), float("inf"))
@@ -398,6 +410,7 @@ class Bone:
     mirror_axis: str = "x"
     radial: RadialSpec | None = None
     sculpt_group: str | None = None
+    bio_joint: str | None = None
 
 
 @dataclass(frozen=True)
@@ -494,7 +507,7 @@ class TendonCoupling:
 
 @dataclass(frozen=True)
 class MuscleDecl:
-    """Reduced-order Hill-type muscle-tendon unit with optional tendon pantograph & isochoric bulge."""
+    """Reduced-order Hill-type muscle-tendon unit with optional tendon pantograph & Sim(3)/isochoric bulge."""
 
     name: str
     origin_bone: str
@@ -504,6 +517,7 @@ class MuscleDecl:
     tendon_coupling: TendonCoupling | None = None
     belly_box: str | None = None
     bulge_inflate: float = 0.0
+    scale_bulge: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -628,7 +642,7 @@ class SlideDriveDecl:
 
 @dataclass(frozen=True)
 class GaitDecl:
-    """Dimensionless Froude-scaled locomotion statement binding to @morphology roles (ADR 0011)."""
+    """Dimensionless Froude-scaled or undulatory locomotion statement binding to @morphology roles."""
 
     name: str
     pattern: str = "lateral_sequence"
@@ -643,6 +657,42 @@ class GaitDecl:
     weight: float = 0.5
     snap: float = 0.3
     export_root_motion: bool = False
+    in_place: bool = False
+    head_stabilize: float = 0.0
+    auto_bio_limits: bool = False
+    foot_roll: float = 0.0
+    digit_articulation: float = 0.0
+    com_balance: float = 0.0
+    antagonist_bulge: float = 0.0
+    wing_fold: float | None = None
+
+
+@dataclass(frozen=True)
+class FlightDecl:
+    """Universal aerodynamic / hydrodynamic airfoil propulsion statement binding to @morphology wings/fins."""
+
+    name: str
+    mode: str = "hover"
+    flap_hz: float = 0.625
+    stroke_deg: float = 36.0
+    sweep_deg: float = 20.0
+    pronation_deg: float = 18.0
+    elbow_fold_deg: float = 22.0
+    wrist_lag_deg: float = 24.0
+    finger_fan_deg: float = 10.0
+    lift_recoil_u: float = 2.8
+    body_pitch_deg: float = 14.0
+    head_stabilize: float = 0.80
+    tail_counter_deg: float = 14.0
+    limb_tuck: float = 0.70
+    pair_phase_deg: float = 65.0
+    in_place: bool = True
+    auto_bio_limits: bool = True
+    digit_articulation: float = 0.0
+    com_balance: float = 0.0
+    antagonist_bulge: float = 0.0
+    pectoral_bulge: float = 0.0
+    ground_clearance: bool = True
 
 
 @dataclass(frozen=True)
@@ -671,7 +721,7 @@ class EffectTriggerDecl:
 
 @dataclass(frozen=True)
 class ClipDecl:
-    """Named multi-channel biomechanical/mechanical/keyframe/gait animation clip in @behavior."""
+    """Named multi-channel biomechanical/mechanical/keyframe/gait/flight animation clip in @behavior."""
 
     name: str
     duration_s: float
@@ -684,6 +734,17 @@ class ClipDecl:
     gaits: tuple[GaitDecl, ...] = ()
     layers: tuple[ClipLayerDecl, ...] = ()
     effects: tuple[EffectTriggerDecl, ...] = ()
+    flights: tuple[FlightDecl, ...] = ()
+    in_place: bool = False
+    head_stabilize: float = 0.0
+    auto_bio_limits: bool = False
+    auto_rig: bool = False
+    com_balance: float = 0.0
+    digit_grasp: float = 0.0
+    antagonist_bulge: float = 0.0
+    neck_aim: Vec3 | None = None
+    spine_coil: float = 0.0
+    ground_pin_limbs: bool | tuple[str, ...] = False
 
 
 @dataclass(frozen=True)
@@ -1032,6 +1093,7 @@ def validate_program(program: Program) -> Program:
                 or bone.radial is not None
                 or any(bone.rest_euler)
                 or bone.joint_limits is not None
+                or getattr(bone, "bio_joint", None) is not None
             ):
                 raise DSLValidationError("root has pivot_local only; no attach, mirror, radial, rest_euler, or joint_limits")
         else:
@@ -1062,6 +1124,14 @@ def validate_program(program: Program) -> Program:
                 raise DSLValidationError("child pivot is derived from attach; pivot_local must remain zero")
             if bone.joint_limits is not None:
                 _validate_joint_limits(bone.joint_limits, f"{bone.name}.joint_limits")
+            if getattr(bone, "bio_joint", None) is not None:
+                from synccraft.kinematics.bio_constraints import BIO_JOINT_NAMES
+
+                if not isinstance(bone.bio_joint, str) or bone.bio_joint not in BIO_JOINT_NAMES:
+                    raise DSLValidationError(
+                        f"bone {bone.name}: unknown bio_joint preset {bone.bio_joint!r}; "
+                        f"expected one of {sorted(BIO_JOINT_NAMES)}"
+                    )
 
         clone_roots = _clone_roots_for_bone(bone) if parent_boxes is not None else []
         if clone_roots:
@@ -1239,9 +1309,11 @@ def validate_program(program: Program) -> Program:
         renamed_root: str | None = None,
         sign_xyz: tuple[float, float, float] = (1.0, 1.0, 1.0),
     ) -> None:
+        from synccraft.kinematics.bio_constraints import resolve_bone_joint_limits
+
         bname = renamed_root or (f"{prefix}__{bone.name}" if prefix else bone.name)
         expanded_bone_parent[bname] = parent_name
-        expanded_bone_limits[bname] = (bone.joint_limits, _angle_sign_tuple(sign_xyz))
+        expanded_bone_limits[bname] = (resolve_bone_joint_limits(bone), _angle_sign_tuple(sign_xyz))
         for it in bone.items:
             if isinstance(it, Box):
                 full_bname = f"{prefix}__{it.name}" if prefix else it.name
@@ -1423,6 +1495,8 @@ def validate_program(program: Program) -> Program:
                 raise DSLValidationError(f"muscle {mus.name}: tendon_coupling ratio must lie in [-2.5, 2.5]")
         if not _finite_number(mus.bulge_inflate) or not (0.0 <= mus.bulge_inflate <= 0.35):
             raise DSLValidationError(f"muscle {mus.name}: bulge_inflate must lie in [0.0, 0.35]")
+        if not _finite_number(getattr(mus, "scale_bulge", 0.0)) or not (0.0 <= float(getattr(mus, "scale_bulge", 0.0)) <= 0.25):
+            raise DSLValidationError(f"muscle {mus.name}: scale_bulge must lie in [0.0, 0.25]")
         if mus.belly_box is not None:
             if mus.belly_box not in expanded_boxes:
                 raise DSLValidationError(f"muscle {mus.name}: unknown belly_box {mus.belly_box!r}")
@@ -1533,11 +1607,44 @@ def validate_program(program: Program) -> Program:
                 and not clip.keyframes
                 and not clip.slide_drives
                 and not clip.gaits
+                and not getattr(clip, "flights", ())
                 and not getattr(clip, "layers", ())
             ):
                 raise DSLValidationError(
-                    f"clip {clip.name}: must contain at least one gait, layer, track, slide, key, muscle_drive, or ik_drive"
+                    f"clip {clip.name}: must contain at least one gait, flight, layer, track, slide, key, muscle_drive, or ik_drive"
                 )
+            if not _finite_number(getattr(clip, "head_stabilize", 0.0)) or not (0.0 <= float(getattr(clip, "head_stabilize", 0.0)) <= 1.0):
+                raise DSLValidationError(f"clip {clip.name}: head_stabilize must lie in [0.0, 1.0]")
+            for unit_f in ("com_balance", "digit_grasp", "antagonist_bulge"):
+                uv = float(getattr(clip, unit_f, 0.0))
+                if not _finite_number(uv) or not (0.0 <= uv <= 1.0):
+                    raise DSLValidationError(f"clip {clip.name}: {unit_f} must lie in [0.0, 1.0]")
+            if getattr(clip, "neck_aim", None) is not None:
+                _vec(clip.neck_aim, f"{clip.name}.neck_aim")
+            sc_v = float(getattr(clip, "spine_coil", 0.0))
+            if not _finite_number(sc_v) or abs(sc_v) > 90.0:
+                raise DSLValidationError(f"clip {clip.name}: spine_coil must lie in [-90, 90]")
+            gpin = getattr(clip, "ground_pin_limbs", False)
+            if not isinstance(gpin, bool):
+                if not isinstance(gpin, (tuple, list)) or not gpin or any(not _valid_ident(x) for x in gpin):
+                    raise DSLValidationError(
+                        f"clip {clip.name}: ground_pin_limbs must be a boolean or non-empty list of limb identifiers"
+                    )
+            for fl in getattr(clip, "flights", ()):
+                if not isinstance(fl, FlightDecl):
+                    raise DSLValidationError("flights must contain FlightDecl objects")
+                if not _valid_ident(fl.name):
+                    raise DSLValidationError(f"clip {clip.name}: invalid flight name {fl.name!r}")
+                if fl.mode not in FLIGHT_MODES:
+                    raise DSLValidationError(f"clip {clip.name}: unknown flight mode {fl.mode!r}; expected one of {sorted(FLIGHT_MODES)}")
+                if not _finite_number(fl.flap_hz) or not (0.05 <= float(fl.flap_hz) <= 12.0):
+                    raise DSLValidationError(f"clip {clip.name}: flight flap_hz must lie in [0.05, 12.0]")
+                if not _finite_number(fl.head_stabilize) or not (0.0 <= float(fl.head_stabilize) <= 1.0):
+                    raise DSLValidationError(f"clip {clip.name}: flight head_stabilize must lie in [0.0, 1.0]")
+                if not _finite_number(fl.limb_tuck) or not (0.0 <= float(fl.limb_tuck) <= 1.0):
+                    raise DSLValidationError(f"clip {clip.name}: flight limb_tuck must lie in [0.0, 1.0]")
+                if not _finite_number(fl.lift_recoil_u) or not (0.0 <= float(fl.lift_recoil_u) <= 16.0):
+                    raise DSLValidationError(f"clip {clip.name}: flight lift_recoil_u must lie in [0.0, 16.0]")
             for lyr in getattr(clip, "layers", ()):
                 if not isinstance(lyr, ClipLayerDecl):
                     raise DSLValidationError("layers must contain ClipLayerDecl objects")

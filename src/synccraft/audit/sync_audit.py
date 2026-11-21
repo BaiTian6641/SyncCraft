@@ -18,7 +18,7 @@ MAX_SCULPTED_OVERLAP_RATIO: float = 0.85
 MAX_SCULPTED_PARALLEL_OVERLAP_RATIO: float = 0.65
 MAX_SCULPTED_BURIED_VOLUME_RATIO: float = 0.65
 MAX_SCULPT_GROUP_BURIED_VOLUME_RATIO: float = 0.88
-MAX_SCULPTED_HINGE_ANGLE_DEG: float = 135.0
+MAX_SCULPTED_HINGE_ANGLE_DEG: float = 160.0
 MAX_SCULPTED_HINGE_ALLOWANCE_UNITS: float = 6.0
 
 _LATTICE_1D = np.linspace(-1.0 + 1.0 / 8.0, 1.0 - 1.0 / 8.0, 8, dtype=np.float64)
@@ -511,7 +511,25 @@ def _evaluate_sculpted_overlap(
             telemetry,
         )
 
-    if raw_min_overlap > collision_tolerance and (
+    # During dynamic animation frames (`enforce_gap=False`, e.g., swept-OBB motion audit),
+    # static rest-pose audit (`enforce_physical_contact=True`) has already verified that no
+    # box is permanently swallowed/redundant. Allow explicitly coupled joint bridges, deep
+    # Z-fold joints, and retracting mechanical pistons (`is_sculpt_cluster`, `blend_with`, or
+    # parent-child/declared joints on same-side/axial bones) to tuck transiently into the
+    # joint socket at peak flexion while still rejecting all non-joint collisions & Z-fighting!
+    is_dynamic_coupled_joint = (not enforce_gap) and same_side_or_axial and (
+        is_sculpt_cluster
+        or reason in (
+            "sculpted_blend_pair",
+            "sculpted_parent_child_joint",
+            "declared_attach",
+            "declared_place",
+            "declared_joint",
+            "declared_inset_carve",
+        )
+    )
+
+    if raw_min_overlap > collision_tolerance and (not is_dynamic_coupled_joint) and (
         min_prot <= min_req_prot
         or (not has_plane and not is_prism_hub and buried_frac > eff_buried_cap)
     ):

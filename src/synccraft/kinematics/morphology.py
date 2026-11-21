@@ -21,7 +21,7 @@ from synccraft.kinematics.se3_chain import Scene, WorldBone, WorldBox, compile_g
 
 @dataclass(frozen=True)
 class LimbMorphology:
-    """Derived geometric and kinematic descriptor for a single ground-contacting limb."""
+    """Derived geometric and kinematic descriptor for a single limb (grounded or free)."""
 
     role: str
     chain: tuple[str, ...]
@@ -35,6 +35,7 @@ class LimbMorphology:
     side: str  # "l" | "r" | "c"
     mirror_of: str | None = None
     ik_chain_name: str | None = None
+    digits: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -53,32 +54,44 @@ class LimbMorphology:
             payload["mirror_of"] = self.mirror_of
         if self.ik_chain_name is not None:
             payload["ik_chain_name"] = self.ik_chain_name
+        if self.digits:
+            payload["digits"] = list(self.digits)
         return payload
 
 
 @dataclass(frozen=True)
 class WingMorphology:
-    """Derived descriptor for a non-ground lateral wing appendage."""
+    """Derived descriptor for a non-ground lateral wing / airfoil / flipper appendage."""
 
     role: str
     chain: tuple[str, ...]
     span: float
     mirror_of: str | None = None
+    finger_bones: tuple[str, ...] = ()
+    locked_spar_bones: tuple[str, ...] = ()
+    side: str = "l"
+    pair_index: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {
             "role": self.role,
             "chain": list(self.chain),
             "span": round(self.span, 4),
+            "side": self.side,
+            "pair_index": self.pair_index,
         }
         if self.mirror_of is not None:
             out["mirror_of"] = self.mirror_of
+        if self.finger_bones:
+            out["finger_bones"] = list(self.finger_bones)
+        if self.locked_spar_bones:
+            out["locked_spar_bones"] = list(self.locked_spar_bones)
         return out
 
 
 @dataclass(frozen=True)
 class MorphologyReport:
-    """Complete derived `@morphology` anatomical & inertial summary of an asset."""
+    """Complete derived `@morphology` anatomical & inertial summary of any creature rig."""
 
     limbs: tuple[LimbMorphology, ...]
     spine: tuple[str, ...]
@@ -92,13 +105,17 @@ class MorphologyReport:
     body_span: Vec3
     support_polygon_xz: tuple[tuple[float, float], ...]
     symmetry_pairs: tuple[tuple[str, str], ...]
+    free_limbs: tuple[LimbMorphology, ...] = ()
+    neck_chains: tuple[tuple[str, ...], ...] = ()
+    tail_chains: tuple[tuple[str, ...], ...] = ()
+    tentacles: tuple[tuple[str, ...], ...] = ()
 
     @property
     def limb_by_role(self) -> dict[str, LimbMorphology]:
         return {lb.role: lb for lb in self.limbs}
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "limbs": [lb.to_dict() for lb in self.limbs],
             "spine": list(self.spine),
             "neck": list(self.neck),
@@ -114,6 +131,15 @@ class MorphologyReport:
             "body_span": [round(x, 4) for x in self.body_span],
             "symmetry_pairs": [list(p) for p in self.symmetry_pairs],
         }
+        if self.free_limbs:
+            payload["free_limbs"] = [lb.to_dict() for lb in self.free_limbs]
+        if len(self.neck_chains) > 1:
+            payload["neck_chains"] = [list(c) for c in self.neck_chains]
+        if len(self.tail_chains) > 1:
+            payload["tail_chains"] = [list(c) for c in self.tail_chains]
+        if self.tentacles:
+            payload["tentacles"] = [list(c) for c in self.tentacles]
+        return payload
 
 
 def _convex_hull_2d(points: list[tuple[float, float]]) -> tuple[tuple[float, float], ...]:
@@ -211,6 +237,7 @@ def analyze_morphology(program: Program, scene: Scene | None = None) -> Morpholo
     boxes_by_bone: dict[str, list[WorldBox]] = {b.name: [] for b in sc.bones}
     all_mins: list[np.ndarray] = []
     all_maxs: list[np.ndarray] = []
+    solid_mins: list[np.ndarray] = []
     mass_sum = 0.0
     weighted_com = np.zeros(3, dtype=np.float64)
     bone_mass: dict[str, float] = {b.name: 0.0 for b in sc.bones}
@@ -218,8 +245,11 @@ def analyze_morphology(program: Program, scene: Scene | None = None) -> Morpholo
     for bx in sc.boxes:
         boxes_by_bone.setdefault(bx.bone_name, []).append(bx)
         corners = bx.corners(include_inflate=True)
-        all_mins.append(np.min(corners, axis=0))
+        c_min = np.min(corners, axis=0)
+        all_mins.append(c_min)
         all_maxs.append(np.max(corners, axis=0))
+        if getattr(bx, "plane_normal", None) is None:
+            solid_mins.append(c_min)
         pos_dims = bx.size[bx.size > 1e-6]
         if getattr(bx, "plane_normal", None) is not None:
             area = float(np.prod(pos_dims)) if pos_dims.size >= 2 else 1.0
@@ -233,7 +263,8 @@ def analyze_morphology(program: Program, scene: Scene | None = None) -> Morpholo
     g_min = np.min(np.vstack(all_mins), axis=0)
     g_max = np.max(np.vstack(all_maxs), axis=0)
     span = g_max - g_min
-    ground_y = float(g_min[1])
+    # Use solid 3D cuboids for ground_y (never zero-thickness alpha-cutout wing/cape planes whose invisible corners extend below y=0!)
+    ground_y = float(np.min(np.vstack(solid_mins)[:, 1])) if solid_mins else float(g_min[1])
     total_h = max(1.0, float(span[1]))
     com_vec = (weighted_com / max(1e-9, mass_sum)) if mass_sum > 0.0 else np.zeros(3, dtype=np.float64)
 
@@ -289,33 +320,170 @@ def analyze_morphology(program: Program, scene: Scene | None = None) -> Morpholo
         if abs(med_v) > 0.25:
             fwd_sign = 1.0 if med_v > 0.0 else -1.0
 
+    _DIGIT_TOKENS = ("toe", "thumb", "finger", "claw", "talon", "nail", "digit", "knuckle", "phalanx")
+    _ORAL_ACCESSORY_TOKENS = (
+        "jaw", "chin", "tongue", "tooth", "teeth", "fang", "lip", "cheek",
+        "eye", "pupil", "brow", "eyelid", "horn", "antler", "crest", "frill",
+        "ear", "pinna", "spike", "ruff", "jabot", "beard", "whisker", "snout_tip",
+        "snout", "muzzle", "rostrum", "beak", "maxilla", "mandible", "dental", "palate", "crown",
+        "fin", "turret", "gun", "barrel",
+    )
+
     def _subtree_bones(start: str) -> list[str]:
         acc = [start]
         for ch in children_by_bone.get(start, ()):
             acc.extend(_subtree_bones(ch))
         return acc
 
-    def _subtree_bounds(start: str) -> tuple[np.ndarray, np.ndarray, bool]:
+    def _subtree_bounds(start: str) -> tuple[np.ndarray, np.ndarray, bool, float]:
         sub_b = _subtree_bones(start)
         bxs = [bx for bn in sub_b for bx in boxes_by_bone.get(bn, ())]
         if not bxs:
             p = bone_by_name[start].pivot_world
-            return p.copy(), p.copy(), False
+            return p.copy(), p.copy(), False, 0.0
         c_all = np.vstack([bx.corners(include_inflate=True) for bx in bxs])
         has_planes = any(getattr(bx, "plane_normal", None) is not None for bx in bxs)
-        return np.min(c_all, axis=0), np.max(c_all, axis=0), has_planes
+        # Geometric airfoil/fin thinness ratio: surface-area / volume^2/3 (high for flat wings/fins even without planes)
+        tot_area = 0.0
+        tot_vol = 0.0
+        for bx in bxs:
+            sx, sy, sz = float(bx.size[0]), float(bx.size[1]), float(bx.size[2])
+            if getattr(bx, "plane_normal", None) is not None:
+                dims = sorted([sx, sy, sz], reverse=True)
+                tot_area += dims[0] * dims[1]
+                tot_vol += 0.1 * dims[0] * dims[1]
+            else:
+                tot_area += 2.0 * (sx * sy + sy * sz + sx * sz)
+                tot_vol += sx * sy * sz
+        slenderness = tot_area / max(1e-6, (max(1e-6, tot_vol) ** (2.0 / 3.0)))
+        return np.min(c_all, axis=0), np.max(c_all, axis=0), has_planes, float(slenderness)
 
-    def _longest_primary_chain(start: str) -> tuple[str, ...]:
+    def _bone_extent_len(bname: str) -> float:
+        bxs = boxes_by_bone.get(bname, ())
+        if not bxs:
+            chs = children_by_bone.get(bname, ())
+            if chs:
+                p0 = bone_by_name[bname].pivot_world
+                return max(float(np.linalg.norm(bone_by_name[c].pivot_world - p0)) for c in chs)
+            return 1.0
+        c_all = np.vstack([bx.corners(include_inflate=False) for bx in bxs])
+        p0 = bone_by_name[bname].pivot_world
+        return max(0.5, float(np.max(np.linalg.norm(c_all - p0, axis=1))))
+
+    def _is_digit_branch(parent_b: str, child_b: str, siblings: list[str]) -> bool:
+        """Purely geometric + token check for terminal fingers/toes/claws on a limb hub."""
+        low = child_b.lower()
+        if any(tok in low for tok in _DIGIT_TOKENS):
+            return True
+        if len(siblings) >= 2:
+            # Multi-ray splay of short distal twigs off a palm/foot/tarsus hub
+            parent_len = _bone_extent_len(parent_b)
+            sib_lens = [_bone_extent_len(s) for s in siblings]
+            if max(sib_lens) <= 0.55 * max(1.0, parent_len):
+                return True
+        return False
+
+    def _structural_limb_chain(start: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        """Return ``(primary_limb_chain, terminal_digits)`` stopping cleanly at the palm/foot hub."""
+        digits: list[str] = []
+
+        def _walk(cur: str) -> tuple[str, ...]:
+            chs = children_by_bone.get(cur, [])
+            if not chs:
+                return (cur,)
+            structural_chs: list[str] = []
+            for ch in chs:
+                if _is_digit_branch(cur, ch, chs):
+                    digits.extend(_subtree_bones(ch))
+                else:
+                    structural_chs.append(ch)
+            if not structural_chs:
+                return (cur,)
+            best: tuple[str, ...] = (cur,)
+            for ch in structural_chs:
+                cand = (cur, *_walk(ch))
+                if len(cand) > len(best):
+                    best = cand
+                elif len(cand) == len(best):
+                    # Prefer child reaching closer to ground or farther distally
+                    if bone_by_name[cand[-1]].pivot_world[1] < bone_by_name[best[-1]].pivot_world[1]:
+                        best = cand
+            return best
+
+        chain_res = _walk(start)
+        return chain_res, tuple(dict.fromkeys(digits))
+
+    def _decompose_wing_structure(start: str) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+        """Decompose ANY airfoil/wing/flipper into ``(arm_chain, finger_bones, locked_spar_bones)``."""
+        root_x = float(bone_by_name[start].pivot_world[0])
+        outward_sign = 1.0 if root_x >= 0.0 else -1.0
+
+        def _is_thumb_or_claw(bn: str) -> bool:
+            low_b = bn.lower()
+            return any(tok in low_b for tok in ("thumb", "claw", "spur", "spike", "talon"))
+
+        def _is_locked_anchor(bn: str, depth_from_root: int) -> bool:
+            # Explicit bio_joint: wing_anchor_locked OR zero joint_limits OR proximal medial spar (`f4` on forearm)
+            low_b = bn.lower()
+            if depth_from_root == 1 and any(tok in low_b for tok in ("_f4", "f4", "inner_spar", "patagium_anchor")):
+                return True
+            return False
+
+        arm: list[str] = [start]
+        fingers: list[str] = []
+        locked: list[str] = []
+        cur = start
+        depth = 0
+        while depth < 6:
+            chs = children_by_bone.get(cur, [])
+            if not chs:
+                break
+            non_thumb = [c for c in chs if not _is_thumb_or_claw(c)]
+            if not non_thumb:
+                break
+            # Classify locked proximal medial anchors (e.g. `wing_l_f4` mounted on `wing_l_fore`)
+            cand_next: list[str] = []
+            for c in non_thumb:
+                if _is_locked_anchor(c, depth):
+                    locked.append(c)
+                else:
+                    cand_next.append(c)
+            if not cand_next:
+                break
+            # If multiple distal membrane fingers fan out from this wrist/hub (>= 2 rays), stop arm here
+            if depth >= 1 and len(cand_next) >= 2:
+                # Check if one child is clearly a structural wrist/forearm continuation with children of its own
+                with_kids = [c for c in cand_next if any(not _is_thumb_or_claw(gc) for gc in children_by_bone.get(c, ()))]
+                if len(with_kids) == 1 and depth < 2:
+                    nxt = with_kids[0]
+                    for other in cand_next:
+                        if other != nxt:
+                            locked.append(other)
+                    arm.append(nxt)
+                    cur = nxt
+                    depth += 1
+                    continue
+                # Otherwise all fanning rays are wing membrane fingers!
+                fingers.extend(sorted(cand_next, key=lambda bn: -outward_sign * float(bone_by_name[bn].pivot_world[0])))
+                break
+            # Single primary continuation -> advance arm spar
+            nxt = cand_next[0]
+            # Stop arm at max 3 segments (shoulder -> elbow -> wrist); further single child is primary tip ray
+            if len(arm) >= 3:
+                fingers.append(nxt)
+                break
+            arm.append(nxt)
+            cur = nxt
+            depth += 1
+
+        return tuple(arm), tuple(fingers), tuple(locked)
+
+    def _longest_chain_simple(start: str) -> tuple[str, ...]:
         best: tuple[str, ...] = (start,)
         for ch in children_by_bone.get(start, ()):
-            # Skip tiny accessory twigs (spurs/claws/feathers) if a deeper structural limb segment exists
-            cand = (start, *_longest_primary_chain(ch))
+            cand = (start, *_longest_chain_simple(ch))
             if len(cand) > len(best):
                 best = cand
-            elif len(cand) == len(best):
-                # Prefer child whose pivot drops lower toward the ground (for legs) or extends farther
-                if bone_by_name[cand[-1]].pivot_world[1] < bone_by_name[best[-1]].pivot_world[1]:
-                    best = cand
         return best
 
     # Map declared IK chains by root bone for seamless reuse when present
@@ -336,7 +504,7 @@ def analyze_morphology(program: Program, scene: Scene | None = None) -> Morpholo
             cb = bone_by_name[ch]
             low = ch.lower()
             is_wing_or_limb_kw = any(
-                k in low for k in ("leg", "arm", "wing", "femur", "humerus", "thigh", "shin", "paw", "foot", "claw", "horn", "ear", "gear", "wheel")
+                k in low for k in ("leg", "arm", "wing", "femur", "humerus", "thigh", "shin", "paw", "foot", "claw", "horn", "ear", "gear", "wheel", "flipper", "tentacle")
             )
             if abs(float(cb.pivot_world[0])) <= center_tol and ch not in paired_bones and not is_wing_or_limb_kw:
                 axial_bones.add(ch)
@@ -345,24 +513,42 @@ def analyze_morphology(program: Program, scene: Scene | None = None) -> Morpholo
     neck_list: list[str] = []
     tail_list: list[str] = []
     spine_list: list[str] = [root_name]
+    # Also collect any multi-branch axial head/tail/tentacle subtrees
+    extra_neck_chains: list[tuple[str, ...]] = []
+    extra_tail_chains: list[tuple[str, ...]] = []
+    tentacle_chains: list[tuple[str, ...]] = []
+
+    def _is_oral_or_accessory(bname: str) -> bool:
+        low_b = bname.lower()
+        return any(k in low_b for k in _ORAL_ACCESSORY_TOKENS)
 
     for bname in sc.bones:
         if bname.name not in axial_bones or bname.name == root_name:
             continue
         low = bname.name.lower()
+        if _is_oral_or_accessory(bname.name):
+            continue
+        # Skip descendants of excluded oral/accessory bones (e.g. tongue_tip under tongue_base!)
+        anc_chk = bname.parent_name
+        under_accessory = False
+        while anc_chk is not None and anc_chk != root_name:
+            if _is_oral_or_accessory(anc_chk):
+                under_accessory = True
+                break
+            anc_chk = bone_by_name[anc_chk].parent_name if anc_chk in bone_by_name else None
+        if under_accessory:
+            continue
+
         dz_f = fwd_sign * float(bname.pivot_world[2] - bone_by_name[root_name].pivot_world[2])
         if any(k in low for k in ("tail", "caudal")):
             tail_list.append(bname.name)
         elif any(k in low for k in ("neck", "cerv", "head", "skull")):
             neck_list.append(bname.name)
-        elif any(k in low for k in ("jaw", "chin", "crest", "fin", "turret", "gun", "barrel")):
-            continue
         elif dz_f < -0.22 * float(span[2]) and not children_by_bone.get(bname.name):
             tail_list.append(bname.name)
         elif dz_f > 0.25 * float(span[2]) and float(bname.pivot_world[1]) > float(com_vec[1]):
             neck_list.append(bname.name)
         else:
-            # Check if ancestor is already in neck or tail
             anc = bname.parent_name
             in_neck = False
             in_tail = False
@@ -375,21 +561,24 @@ def analyze_morphology(program: Program, scene: Scene | None = None) -> Morpholo
                     break
                 anc = bone_by_name[anc].parent_name if anc in bone_by_name else None
             if in_neck:
-                neck_list.append(bname.name)
+                # Only continue neck into genuine cranial continuation, not small decorative twigs
+                if len(neck_list) == 0 or bone_mass.get(bname.name, 0.0) >= 0.12 * max(1.0, bone_mass.get(neck_list[-1], 1.0)):
+                    neck_list.append(bname.name)
             elif in_tail:
                 tail_list.append(bname.name)
             elif any(
                 abs(float(bone_by_name[c].pivot_world[0])) > center_tol for c in children_by_bone.get(bname.name, ())
-            ) or any(k in low for k in ("torso", "chest", "waist", "lumbar", "pelvis", "thorax", "abdomen", "hull", "chassis")):
+            ) or any(k in low for k in ("torso", "chest", "waist", "lumbar", "pelvis", "thorax", "abdomen", "hull", "chassis", "body", "seg")):
                 spine_list.append(bname.name)
 
     # Sort spine from rear to front along forward_sign_z
     spine_sorted = tuple(sorted(spine_list, key=lambda n: fwd_sign * float(bone_by_name[n].pivot_world[2])))
 
-    # 2. Identify lateral appendages branching from axial trunk / shoulder / hip mounts
+    # 2. Identify lateral & branching appendages (grounded limbs, wings/fins, free arms, extra necks/tails/tentacles)
     ground_tol = max(2.2, 0.14 * total_h)
     raw_limb_candidates: list[dict[str, Any]] = []
-    raw_wings: list[WingMorphology] = []
+    raw_free_limb_candidates: list[dict[str, Any]] = []
+    raw_wing_candidates: list[dict[str, Any]] = []
     visited_subtrees: set[str] = set()
 
     for b in sc.bones:
@@ -397,52 +586,158 @@ def analyze_morphology(program: Program, scene: Scene | None = None) -> Morpholo
             continue
         if b.parent_name not in axial_bones:
             continue
-        s_min, s_max, has_planes = _subtree_bounds(b.name)
+        s_min, s_max, has_planes, slenderness = _subtree_bounds(b.name)
         sub_all = _subtree_bones(b.name)
         low = b.name.lower()
 
-        # Skip decorative horns/ears/exhausts/pistons/gears that don't touch ground
+        # Skip small decorative head/cranial/oral attachments (horns, ears, crests, teeth, cheeks, jaw plates)
+        is_cranial_parent = bool(neck_list) and b.parent_name == neck_list[-1]
+        sub_max_dim = float(np.max(s_max - s_min))
+        if (
+            any(k in low for k in ("horn", "ear", "pinna", "antler", "crest", "gear", "flywheel", "turret", "piston", "collar", "ruff", "jabot", "mandible", "maxilla", "cheek", "tooth", "teeth", "fang", "tongue", "brow", "eye"))
+            or (is_cranial_parent and sub_max_dim < 0.28 * float(span[0]))
+        ):
+            visited_subtrees.update(sub_all)
+            continue
+
         reaches_ground = (float(s_min[1]) - ground_y) <= ground_tol
         declared_ik = ik_by_root.get(b.name)
         if declared_ik is None:
-            # Check if an IK chain starts one bone below a static shoulder/hip girdle
             for ch_b in children_by_bone.get(b.name, ()):
                 if ch_b in ik_by_root:
                     declared_ik = ik_by_root[ch_b]
                     break
 
-        is_wing_kw = "wing" in low
+        is_wing_kw = any(k in low for k in ("wing", "fin", "flipper", "patagium", "sail"))
+        is_tentacle_kw = any(k in low for k in ("tentacle", "tendril", "whip", "feeler", "antenna"))
+        is_neck_kw = any(k in low for k in ("neck", "head", "skull", "cerv"))
+        is_tail_kw = any(k in low for k in ("tail", "caudal"))
         lat_span = float(s_max[0] - s_min[0])
-        if (is_wing_kw and not reaches_ground) or (
-            not reaches_ground and declared_ik is None and (has_planes or lat_span > 0.35 * float(span[0])) and float(b.pivot_world[1] - ground_y) > 0.45 * total_h
-        ):
-            chain_w = _longest_primary_chain(b.name)
-            if len(chain_w) >= 2 or is_wing_kw:
+        vert_span = float(s_max[1] - s_min[1])
+
+        # Multi-headed creature (e.g. Hydra / Cerberus lateral necks)
+        if is_neck_kw and not reaches_ground and declared_ik is None:
+            nc = tuple(bn for bn in _longest_chain_simple(b.name) if not _is_oral_or_accessory(bn))
+            if nc:
+                extra_neck_chains.append(nc)
+            visited_subtrees.update(sub_all)
+            continue
+
+        # Multi-tailed creature (e.g. Kitsune / multi-tail alien)
+        if is_tail_kw and not reaches_ground and declared_ik is None:
+            tc = _longest_chain_simple(b.name)
+            if len(tc) >= 2:
+                extra_tail_chains.append(tc)
+            visited_subtrees.update(sub_all)
+            continue
+
+        # Multi-segment tentacle / tendril vs. free limb with articulated hand/digits!
+        # Run _structural_limb_chain first so a 2-3 segment arm branching into multi-phalanx fingers
+        # (arm -> forearm -> hand -> finger_prox -> finger_dist, depth=5) is NEVER misclassified as a tentacle!
+        is_arm_kw = any(k in low for k in ("arm", "hand", "forelimb", "claw", "pincer", "humerus"))
+        simple_ch = _longest_chain_simple(b.name)
+        struct_ch_pre, struct_digits_pre = _structural_limb_chain(b.name) if (not reaches_ground and declared_ik is None and not is_wing_kw) else ((), ())
+        is_geom_tentacle = (
+            not reaches_ground
+            and not has_planes
+            and not is_wing_kw
+            and not is_arm_kw
+            and len(struct_digits_pre) == 0
+            and len(struct_ch_pre) >= 4
+            and lat_span <= 0.45 * float(span[0])
+        )
+        if (is_tentacle_kw or is_geom_tentacle) and declared_ik is None:
+            tentacle_chains.append(simple_ch)
+            visited_subtrees.update(sub_all)
+            continue
+
+        # Aerodynamic / hydrodynamic wing or fin (geometry-first: meaningful airfoil span + planes/slenderness!)
+        # Use solid 3D structural boxes (excluding 2D cutout membrane planes) when testing whether a wing walks on the floor!
+        min_airfoil_span = max(3.5, 0.14 * float(span[0]))
+        solid_bxs = [bx for bn in sub_all for bx in boxes_by_bone.get(bn, ()) if getattr(bx, "plane_normal", None) is None]
+        solid_min_y = (
+            float(np.min(np.vstack([bx.corners(include_inflate=True) for bx in solid_bxs])[:, 1]))
+            if solid_bxs
+            else float(s_min[1])
+        )
+        wing_touches_floor = (solid_min_y - ground_y) <= max(2.2, 0.04 * total_h)
+        is_geom_airfoil = (
+            not reaches_ground
+            and declared_ik is None
+            and not is_cranial_parent
+            and lat_span >= min_airfoil_span
+            and (
+                has_planes
+                or (lat_span > 0.30 * float(span[0]) and lat_span > 0.85 * max(1.0, vert_span))
+                or (slenderness >= 9.5 and lat_span > 0.22 * float(span[0]))
+            )
+            and float(b.pivot_world[1] - ground_y) > 0.25 * total_h
+        )
+        if (is_wing_kw and not wing_touches_floor and declared_ik is None) or is_geom_airfoil:
+            arm_w, fingers_w, locked_w = _decompose_wing_structure(b.name)
+            if len(arm_w) >= 2 or is_wing_kw or has_planes:
                 side_w = _infer_side_label(b.name, float(b.pivot_world[0]), left_sign_x)
-                role_w = f"wing_{side_w}" if side_w in ("l", "r") else f"wing_{b.name}"
-                mir_b = mirror_partner_of.get(b.name)
-                mir_role = "wing_l" if (side_w == "r" and mir_b is not None) else None
-                raw_wings.append(WingMorphology(role=role_w, chain=chain_w, span=lat_span, mirror_of=mir_role))
+                raw_wing_candidates.append(
+                    {
+                        "root": b.name,
+                        "arm": arm_w,
+                        "fingers": fingers_w,
+                        "locked": locked_w,
+                        "span": lat_span,
+                        "side": side_w,
+                        "fore_z": fwd_sign * float(b.pivot_world[2]),
+                    }
+                )
                 visited_subtrees.update(sub_all)
                 continue
 
+        # Non-grounded 2..3 segment free limbs (e.g., humanoid arms, centaur arms, mantis arms)
         if not reaches_ground and declared_ik is None:
+            f_chain, f_digits = _structural_limb_chain(b.name)
+            if len(f_chain) >= 2 and float(b.pivot_world[1] - ground_y) > 0.35 * total_h:
+                side_f = _infer_side_label(f_chain[0], float(bone_by_name[f_chain[0]].pivot_world[0]), left_sign_x)
+                hip_fw = bone_by_name[f_chain[0]].pivot_world.copy()
+                tip_fb = bone_by_name[f_chain[-1]]
+                eff_fw = np.array([float(tip_fb.pivot_world[0]), float(s_min[1]), float(tip_fb.pivot_world[2])], dtype=np.float64)
+                eff_floc = tip_fb.rotation.T @ (eff_fw - tip_fb.pivot_world)
+                f_len = max(0.5, float(np.linalg.norm(eff_fw - hip_fw)))
+                raw_free_limb_candidates.append(
+                    {
+                        "chain": f_chain,
+                        "digits": f_digits,
+                        "hip_h": max(0.5, float(hip_fw[1] - ground_y)),
+                        "length": f_len,
+                        "reach": (0.2 * f_len, 0.98 * f_len),
+                        "contact_local": (float(eff_floc[0]), float(eff_floc[1]), float(eff_floc[2])),
+                        "contact_world": (float(eff_fw[0]), float(eff_fw[1]), float(eff_fw[2])),
+                        "hip_world": (float(hip_fw[0]), float(hip_fw[1]), float(hip_fw[2])),
+                        "side": side_f,
+                        "fore_z": fwd_sign * float(hip_fw[2]),
+                    }
+                )
+            visited_subtrees.update(sub_all)
             continue
-        if any(k in low for k in ("tail", "jaw", "horn", "gear", "flywheel", "turret", "piston")):
+
+        if any(k in low for k in ("tail", "jaw")):
             continue
 
         if declared_ik is not None:
             chain = tuple(declared_ik.bones)
+            # Collect any terminal digits descending from the last IK bone
+            tip_kids = children_by_bone.get(chain[-1], [])
+            digits_tup = tuple(dict.fromkeys(bn for tk in tip_kids for bn in _subtree_bones(tk)))
             tip_b = bone_by_name[chain[-1]]
             eff_loc = np.asarray(declared_ik.effector, dtype=np.float64)
             eff_w = tip_b.pivot_world + tip_b.rotation @ eff_loc
             ik_name: str | None = declared_ik.name
         else:
-            chain = _longest_primary_chain(b.name)
+            chain, digits_tup = _structural_limb_chain(b.name)
             if len(chain) < 2:
                 continue
             tip_b = bone_by_name[chain[-1]]
-            tip_boxes = boxes_by_bone.get(tip_b.name, [])
+            # Ground contact spans tip bone + any attached terminal toe/paw boxes!
+            contact_bones = (tip_b.name, *digits_tup)
+            tip_boxes = [bx for bn in contact_bones for bx in boxes_by_bone.get(bn, ())]
             if tip_boxes:
                 tip_corners = np.vstack([bx.corners(include_inflate=True) for bx in tip_boxes])
                 min_y_tip = float(np.min(tip_corners[:, 1]))
@@ -472,11 +767,20 @@ def analyze_morphology(program: Program, scene: Scene | None = None) -> Morpholo
         max_reach = max(min_reach + 0.25, 0.98 * tot_len)
 
         lat_offset = abs(float(eff_w[0] - hip_w[0]))
+        prox_vec = (
+            bone_by_name[chain[1]].pivot_world - hip_w
+            if len(chain) >= 2 and chain[1] in bone_by_name
+            else (eff_w - hip_w)
+        )
+        prox_lat = abs(float(prox_vec[0]))
+        prox_sag = math.hypot(float(prox_vec[1]), float(prox_vec[2]))
         max_rest_bend = max(
             (float(np.max(np.abs(bone_by_name[cb].local_euler))) for cb in chain),
             default=0.0,
         )
-        if lat_offset / max(1.0, hip_h) > 0.42:
+        # Only classify as "sprawled" when the limb genuinely projects laterally sideways (spiders, lizards,
+        # crabs, crocodilians) rather than a wide-stanced parasagittal quadruped/dragon/wolf Z-fold leg!
+        if lat_offset / max(1.0, hip_h) > 0.42 and prox_lat > 0.65 * prox_sag:
             posture = "sprawled"
         elif (tot_len / max(1.0, hip_h)) > 1.12 or max_rest_bend >= 20.0:
             posture = "crouched"
@@ -487,6 +791,7 @@ def analyze_morphology(program: Program, scene: Scene | None = None) -> Morpholo
         raw_limb_candidates.append(
             {
                 "chain": chain,
+                "digits": digits_tup,
                 "posture": posture,
                 "hip_h": hip_h,
                 "length": tot_len,
@@ -501,7 +806,59 @@ def analyze_morphology(program: Program, scene: Scene | None = None) -> Morpholo
         )
         visited_subtrees.update(sub_all)
 
-    # 3. Group limbs into fore-to-aft bilateral pairs and assign canonical anatomical roles
+    # 3. Group wings into fore-to-aft bilateral pairs (supports 2, 4, 6+ wings / fins!)
+    raw_wings: list[WingMorphology] = []
+    left_wings = sorted([w for w in raw_wing_candidates if w["side"] == "l"], key=lambda d: -d["fore_z"])
+    right_wings = sorted([w for w in raw_wing_candidates if w["side"] == "r"], key=lambda d: -d["fore_z"])
+    center_wings = sorted([w for w in raw_wing_candidates if w["side"] == "c"], key=lambda d: -d["fore_z"])
+    n_wing_pairs = max(len(left_wings), len(right_wings))
+    for w_idx in range(n_wing_pairs):
+        w_prefix = "wing" if w_idx == 0 else f"wing_{w_idx + 1}"
+        has_wl = w_idx < len(left_wings)
+        has_wr = w_idx < len(right_wings)
+        if has_wl:
+            wl = left_wings[w_idx]
+            raw_wings.append(
+                WingMorphology(
+                    role=f"{w_prefix}_l",
+                    chain=wl["arm"],
+                    span=wl["span"],
+                    mirror_of=None,
+                    finger_bones=wl["fingers"],
+                    locked_spar_bones=wl["locked"],
+                    side="l",
+                    pair_index=w_idx,
+                )
+            )
+        if has_wr:
+            wr = right_wings[w_idx]
+            raw_wings.append(
+                WingMorphology(
+                    role=f"{w_prefix}_r",
+                    chain=wr["arm"],
+                    span=wr["span"],
+                    mirror_of=f"{w_prefix}_l" if has_wl else None,
+                    finger_bones=wr["fingers"],
+                    locked_spar_bones=wr["locked"],
+                    side="r",
+                    pair_index=w_idx,
+                )
+            )
+    for cw_idx, cw in enumerate(center_wings):
+        raw_wings.append(
+            WingMorphology(
+                role=f"dorsal_fin_{cw_idx + 1}",
+                chain=cw["arm"],
+                span=cw["span"],
+                mirror_of=None,
+                finger_bones=cw["fingers"],
+                locked_spar_bones=cw["locked"],
+                side="c",
+                pair_index=n_wing_pairs + cw_idx,
+            )
+        )
+
+    # 4. Group grounded limbs into fore-to-aft bilateral pairs and assign canonical anatomical roles
     left_limbs = sorted([c for c in raw_limb_candidates if c["side"] == "l"], key=lambda d: -d["fore_z"])
     right_limbs = sorted([c for c in raw_limb_candidates if c["side"] == "r"], key=lambda d: -d["fore_z"])
     center_limbs = sorted([c for c in raw_limb_candidates if c["side"] == "c"], key=lambda d: -d["fore_z"])
@@ -540,6 +897,7 @@ def analyze_morphology(program: Program, scene: Scene | None = None) -> Morpholo
                     side="l",
                     mirror_of=None,
                     ik_chain_name=cl["ik_name"],
+                    digits=cl["digits"],
                 )
             )
         if has_r:
@@ -558,6 +916,7 @@ def analyze_morphology(program: Program, scene: Scene | None = None) -> Morpholo
                     side="r",
                     mirror_of=f"{t_prefix}_l" if has_l else None,
                     ik_chain_name=cr["ik_name"],
+                    digits=cr["digits"],
                 )
             )
     for idx_c, cc in enumerate(center_limbs):
@@ -575,8 +934,63 @@ def analyze_morphology(program: Program, scene: Scene | None = None) -> Morpholo
                 side="c",
                 mirror_of=None,
                 ik_chain_name=cc["ik_name"],
+                digits=cc["digits"],
             )
         )
+
+    # 5. Group free upper limbs (e.g., humanoid arms, centaur arms)
+    free_l = sorted([c for c in raw_free_limb_candidates if c["side"] == "l"], key=lambda d: -d["fore_z"])
+    free_r = sorted([c for c in raw_free_limb_candidates if c["side"] == "r"], key=lambda d: -d["fore_z"])
+    free_out: list[LimbMorphology] = []
+    n_fpairs = max(len(free_l), len(free_r))
+    for f_i in range(n_fpairs):
+        fp = "arm" if f_i == 0 else f"arm_{f_i + 1}"
+        if f_i < len(free_l):
+            fl = free_l[f_i]
+            free_out.append(
+                LimbMorphology(
+                    role=f"{fp}_l",
+                    chain=fl["chain"],
+                    posture="erect",
+                    hip_height=fl["hip_h"],
+                    length=fl["length"],
+                    reach=fl["reach"],
+                    contact_local=fl["contact_local"],
+                    contact_world=fl["contact_world"],
+                    hip_world=fl["hip_world"],
+                    side="l",
+                    mirror_of=None,
+                    digits=fl["digits"],
+                )
+            )
+        if f_i < len(free_r):
+            fr = free_r[f_i]
+            free_out.append(
+                LimbMorphology(
+                    role=f"{fp}_r",
+                    chain=fr["chain"],
+                    posture="erect",
+                    hip_height=fr["hip_h"],
+                    length=fr["length"],
+                    reach=fr["reach"],
+                    contact_local=fr["contact_local"],
+                    contact_world=fr["contact_world"],
+                    hip_world=fr["hip_world"],
+                    side="r",
+                    mirror_of=f"{fp}_l" if f_i < len(free_l) else None,
+                    digits=fr["digits"],
+                )
+            )
+
+    all_neck_chains: list[tuple[str, ...]] = []
+    if neck_list:
+        all_neck_chains.append(tuple(neck_list))
+    all_neck_chains.extend(extra_neck_chains)
+
+    all_tail_chains: list[tuple[str, ...]] = []
+    if tail_list:
+        all_tail_chains.append(tuple(tail_list))
+    all_tail_chains.extend(extra_tail_chains)
 
     support_pts = [(lb.contact_world[0], lb.contact_world[2]) for lb in limbs_out]
     hull_xz = _convex_hull_2d(support_pts)
@@ -584,8 +998,8 @@ def analyze_morphology(program: Program, scene: Scene | None = None) -> Morpholo
     return MorphologyReport(
         limbs=tuple(limbs_out),
         spine=spine_sorted,
-        neck=tuple(neck_list),
-        tail=tuple(tail_list),
+        neck=tuple(neck_list) if neck_list else (all_neck_chains[0] if all_neck_chains else ()),
+        tail=tuple(tail_list) if tail_list else (all_tail_chains[0] if all_tail_chains else ()),
         wings=tuple(raw_wings),
         total_mass=float(mass_sum),
         com=(float(com_vec[0]), float(com_vec[1]), float(com_vec[2])),
@@ -594,6 +1008,10 @@ def analyze_morphology(program: Program, scene: Scene | None = None) -> Morpholo
         body_span=(float(span[0]), float(span[1]), float(span[2])),
         support_polygon_xz=hull_xz,
         symmetry_pairs=tuple(symmetry_pairs),
+        free_limbs=tuple(free_out),
+        neck_chains=tuple(all_neck_chains),
+        tail_chains=tuple(all_tail_chains),
+        tentacles=tuple(tentacle_chains),
     )
 
 

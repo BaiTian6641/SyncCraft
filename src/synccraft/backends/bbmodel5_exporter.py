@@ -51,31 +51,56 @@ def _serialize_bbmodel_animations(
         animators: dict[str, dict[str, Any]] = {}
 
         explicit_kf_channels: set[tuple[str, str]] = set()
-        for kf_tr in getattr(clip, "keyframes", ()):
-            explicit_kf_channels.add((kf_tr.bone, kf_tr.channel))
-            b_uid = stable_uuid("bone", kf_tr.bone, asset_name)
-            ch_kfs: list[dict[str, Any]] = []
-            interp = "catmullrom" if getattr(kf_tr, "interpolation", "linear") == "catmullrom" else "linear"
-            for k_i, (t_s, vec_v) in enumerate(kf_tr.keys):
-                ch_kfs.append({
-                    "channel": kf_tr.channel,
-                    "data_points": [{
-                        "x": round(float(vec_v[0]), 4),
-                        "y": round(float(vec_v[1]), 4),
-                        "z": round(float(vec_v[2]), 4),
-                    }],
-                    "uuid": stable_uuid(f"kf_{kf_tr.channel}", f"{clip.name}:{kf_tr.bone}:{k_i}", asset_name),
-                    "time": round(float(t_s), 4),
-                    "color": -1,
-                    "interpolation": interp,
-                })
-            if ch_kfs:
-                animators.setdefault(
-                    b_uid,
-                    {"name": kf_tr.bone, "type": "bone", "keyframes": []},
-                )["keyframes"].extend(ch_kfs)
+        has_procedural_solvers = bool(
+            getattr(clip, "auto_rig", False)
+            or getattr(clip, "ground_pin_limbs", False)
+            or getattr(clip, "flights", ())
+            or getattr(clip, "gaits", ())
+            or getattr(clip, "ik_drives", ())
+            or getattr(clip, "muscle_drives", ())
+            or getattr(clip, "layers", ())
+            or float(getattr(clip, "com_balance", 0.0)) > 1e-5
+            or float(getattr(clip, "spine_coil", 0.0)) != 0.0
+            or getattr(clip, "neck_aim", None) is not None
+            or float(getattr(clip, "head_stabilize", 0.0)) > 1e-5
+            or getattr(program.behavior, "springs", ())
+            or (getattr(program, "kinematics", None) is not None and getattr(program.kinematics, "springs", ()))
+        )
+        if not has_procedural_solvers:
+            for kf_tr in getattr(clip, "keyframes", ()):
+                explicit_kf_channels.add((kf_tr.bone, kf_tr.channel))
+                b_uid = stable_uuid("bone", kf_tr.bone, asset_name)
+                ch_kfs: list[dict[str, Any]] = []
+                interp = "catmullrom" if getattr(kf_tr, "interpolation", "linear") == "catmullrom" else "linear"
+                for k_i, (t_s, vec_v) in enumerate(kf_tr.keys):
+                    ch_kfs.append({
+                        "channel": kf_tr.channel,
+                        "data_points": [{
+                            "x": round(float(vec_v[0]), 4),
+                            "y": round(float(vec_v[1]), 4),
+                            "z": round(float(vec_v[2]), 4),
+                        }],
+                        "uuid": stable_uuid(f"kf_{kf_tr.channel}", f"{clip.name}:{kf_tr.bone}:{k_i}", asset_name),
+                        "time": round(float(t_s), 4),
+                        "color": -1,
+                        "interpolation": interp,
+                    })
+                if ch_kfs:
+                    animators.setdefault(
+                        b_uid,
+                        {"name": kf_tr.bone, "type": "bone", "keyframes": []},
+                    )["keyframes"].extend(ch_kfs)
 
         # Root position keyframes when non-zero
+        is_in_place = bool(
+            getattr(clip, "in_place", False)
+            or any(getattr(g, "in_place", False) for g in getattr(clip, "gaits", ()))
+            or any(getattr(fl, "in_place", False) for fl in getattr(clip, "flights", ()))
+        )
+        has_macro_root_drift = (
+            not is_in_place
+            and (any(abs(d.stride) > 1e-6 for d in clip.ik_drives) or bool(getattr(clip, "gaits", ())))
+        )
         if (root_bone_name, "position") not in explicit_kf_channels and any(
             any(abs(float(c)) > 1e-5 for c in s.root_translation_delta) for s in samples
         ):
@@ -91,7 +116,7 @@ def _serialize_bbmodel_animations(
                     "color": -1,
                     "interpolation": "linear",
                 })
-            if clip.loop and not any(abs(d.stride) > 1e-6 for d in clip.ik_drives) and not getattr(clip, "gaits", ()):
+            if clip.loop and not has_macro_root_drift:
                 tx0, ty0, tz0 = samples[0].root_translation_delta
                 pos_kfs.append({
                     "channel": "position",
@@ -196,6 +221,44 @@ def _serialize_bbmodel_animations(
                 {"name": bname, "type": "bone", "keyframes": []},
             )["keyframes"].extend(p_kfs)
 
+        # Export Sim(3) bone scale channels (e.g. volume-preserving muscle bulge / breathing)
+        for bone in scene.bones:
+            bname = bone.name
+            if (bname, "scale") in explicit_kf_channels:
+                continue
+            if not any(
+                bname in s.pose_scale_factors
+                and any(abs(float(c) - 1.0) > 1e-4 for c in s.pose_scale_factors[bname])
+                for s in samples
+            ):
+                continue
+            b_uid = stable_uuid("bone", bname, asset_name)
+            s_kfs: list[dict[str, Any]] = []
+            for k_i, s in enumerate(samples):
+                sx, sy, sz = s.pose_scale_factors.get(bname, (1.0, 1.0, 1.0))
+                s_kfs.append({
+                    "channel": "scale",
+                    "data_points": [{"x": round(float(sx), 4), "y": round(float(sy), 4), "z": round(float(sz), 4)}],
+                    "uuid": stable_uuid("kf_scl", f"{clip.name}:{bname}:{k_i}", asset_name),
+                    "time": round(float(s.time_s), 4),
+                    "color": -1,
+                    "interpolation": "linear",
+                })
+            if clip.loop:
+                sx0, sy0, sz0 = samples[0].pose_scale_factors.get(bname, (1.0, 1.0, 1.0))
+                s_kfs.append({
+                    "channel": "scale",
+                    "data_points": [{"x": round(float(sx0), 4), "y": round(float(sy0), 4), "z": round(float(sz0), 4)}],
+                    "uuid": stable_uuid("kf_scl", f"{clip.name}:{bname}:wrap", asset_name),
+                    "time": round(float(clip.duration_s), 4),
+                    "color": -1,
+                    "interpolation": "linear",
+                })
+            animators.setdefault(
+                b_uid,
+                {"name": bname, "type": "bone", "keyframes": []},
+            )["keyframes"].extend(s_kfs)
+
         if getattr(clip, "effects", ()):
             from synccraft.kinematics.musculoskeletal import resolve_clip_effect_events
 
@@ -249,11 +312,12 @@ def _serialize_bbmodel_animations(
             "selected": False,
             "animators": animators,
         }
-        if samples and any(abs(float(c)) > 1e-6 for c in getattr(samples[0], "root_motion_velocity", (0.0, 0.0, 0.0))):
+        if samples and (is_in_place or any(abs(float(c)) > 1e-6 for c in getattr(samples[0], "root_motion_velocity", (0.0, 0.0, 0.0)))):
             rm_v = samples[0].root_motion_velocity
             upb = float(getattr(program.meta, "units_per_block", 16))
             spd_u = float(np.linalg.norm(np.asarray(rm_v, dtype=np.float64)))
             anim_dict_bb["synccraft_root_motion"] = {
+                "in_place": is_in_place,
                 "speed_units_per_s": round(spd_u, 4),
                 "speed_blocks_per_s": round(spd_u / max(1.0, upb), 4),
                 "velocity_vec": [round(float(rm_v[0]), 4), round(float(rm_v[1]), 4), round(float(rm_v[2]), 4)],
