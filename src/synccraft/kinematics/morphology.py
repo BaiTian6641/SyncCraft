@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
+import re
 from typing import Any
 
 import numpy as np
@@ -305,14 +306,23 @@ def analyze_morphology(program: Program, scene: Scene | None = None) -> Morpholo
         mirror_partner_of[br] = bl
         mirror_partner_of[bl] = br
 
+    def _has_word_tok(name_low: str, *words: str) -> bool:
+        toks = set(re.split(r"[^a-z]+", name_low))
+        return any(w in toks for w in words)
+
     # Infer forward Z direction (+1.0 if head/snout/neck is at +Z relative to CoM/tail, -1.0 if at -Z)
     fore_z_votes: list[float] = []
     for b in sc.bones:
         low = b.name.lower()
         dz = float(b.pivot_world[2] - com_vec[2])
-        if any(k in low for k in ("head", "skull", "snout", "jaw", "neck", "cerv", "beak", "antler", "fore")):
+        is_wing_name = "wing" in low
+        if any(k in low for k in ("head", "skull", "snout", "jaw", "neck", "cerv", "beak", "antler")) or (
+            not is_wing_name and "fore" in low
+        ):
             fore_z_votes.append(dz)
-        elif any(k in low for k in ("tail", "caudal", "pelvis", "hind", "aft")):
+        elif any(k in low for k in ("tail", "caudal", "pelvis", "aft")) or (
+            not is_wing_name and "hind" in low
+        ):
             fore_z_votes.append(-dz)
     fwd_sign = 1.0
     if fore_z_votes:
@@ -320,7 +330,7 @@ def analyze_morphology(program: Program, scene: Scene | None = None) -> Morpholo
         if abs(med_v) > 0.25:
             fwd_sign = 1.0 if med_v > 0.0 else -1.0
 
-    _DIGIT_TOKENS = ("toe", "thumb", "finger", "claw", "talon", "nail", "digit", "knuckle", "phalanx")
+    _DIGIT_TOKENS = ("toe", "thumb", "hallux", "finger", "claw", "talon", "nail", "digit", "knuckle", "phalanx")
     _ORAL_ACCESSORY_TOKENS = (
         "jaw", "chin", "tongue", "tooth", "teeth", "fang", "lip", "cheek",
         "eye", "pupil", "brow", "eyelid", "horn", "antler", "crest", "frill",
@@ -504,8 +514,8 @@ def analyze_morphology(program: Program, scene: Scene | None = None) -> Morpholo
             cb = bone_by_name[ch]
             low = ch.lower()
             is_wing_or_limb_kw = any(
-                k in low for k in ("leg", "arm", "wing", "femur", "humerus", "thigh", "shin", "paw", "foot", "claw", "horn", "ear", "gear", "wheel", "flipper", "tentacle")
-            )
+                k in low for k in ("leg", "arm", "wing", "femur", "humerus", "thigh", "shin", "paw", "foot", "claw", "horn", "gear", "wheel", "flipper", "tentacle")
+            ) or _has_word_tok(low, "ear", "ears")
             if abs(float(cb.pivot_world[0])) <= center_tol and ch not in paired_bones and not is_wing_or_limb_kw:
                 axial_bones.add(ch)
                 q_ax.append(ch)
@@ -597,12 +607,13 @@ def analyze_morphology(program: Program, scene: Scene | None = None) -> Morpholo
             any(
                 k in low
                 for k in (
-                    "horn", "ear", "pinna", "antler", "crest", "gear", "flywheel", "turret", "piston",
+                    "horn", "pinna", "antler", "crest", "gear", "flywheel", "turret", "piston",
                     "collar", "ruff", "jabot", "mandible", "maxilla", "cheek", "tooth", "teeth", "fang",
                     "tongue", "brow", "eye", "chelicera", "pedipalp", "palp", "spinneret",
                     "fur", "tuft", "fluff", "puff", "mane", "cape", "skirt", "plume", "flank", "shocker",
                 )
             )
+            or _has_word_tok(low, "ear", "ears")
             or (is_cranial_parent and sub_max_dim < 0.28 * float(span[0]))
         ):
             visited_subtrees.update(sub_all)
