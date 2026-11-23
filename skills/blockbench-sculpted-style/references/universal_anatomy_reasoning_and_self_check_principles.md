@@ -92,6 +92,15 @@ Never force every creature or machine onto one default quadruped/humanoid templa
      - **NEVER float or park the prop detached behind/beside the actor with an empty air gap in rest pose!** That breaks silhouette cohesion immediately (e.g., showing two separate floating shapes in Side/Top-Down silhouette checks).
      - **Derive the Actor's Rest Posture Directly Around the Contact Interface FIRST:** Match the exact reference posture — such as a steep nose-down handstand push (`+35°..+45°` body tilt, forelegs planted on `y = 0`, mid + hind legs reaching back/up to press flush against the prop's sides & upper face with `<= 0.1u` contact clearance), or firm ventral leg-clasp / shell insertion — so the actor and prop read as **one unified interactive silhouette** in Front, Side, Top-Down, and Silhouette views!
      - **Couple Prop Physics to Limb Kinematics:** Animate the prop synchronously with the pushing/carrying limbs (e.g., rolling cube rotating around its center while pushing legs stroke against its surface, or carried payload bobbing with inertia) while keeping `0` illegal interpenetrations at `288` frames (`blend_with` or exact contact clearance between gripping tips and prop face).
+5. **Small Flying Animals & Avian Proportion, Wing-to-Torso & Head-Nesting Law (Birds, Owls, Songbirds, Bats & Small Flying Creatures):**
+   - Small flying animals are a major Blockbench category where two predictable proportion errors recur if artists sculpt from sparse 1–2 image sets: **undersized stubby wings relative to the torso**, and **stiff stacked boxy heads on vertical pillar bodies**.
+   - **Wing-Size-to-Torso Proportion Rule:** Measure real wing length and feather/membrane chord directly from spread-wing photos or video frames BEFORE massing:
+     - **Folded at rest:** Folded wings should span **`~75%–100%`** of the dorsal torso-to-rump length hugging the flanks cleanly (never tiny side-paddles dangling halfway down!).
+     - **Unfolded / Flight / Courtship Display:** Unfolded wingspan should reach **`2.2×–3.8×` torso length** (wider still for soaring or display-fan birds!) with real feathered/membranous primary & secondary chord built as zero-blink `0.5u` dual-sided slabs whose inner roots blend seamlessly into the shoulder mantle (zero empty shoulder-root air gap in Top-Down/Front views!).
+   - **Avian Head & Torso Integration (Zero Vertical Pillar or Stacked-Snowman Silos!):**
+     - **Streamlined Perchers, Songbirds, Owls, Raptors & Hummingbirds:** Pitch the primary torso gently (`~18°–35°` breast-to-rump avian slant) and taper/nest the head & neck ruff smoothly into the chest/mantle contour — never stack a flat square head block rigidly atop a straight vertical column!
+     - **Plump Round Puffball Birds (chicks, crakes, round songbirds):** Keep the body and head as **ONE cohesive proud plump cuboid mass** (honoring the Anti-Over-Carved-Sphere Law — NEVER stack a giant second square head cube on top like a 2-block snowman!), seating the cute native-resolution eyes, tiny beak, and crest tuft directly on the upper-front face of the puffball!
+   - **Multi-Angle Reference Discovery Before Sculpting Any Small Flyer:** Never build a bird or small flying creature from `1–2` static renders — verify exact species/colorway identity (`0` cousin-species placeholders!) and escalate to **YouTube / video ecology & flight observation footage** whenever static photos omit side profile, rear plumage, spread-wing span, or courtship/flight motion (`references/high_res_focal_carving_and_visual_primitives.md §1`).
 
 ---
 
@@ -119,7 +128,7 @@ Never batch-script multiple stages in one loop without inspecting visual renders
 
 | Pass | Focus | Mandatory Visual & Quantitative Double-Check Before Advancing |
 |---|---|---|
-| **Stage 0** | References & Spatial Plan | Gather clean multi-angle references; run `visual_primitives_prep.py` zoom + `0.10` grid + edges; log **8-Ratio Facial/Focal Table** & silhouette ratios. |
+| **Stage 0** | Multi-Angle References & Spatial Plan | Gather **`>= 4–5` verified multi-angle references** (exact species/colorway identity — ZERO wrong-variant placeholders! Escalate to YouTube/video ecology & turnaround footage whenever static images `< 4` angles); run `visual_primitives_prep.py` zoom + `0.10` grid + edges; log **8-Ratio Facial/Focal Table** & wing-to-torso/silhouette ratios. |
 | **W1** | Primary Massing | Check macro proportions, stance, center of gravity, and silhouette against references; log `>= 3` fixes. |
 | **W2** | Head/Focal Gate & Limbs | Render **Dead-Front (`0°`), 3/4 (`35°`), Pure Side (`90°`), Top-Down (`85°`)** close-ups; verify all **4 eye invariants** (`G14`), isolated digit spread, and joint tapers; log `>= 3` fixes. |
 | **W3** | Refined Detail & Audit | Eliminate staircase cylinders, floating parts, and `0.0u` dual-sided Z-fighting; pass `audit_scene` (`0` coll, `0` cont) & `construct_check.py` (`rc=0`, `0` WARN). |
