@@ -383,13 +383,17 @@ def auto_assemble_biomechanical_rig(
         if ch:
             end_b = ch[-1]
             end_kids = children.get(end_b, [])
-            # Check if a single child acts as palm/paw/foot hub branching into >= 2 digits
+            _HUB_TOKS = ("paw", "foot", "hand", "palm", "hoof", "manus", "pes", "sole")
+            _DIGIT_TOKS = ("toe", "finger", "claw", "talon", "dewclaw", "thumb", "digit", "phalanx")
+            # Check if a single non-digit child acts as palm/paw/foot hub branching into >= 2 digits
             hub_candidates: list[str] = []
             for k in end_kids:
                 kl = k.lower()
+                if any(tok in kl for tok in _DIGIT_TOKS):
+                    continue
                 grandkids = children.get(k, [])
                 if (
-                    any(tok in kl for tok in ("paw", "foot", "hand", "palm", "hoof", "manus", "pes", "sole"))
+                    any(tok in kl for tok in _HUB_TOKS)
                     or len(grandkids) >= 2
                 ):
                     hub_candidates.append(k)
@@ -398,13 +402,13 @@ def auto_assemble_biomechanical_rig(
                 digit_roots = list(children.get(foot_hand_b, []))
                 # Include any remaining direct digit siblings (like a rear ankle dewclaw!)
                 for k in end_kids:
-                    if k != foot_hand_b and (k in digit_set or any(tok in k.lower() for tok in ("toe", "finger", "claw", "talon", "dewclaw", "thumb", "digit"))):
+                    if k != foot_hand_b and (k in digit_set or any(tok in k.lower() for tok in _DIGIT_TOKS)):
                         digit_roots.append(k)
             else:
                 # If the chain ends directly on foot/hand or branches straight into digits
-                if any(tok in end_b.lower() for tok in ("paw", "foot", "hand", "palm", "hoof")):
+                if any(tok in end_b.lower() for tok in _HUB_TOKS) and not any(tok in end_b.lower() for tok in _DIGIT_TOKS):
                     foot_hand_b = end_b
-                digit_roots = [k for k in end_kids if k in digit_set or any(tok in k.lower() for tok in ("toe", "finger", "claw", "talon", "dewclaw", "thumb", "digit"))]
+                digit_roots = [k for k in end_kids if k in digit_set or any(tok in k.lower() for tok in _DIGIT_TOKS)]
 
         # Collect all descendants under digit_roots as multi-phalanx chains
         reg_chains, thumb_chains = _collect_digit_chains(digit_roots, children)

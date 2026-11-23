@@ -519,18 +519,23 @@ def evaluate_gait_clip(
                 sv[0] += 7.5 * math.sin(two_pi - 0.55 * s_i + 0.7 * tent_i)
                 sv[1] += 6.5 * math.cos(two_pi - 0.55 * s_i + 0.7 * tent_i)
 
-        # Automatic anti-phase counter-swing for free non-grounded upper limbs (humanoid / centaur arms!)
+        # Automatic anti-phase counter-swing for free non-grounded upper limbs (suppress on <0.35x vestigial paws!)
+        mean_gnd_len = (
+            sum(float(lb.length) for lb in morph.limbs) / max(1, len(morph.limbs))
+            if morph.limbs
+            else 1.0
+        )
         for flb in morph.free_limbs:
-            # Left arm swings opposite to left hind leg (i.e. in-phase with right hind leg)
+            is_vestigial = (float(flb.length) / max(1e-3, mean_gnd_len)) < 0.35
             opp_role = "hind_r" if flb.side == "l" else "hind_l"
             arm_phase = limb_phases.get(opp_role, 0.5 if flb.side == "l" else 0.0)
             arm_th = 2.0 * math.pi * ((cyc_phi + arm_phase) % 1.0)
-            swing_amp = min(32.0, 12.0 + 28.0 * math.sqrt(max(0.05, float(gait.froude))))
+            swing_amp = 4.0 if is_vestigial else min(32.0, 12.0 + 28.0 * math.sqrt(max(0.05, float(gait.froude))))
             for seg_i, bname in enumerate(flb.chain):
                 av = pose_map.setdefault(bname, np.zeros(3, dtype=np.float64))
                 if seg_i == 0:
                     av[0] += -swing_amp * math.cos(arm_th) * fwd_z
-                elif seg_i == 1:
+                elif seg_i == 1 and not is_vestigial:
                     # Natural forward elbow flexion on forward arm swing
                     av[0] += (-12.0 - 14.0 * max(0.0, -math.cos(arm_th))) * fwd_z
 

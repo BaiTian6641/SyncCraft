@@ -305,6 +305,7 @@ def _serialize_behavior_animations(
             getattr(clip, "auto_rig", False)
             or getattr(clip, "ground_pin_limbs", False)
             or getattr(clip, "flights", ())
+            or getattr(clip, "swims", ())
             or getattr(clip, "gaits", ())
             or getattr(clip, "ik_drives", ())
             or getattr(clip, "muscle_drives", ())
@@ -342,21 +343,27 @@ def _serialize_behavior_animations(
             getattr(clip, "in_place", False)
             or any(getattr(g, "in_place", False) for g in getattr(clip, "gaits", ()))
             or any(getattr(fl, "in_place", False) for fl in getattr(clip, "flights", ()))
+            or any(getattr(sw, "in_place", False) for sw in getattr(clip, "swims", ()))
         )
         has_forward_locomotion = (
             not is_in_place
             and (any(abs(d.stride) > 1e-6 for d in clip.ik_drives) or bool(getattr(clip, "gaits", ())))
         )
+        def _root_total_pos(s: Any) -> tuple[float, float, float]:
+            r = s.root_translation_delta
+            p = s.pose_position_deltas.get(root_bone_name, (0.0, 0.0, 0.0))
+            return (float(r[0]) + float(p[0]), float(r[1]) + float(p[1]), float(r[2]) + float(p[2]))
+
         if (root_bone_name, "position") not in explicit_kf_channels and any(
-            math.hypot(s.root_translation_delta[0], math.hypot(s.root_translation_delta[1], s.root_translation_delta[2])) > 1e-5
+            math.hypot(_root_total_pos(s)[0], math.hypot(_root_total_pos(s)[1], _root_total_pos(s)[2])) > 1e-5
             for s in samples
         ):
             pos_kfs: dict[str, list[float]] = {}
             for s in samples:
-                p_bed = sync_point_to_bedrock(s.root_translation_delta)
+                p_bed = sync_point_to_bedrock(_root_total_pos(s))
                 pos_kfs[_fmt_time_key(s.time_s)] = vector([round(float(x), 4) for x in p_bed])
             if clip.loop and not has_forward_locomotion:
-                p0_bed = sync_point_to_bedrock(samples[0].root_translation_delta)
+                p0_bed = sync_point_to_bedrock(_root_total_pos(samples[0]))
                 pos_kfs[_fmt_time_key(clip.duration_s)] = vector([round(float(x), 4) for x in p0_bed])
             bones_payload.setdefault(root_bone_name, {})["position"] = pos_kfs
 

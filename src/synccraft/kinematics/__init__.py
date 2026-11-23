@@ -23,6 +23,10 @@ from .flight_solver import (
     audit_flight_clip_contracts,
     evaluate_flight_clip,
 )
+from .swim_solver import (
+    audit_swim_clip_contracts,
+    evaluate_swim_clip,
+)
 from .whole_body_solver import (
     AutoMuscleGroup,
     BiomechanicalRigAssembly,

@@ -772,13 +772,18 @@ def _integrate_spring_follow_through(
         root_pos = [np.asarray(rd, dtype=np.float64) for rd in root_deltas_per_frame]
 
         # Parent angular velocity + root linear velocity drive passive secondary follow-through
+        root_z = float(rest_scene.bones[0].pivot_world[2]) if rest_scene.bones else 0.0
+        b_z = float(bone_by_name[bname].pivot_world[2]) if bname in bone_by_name else root_z
+        # Newtonian drag: upward launch (+d_root[1]) drags posterior (-Z) tails DOWN (-Rx)
+        # and anterior (+Z) ears/crests DOWN (+Rx).
+        z_side = -1.0 if (b_z < root_z - 0.25) else 1.0
         forcing: list[np.ndarray] = []
         for idx in range(n_f):
             prev_i = (idx - 1) % n_f if loop else max(0, idx - 1)
             d_anc = (anc_angles[idx] - anc_angles[prev_i]) / frame_dt
             d_root = (root_pos[idx] - root_pos[prev_i]) / frame_dt
-            # Forward Z/heave Y motion pitches trailing attachments along X; lateral X rolls Z
-            lin_coupled = np.array([-3.5 * d_root[2] + 2.5 * d_root[1], 0.0, 3.5 * d_root[0]], dtype=np.float64)
+            # Forward Z/heave Y motion pitches trailing/anterior attachments along X; lateral X rolls Z
+            lin_coupled = np.array([-3.5 * d_root[2] + (z_side * 2.5) * d_root[1], 0.0, 3.5 * d_root[0]], dtype=np.float64)
             forcing.append(-0.45 * d_anc + lin_coupled)
 
         theta = targets[0].copy()
@@ -976,6 +981,18 @@ def evaluate_behavior_clip(
         from synccraft.kinematics.flight_solver import evaluate_flight_clip
 
         return evaluate_flight_clip(
+            program,
+            clip,
+            num_frames=num_frames,
+            active_state=active_state,
+            sample_phases=sample_phases,
+            _phase_cache=_pre_spring_cache,
+        )
+
+    if getattr(clip, "swims", ()):
+        from synccraft.kinematics.swim_solver import evaluate_swim_clip
+
+        return evaluate_swim_clip(
             program,
             clip,
             num_frames=num_frames,
@@ -1433,6 +1450,15 @@ def evaluate_behavior_clip(
 
     # 5. Secondary 2-parameter damped-spring follow-through (when declared)
     if all_springs:
+        root_bname = rest_scene.bones[0].name if rest_scene.bones else ""
+        eff_root_deltas = [
+            (
+                float(rd[0]) + float(pd.get(root_bname, (0.0, 0.0, 0.0))[0]),
+                float(rd[1]) + float(pd.get(root_bname, (0.0, 0.0, 0.0))[1]),
+                float(rd[2]) + float(pd.get(root_bname, (0.0, 0.0, 0.0))[2]),
+            )
+            for rd, pd in zip(root_deltas_list, pos_deltas_list)
+        ]
         final_poses_list = _integrate_spring_follow_through(
             program,
             rest_scene,
@@ -1441,7 +1467,7 @@ def evaluate_behavior_clip(
             clip.loop,
             clip.duration_s,
             pre_spring_poses_list,
-            root_deltas_list,
+            eff_root_deltas,
             limits_map,
         )
     else:
@@ -1815,6 +1841,19 @@ def audit_behavior_clip(
         result_dict["flight_audit"] = flight_audit
         result_dict["root_motion"] = flight_audit.get("root_motion")
         if not flight_audit["passed"]:
+            result_dict["passed"] = False
+    if clip_obj is not None and getattr(clip_obj, "swims", ()):
+        from synccraft.kinematics.swim_solver import audit_swim_clip_contracts
+
+        swim_audit = audit_swim_clip_contracts(
+            program,
+            clip_obj,
+            frames,
+            precomputed_collision_events=total_collision_events,
+        )
+        result_dict["swim_audit"] = swim_audit
+        result_dict["root_motion"] = swim_audit.get("root_motion")
+        if not swim_audit["passed"]:
             result_dict["passed"] = False
     if clip_obj is not None and getattr(clip_obj, "gaits", ()):
         from synccraft.kinematics.gait_solver import audit_gait_clip_contracts

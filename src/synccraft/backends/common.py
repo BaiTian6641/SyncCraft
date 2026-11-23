@@ -134,7 +134,18 @@ def validate_atlas(atlas: dict | None, scene: Any, *, embedded: bool) -> tuple[i
     if type(width) is not int or type(height) is not int or width <= 0 or height <= 0:
         raise ExportError("atlas width and height must be positive integers")
     if embedded and not str(atlas.get("data_url", "")).startswith("data:image/png;base64,"):
-        raise ExportError("bbmodel atlas requires an embedded PNG data_url")
+        import base64
+        if atlas.get("png_bytes"):
+            atlas["data_url"] = "data:image/png;base64," + base64.b64encode(bytes(atlas["png_bytes"])).decode("ascii")
+        elif atlas.get("rgba") is not None or atlas.get("albedo_rgba") is not None:
+            import io
+            from PIL import Image
+            arr = atlas.get("rgba") if atlas.get("rgba") is not None else atlas.get("albedo_rgba")
+            buf = io.BytesIO()
+            Image.fromarray(np.asarray(arr, dtype=np.uint8)).save(buf, format="PNG")
+            atlas["data_url"] = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+        else:
+            raise ExportError("bbmodel atlas requires an embedded PNG data_url")
     for box in scene.boxes:
         for face in FACES:
             try:

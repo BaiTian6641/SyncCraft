@@ -66,6 +66,15 @@ FLIGHT_MODES = frozenset({
     "mantle",
     "swim_fins",
 })
+SWIM_MODES = frozenset({
+    "leviathan_cruise",
+    "leviathan_hover",
+    "carangiform",
+    "subcarangiform",
+    "anguilliform",
+    "medusa_pulse",
+})
+SWIM_LIMB_MODES = frozenset({"hydro_tuck", "paddle_row", "none"})
 STAMP_FACE_ALIASES = frozenset({"side", "front", "back", "top", "bottom"})
 CONTINUOUS_AXIS_LIMIT: tuple[float, float] = (-float("inf"), float("inf"))
 CONTINUOUS_JOINT_LIMITS: JointLimits = (
@@ -699,6 +708,30 @@ class FlightDecl:
 
 
 @dataclass(frozen=True)
+class SwimDecl:
+    """Universal underwater buoyancy, hydrodynamic traveling-wave & musculoskeletal swimming statement."""
+
+    name: str
+    mode: str = "leviathan_cruise"
+    freq_hz: float = 0.625
+    wave_amp_deg: float = 16.0
+    wavelength_ratio: float = 0.95
+    buoyancy_y: float = 8.0
+    heave_amp_u: float = 1.6
+    body_pitch_deg: float = -3.0
+    roll_bank_deg: float = 3.5
+    head_stabilize: float = 0.78
+    limb_mode: str = "hydro_tuck"
+    limb_tuck: float = 0.85
+    myomere_bulge: float = 0.80
+    fin_lag_deg: float = 14.0
+    in_place: bool = True
+    auto_bio_limits: bool = True
+    ground_clearance: bool = True
+    digit_articulation: float = 0.85
+
+
+@dataclass(frozen=True)
 class ClipLayerDecl:
     """Additive secondary motion layer referencing another @behavior clip (ADR 0013)."""
 
@@ -738,6 +771,7 @@ class ClipDecl:
     layers: tuple[ClipLayerDecl, ...] = ()
     effects: tuple[EffectTriggerDecl, ...] = ()
     flights: tuple[FlightDecl, ...] = ()
+    swims: tuple[SwimDecl, ...] = ()
     in_place: bool = False
     head_stabilize: float = 0.0
     auto_bio_limits: bool = False
@@ -1616,10 +1650,11 @@ def validate_program(program: Program) -> Program:
                 and not clip.slide_drives
                 and not clip.gaits
                 and not getattr(clip, "flights", ())
+                and not getattr(clip, "swims", ())
                 and not getattr(clip, "layers", ())
             ):
                 raise DSLValidationError(
-                    f"clip {clip.name}: must contain at least one gait, flight, layer, track, slide, key, muscle_drive, or ik_drive"
+                    f"clip {clip.name}: must contain at least one gait, flight, swim, layer, track, slide, key, muscle_drive, or ik_drive"
                 )
             if not _finite_number(getattr(clip, "head_stabilize", 0.0)) or not (0.0 <= float(getattr(clip, "head_stabilize", 0.0)) <= 1.0):
                 raise DSLValidationError(f"clip {clip.name}: head_stabilize must lie in [0.0, 1.0]")
@@ -1653,6 +1688,23 @@ def validate_program(program: Program) -> Program:
                     raise DSLValidationError(f"clip {clip.name}: flight limb_tuck must lie in [0.0, 1.0]")
                 if not _finite_number(fl.lift_recoil_u) or not (0.0 <= float(fl.lift_recoil_u) <= 16.0):
                     raise DSLValidationError(f"clip {clip.name}: flight lift_recoil_u must lie in [0.0, 16.0]")
+            for sw in getattr(clip, "swims", ()):
+                if not isinstance(sw, SwimDecl):
+                    raise DSLValidationError("swims must contain SwimDecl objects")
+                if not _valid_ident(sw.name):
+                    raise DSLValidationError(f"clip {clip.name}: invalid swim name {sw.name!r}")
+                if sw.mode not in SWIM_MODES:
+                    raise DSLValidationError(f"clip {clip.name}: unknown swim mode {sw.mode!r}; expected one of {sorted(SWIM_MODES)}")
+                if sw.limb_mode not in SWIM_LIMB_MODES:
+                    raise DSLValidationError(f"clip {clip.name}: unknown swim limb_mode {sw.limb_mode!r}; expected one of {sorted(SWIM_LIMB_MODES)}")
+                if not _finite_number(sw.freq_hz) or not (0.05 <= float(sw.freq_hz) <= 10.0):
+                    raise DSLValidationError(f"clip {clip.name}: swim freq_hz must lie in [0.05, 10.0]")
+                if not _finite_number(sw.head_stabilize) or not (0.0 <= float(sw.head_stabilize) <= 1.0):
+                    raise DSLValidationError(f"clip {clip.name}: swim head_stabilize must lie in [0.0, 1.0]")
+                if not _finite_number(sw.limb_tuck) or not (0.0 <= float(sw.limb_tuck) <= 1.0):
+                    raise DSLValidationError(f"clip {clip.name}: swim limb_tuck must lie in [0.0, 1.0]")
+                if not _finite_number(sw.myomere_bulge) or not (0.0 <= float(sw.myomere_bulge) <= 1.0):
+                    raise DSLValidationError(f"clip {clip.name}: swim myomere_bulge must lie in [0.0, 1.0]")
             for lyr in getattr(clip, "layers", ()):
                 if not isinstance(lyr, ClipLayerDecl):
                     raise DSLValidationError("layers must contain ClipLayerDecl objects")

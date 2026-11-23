@@ -590,17 +590,29 @@ def analyze_morphology(program: Program, scene: Scene | None = None) -> Morpholo
         sub_all = _subtree_bones(b.name)
         low = b.name.lower()
 
-        # Skip small decorative head/cranial/oral attachments (horns, ears, crests, teeth, cheeks, jaw plates)
+        # Skip small decorative head/cranial/oral/fur attachments (horns, ears, crests, teeth, cheeks, chelicerae, fur puffs)
         is_cranial_parent = bool(neck_list) and b.parent_name == neck_list[-1]
         sub_max_dim = float(np.max(s_max - s_min))
         if (
-            any(k in low for k in ("horn", "ear", "pinna", "antler", "crest", "gear", "flywheel", "turret", "piston", "collar", "ruff", "jabot", "mandible", "maxilla", "cheek", "tooth", "teeth", "fang", "tongue", "brow", "eye"))
+            any(
+                k in low
+                for k in (
+                    "horn", "ear", "pinna", "antler", "crest", "gear", "flywheel", "turret", "piston",
+                    "collar", "ruff", "jabot", "mandible", "maxilla", "cheek", "tooth", "teeth", "fang",
+                    "tongue", "brow", "eye", "chelicera", "pedipalp", "palp", "spinneret",
+                    "fur", "tuft", "fluff", "puff", "mane", "cape", "skirt", "plume", "flank", "shocker",
+                )
+            )
             or (is_cranial_parent and sub_max_dim < 0.28 * float(span[0]))
         ):
             visited_subtrees.update(sub_all)
             continue
 
-        reaches_ground = (float(s_min[1]) - ground_y) <= ground_tol
+        layout_obj = getattr(program, "layout", None)
+        env_grounded = True
+        if layout_obj is not None and getattr(layout_obj, "envelope", None) is not None:
+            env_grounded = bool(getattr(layout_obj.envelope, "grounded", True))
+        reaches_ground = env_grounded and ((float(s_min[1]) - ground_y) <= ground_tol)
         declared_ik = ik_by_root.get(b.name)
         if declared_ik is None:
             for ch_b in children_by_bone.get(b.name, ()):
@@ -608,8 +620,14 @@ def analyze_morphology(program: Program, scene: Scene | None = None) -> Morpholo
                     declared_ik = ik_by_root[ch_b]
                     break
 
-        is_wing_kw = any(k in low for k in ("wing", "fin", "flipper", "patagium", "sail"))
-        is_tentacle_kw = any(k in low for k in ("tentacle", "tendril", "whip", "feeler", "antenna"))
+        is_wing_kw = any(k in low for k in ("wing", "elytr", "tegmin", "fin", "flipper", "patagium", "sail"))
+        is_explicit_limb_kw = any(k in low for k in ("leg", "arm", "claw", "pincer", "chela", "limb")) and "oral_arm" not in low
+        sub_has_tentacle_bio = any(
+            (getattr(bone_decl_by_name.get(sb), "bio_joint", None) == "tentacle_segment" if "bone_decl_by_name" in locals() else False)
+            or any(tk in sb.lower() for tk in ("tentacle", "oral_arm", "tendril"))
+            for sb in sub_all
+        )
+        is_tentacle_kw = any(k in low for k in ("tentacle", "oral_arm", "tendril", "whip", "feeler", "antenna")) or sub_has_tentacle_bio
         is_neck_kw = any(k in low for k in ("neck", "head", "skull", "cerv"))
         is_tail_kw = any(k in low for k in ("tail", "caudal"))
         lat_span = float(s_max[0] - s_min[0])
@@ -634,7 +652,7 @@ def analyze_morphology(program: Program, scene: Scene | None = None) -> Morpholo
         # Multi-segment tentacle / tendril vs. free limb with articulated hand/digits!
         # Run _structural_limb_chain first so a 2-3 segment arm branching into multi-phalanx fingers
         # (arm -> forearm -> hand -> finger_prox -> finger_dist, depth=5) is NEVER misclassified as a tentacle!
-        is_arm_kw = any(k in low for k in ("arm", "hand", "forelimb", "claw", "pincer", "humerus"))
+        is_arm_kw = any(k in low for k in ("arm", "hand", "forelimb", "claw", "pincer", "humerus")) and "oral_arm" not in low
         simple_ch = _longest_chain_simple(b.name)
         struct_ch_pre, struct_digits_pre = _structural_limb_chain(b.name) if (not reaches_ground and declared_ik is None and not is_wing_kw) else ((), ())
         is_geom_tentacle = (
@@ -660,11 +678,13 @@ def analyze_morphology(program: Program, scene: Scene | None = None) -> Morpholo
             if solid_bxs
             else float(s_min[1])
         )
-        wing_touches_floor = (solid_min_y - ground_y) <= max(2.2, 0.04 * total_h)
+        wing_touches_floor = env_grounded and ((solid_min_y - ground_y) <= max(2.2, 0.04 * total_h))
         is_geom_airfoil = (
             not reaches_ground
             and declared_ik is None
             and not is_cranial_parent
+            and not is_explicit_limb_kw
+            and (len(sub_all) >= 2 or lat_span >= 0.35 * float(span[0]))
             and lat_span >= min_airfoil_span
             and (
                 has_planes
@@ -691,10 +711,10 @@ def analyze_morphology(program: Program, scene: Scene | None = None) -> Morpholo
                 visited_subtrees.update(sub_all)
                 continue
 
-        # Non-grounded 2..3 segment free limbs (e.g., humanoid arms, centaur arms, mantis arms)
+        # Non-grounded 2..3 segment free limbs (e.g., humanoid arms, spider raised front legs, centaur/mantis arms)
         if not reaches_ground and declared_ik is None:
             f_chain, f_digits = _structural_limb_chain(b.name)
-            if len(f_chain) >= 2 and float(b.pivot_world[1] - ground_y) > 0.35 * total_h:
+            if len(f_chain) >= 2 and float(b.pivot_world[1] - ground_y) > 0.15 * total_h:
                 side_f = _infer_side_label(f_chain[0], float(bone_by_name[f_chain[0]].pivot_world[0]), left_sign_x)
                 hip_fw = bone_by_name[f_chain[0]].pivot_world.copy()
                 tip_fb = bone_by_name[f_chain[-1]]

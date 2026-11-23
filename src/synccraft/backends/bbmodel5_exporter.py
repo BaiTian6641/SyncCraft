@@ -55,6 +55,7 @@ def _serialize_bbmodel_animations(
             getattr(clip, "auto_rig", False)
             or getattr(clip, "ground_pin_limbs", False)
             or getattr(clip, "flights", ())
+            or getattr(clip, "swims", ())
             or getattr(clip, "gaits", ())
             or getattr(clip, "ik_drives", ())
             or getattr(clip, "muscle_drives", ())
@@ -96,18 +97,24 @@ def _serialize_bbmodel_animations(
             getattr(clip, "in_place", False)
             or any(getattr(g, "in_place", False) for g in getattr(clip, "gaits", ()))
             or any(getattr(fl, "in_place", False) for fl in getattr(clip, "flights", ()))
+            or any(getattr(sw, "in_place", False) for sw in getattr(clip, "swims", ()))
         )
         has_macro_root_drift = (
             not is_in_place
             and (any(abs(d.stride) > 1e-6 for d in clip.ik_drives) or bool(getattr(clip, "gaits", ())))
         )
+        def _root_total_pos(s: Any) -> tuple[float, float, float]:
+            r = s.root_translation_delta
+            p = s.pose_position_deltas.get(root_bone_name, (0.0, 0.0, 0.0))
+            return (float(r[0]) + float(p[0]), float(r[1]) + float(p[1]), float(r[2]) + float(p[2]))
+
         if (root_bone_name, "position") not in explicit_kf_channels and any(
-            any(abs(float(c)) > 1e-5 for c in s.root_translation_delta) for s in samples
+            any(abs(c) > 1e-5 for c in _root_total_pos(s)) for s in samples
         ):
             root_uid = stable_uuid("bone", root_bone_name, asset_name)
             pos_kfs: list[dict[str, Any]] = []
             for k_i, s in enumerate(samples):
-                tx, ty, tz = s.root_translation_delta
+                tx, ty, tz = _root_total_pos(s)
                 pos_kfs.append({
                     "channel": "position",
                     "data_points": [{"x": round(float(tx), 4), "y": round(float(ty), 4), "z": round(float(tz), 4)}],
@@ -117,7 +124,7 @@ def _serialize_bbmodel_animations(
                     "interpolation": "linear",
                 })
             if clip.loop and not has_macro_root_drift:
-                tx0, ty0, tz0 = samples[0].root_translation_delta
+                tx0, ty0, tz0 = _root_total_pos(samples[0])
                 pos_kfs.append({
                     "channel": "position",
                     "data_points": [{"x": round(float(tx0), 4), "y": round(float(ty0), 4), "z": round(float(tz0), 4)}],

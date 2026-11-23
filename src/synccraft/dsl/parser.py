@@ -49,6 +49,7 @@ from .ast_nodes import (
     EffectTriggerDecl,
     FlightDecl,
     GaitDecl,
+    SwimDecl,
     IKChainDecl,
     IKDriveDecl,
     Joint,
@@ -2175,12 +2176,15 @@ class _Parser:
             elif self.at("flight"):
                 fl, f_dur, f_loop = self.flight_decl_with_meta()
                 clips.append(ClipDecl(name=fl.name, duration_s=f_dur, loop=f_loop, flights=(fl,), in_place=fl.in_place, head_stabilize=fl.head_stabilize, auto_bio_limits=fl.auto_bio_limits))
+            elif self.at("swim"):
+                sw, s_dur, s_loop = self.swim_decl_with_meta()
+                clips.append(ClipDecl(name=sw.name, duration_s=s_dur, loop=s_loop, swims=(sw,), in_place=sw.in_place, head_stabilize=sw.head_stabilize, auto_bio_limits=sw.auto_bio_limits))
             elif self.at("state"):
                 states.append(self.behavior_state_decl())
             elif self.at("spring"):
                 springs.append(self.spring_decl())
             else:
-                self.fail("expected clip, gait, flight, state, spring, or closing brace in @behavior")
+                self.fail("expected clip, gait, flight, swim, state, spring, or closing brace in @behavior")
         self.take("}")
         return BehaviorDecl(clips=tuple(clips), states=tuple(states), springs=tuple(springs))
 
@@ -2443,6 +2447,98 @@ class _Parser:
         eff_dur = dur_override if dur_override is not None else round(max(0.4, min(4.0, 1.0 / max(0.25, flap_hz))), 4)
         return fl, eff_dur, loop_override
 
+    def swim_decl_with_meta(self) -> tuple[SwimDecl, float, bool]:
+        self.take("swim")
+        sname = self.ident()
+        self.take("{")
+        mode = "leviathan_cruise"
+        freq_hz = 0.625
+        wave_amp_deg = 16.0
+        wavelength_ratio = 0.95
+        buoyancy_y = 8.0
+        heave_amp_u = 1.6
+        body_pitch_deg = -3.0
+        roll_bank_deg = 3.5
+        head_stabilize = 0.78
+        limb_mode = "hydro_tuck"
+        limb_tuck = 0.85
+        myomere_bulge = 0.80
+        fin_lag_deg = 14.0
+        in_place = True
+        auto_bio_limits = True
+        ground_clearance = True
+        digit_articulation = 0.85
+        dur_override: float | None = None
+        loop_override = True
+        while not self.at("}"):
+            sk = self.ident()
+            self.take(":")
+            if sk == "mode":
+                mode = self.ident()
+            elif sk == "freq_hz":
+                freq_hz = float(self.number())
+            elif sk == "wave_amp_deg":
+                wave_amp_deg = float(self.number())
+            elif sk == "wavelength_ratio":
+                wavelength_ratio = float(self.number())
+            elif sk == "buoyancy_y":
+                buoyancy_y = float(self.number())
+            elif sk == "heave_amp_u":
+                heave_amp_u = float(self.number())
+            elif sk == "body_pitch_deg":
+                body_pitch_deg = float(self.number())
+            elif sk == "roll_bank_deg":
+                roll_bank_deg = float(self.number())
+            elif sk == "head_stabilize":
+                head_stabilize = float(self.number())
+            elif sk == "limb_mode":
+                limb_mode = self.ident()
+            elif sk == "limb_tuck":
+                limb_tuck = float(self.number())
+            elif sk == "myomere_bulge":
+                myomere_bulge = float(self.number())
+            elif sk == "fin_lag_deg":
+                fin_lag_deg = float(self.number())
+            elif sk == "in_place":
+                in_place = self.boolean()
+            elif sk == "auto_bio_limits":
+                auto_bio_limits = self.boolean()
+            elif sk == "ground_clearance":
+                ground_clearance = self.boolean()
+            elif sk == "digit_articulation":
+                digit_articulation = float(self.number())
+            elif sk == "duration_s":
+                dur_override = float(self.number())
+            elif sk == "loop":
+                loop_override = self.boolean()
+            else:
+                self.fail(f"unexpected swim field {sk!r}")
+            self.maybe_take(",")
+            self.maybe_take(";")
+        self.take("}")
+        sw = SwimDecl(
+            name=sname,
+            mode=mode,
+            freq_hz=freq_hz,
+            wave_amp_deg=wave_amp_deg,
+            wavelength_ratio=wavelength_ratio,
+            buoyancy_y=buoyancy_y,
+            heave_amp_u=heave_amp_u,
+            body_pitch_deg=body_pitch_deg,
+            roll_bank_deg=roll_bank_deg,
+            head_stabilize=head_stabilize,
+            limb_mode=limb_mode,
+            limb_tuck=limb_tuck,
+            myomere_bulge=myomere_bulge,
+            fin_lag_deg=fin_lag_deg,
+            in_place=in_place,
+            auto_bio_limits=auto_bio_limits,
+            ground_clearance=ground_clearance,
+            digit_articulation=digit_articulation,
+        )
+        eff_dur = dur_override if dur_override is not None else round(max(0.6, min(4.0, 1.0 / max(0.25, freq_hz))), 4)
+        return sw, eff_dur, loop_override
+
     def clip_decl(self) -> ClipDecl:
         self.take("clip")
         name = self.ident()
@@ -2512,6 +2608,7 @@ class _Parser:
         keyframes: list[KeyframeTrackDecl] = []
         gaits: list[GaitDecl] = []
         flights: list[FlightDecl] = []
+        swims: list[SwimDecl] = []
         layers: list[ClipLayerDecl] = []
         effects: list[EffectTriggerDecl] = []
         gait_default_dur: float | None = None
@@ -2526,6 +2623,11 @@ class _Parser:
                 flights.append(fl)
                 if gait_default_dur is None:
                     gait_default_dur = f_dur
+            elif self.at("swim"):
+                sw, s_dur, _ = self.swim_decl_with_meta()
+                swims.append(sw)
+                if gait_default_dur is None:
+                    gait_default_dur = s_dur
             elif self.at("layer"):
                 self.take("layer")
                 src_clip = self.ident()
@@ -2732,6 +2834,7 @@ class _Parser:
             layers=tuple(layers),
             effects=tuple(effects),
             flights=tuple(flights),
+            swims=tuple(swims),
             in_place=in_place,
             head_stabilize=head_stabilize,
             auto_bio_limits=auto_bio_limits,

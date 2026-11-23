@@ -135,18 +135,19 @@ def allocate_artisan_x32_uvs(program: Program, scene: Scene, *, padding: int = 2
 
     jobs: list[tuple[int, int, int, WorldBox, str, bool]] = []
     for idx, box in enumerate(scene.boxes):
+        box_tpu = tpu * max(1.0, float(getattr(box, "uv_scale", 1.0) or 1.0))
         pnorm = getattr(box, "plane_normal", None)
         if pnorm in PLANE_PRIMARY_FACES:
             f_front, _ = PLANE_PRIMARY_FACES[pnorm]
             ax_u, ax_v = FACE_AXES[f_front]
-            w = max(2, int(round(float(box.size[ax_u]) * tpu)))
-            h = max(2, int(round(float(box.size[ax_v]) * tpu)))
+            w = max(2, int(round(float(box.size[ax_u]) * box_tpu)))
+            h = max(2, int(round(float(box.size[ax_v]) * box_tpu)))
             jobs.append((h, w, idx, box, f_front, True))
         else:
             for face in FACES:
                 ax_u, ax_v = FACE_AXES[face]
-                w = max(2, int(round(float(box.size[ax_u]) * tpu)))
-                h = max(2, int(round(float(box.size[ax_v]) * tpu)))
+                w = max(2, int(round(float(box.size[ax_u]) * box_tpu)))
+                h = max(2, int(round(float(box.size[ax_v]) * box_tpu)))
                 jobs.append((h, w, idx, box, face, False))
 
     total_area = sum((w + 2 * padding) * (h + 2 * padding) for h, w, *_ in jobs)
@@ -168,8 +169,11 @@ def allocate_artisan_x32_uvs(program: Program, scene: Scene, *, padding: int = 2
             pnorm = str(getattr(box, "plane_normal"))
             f_front, f_back = PLANE_PRIMARY_FACES[pnorm]
             faces_out[box.name][f_front] = list(rect)
-            # Horizontally mirror back face so alpha cutouts align in 3D space!
-            faces_out[box.name][f_back] = [x + w, y, x, y + h]
+            # Mirror back face along the exact world-inverted UV axis so cutouts align in 3D space!
+            if pnorm == "y":
+                faces_out[box.name][f_back] = [x, y + h, x + w, y]
+            else:
+                faces_out[box.name][f_back] = [x + w, y, x, y + h]
             deg_rect = [x, y, x + 1, y + 1]
             for f_other in FACES:
                 faces_out[box.name].setdefault(f_other, list(deg_rect))

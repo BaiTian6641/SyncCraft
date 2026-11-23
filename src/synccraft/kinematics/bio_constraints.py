@@ -46,6 +46,7 @@ BIO_JOINT_PRESETS: dict[str, tuple[tuple[float, float], tuple[float, float], tup
     "thumb_saddle": ((-25.0, 55.0), (-30.0, 30.0), (-20.0, 20.0)),
     # --- Limb joints (Humanoid, Quadruped, Digitigrade, Arthropod, Dragon) ---
     "hinge_elbow": ((-125.0, 8.0), (-8.0, 8.0), (-8.0, 8.0)),
+    "elbow_sprawled": ((-75.0, 120.0), (-42.0, 42.0), (-42.0, 42.0)),
     "hinge_knee": ((-8.0, 125.0), (-8.0, 8.0), (-8.0, 8.0)),
     "hinge_hock": ((-115.0, 15.0), (-8.0, 8.0), (-8.0, 8.0)),
     "wrist_ankle": ((-50.0, 55.0), (-22.0, 22.0), (-22.0, 22.0)),
@@ -68,6 +69,10 @@ BIO_JOINT_PRESETS: dict[str, tuple[tuple[float, float], tuple[float, float], tup
     "wing_wrist": ((-26.0, 26.0), (-42.0, 45.0), (-36.0, 36.0)),
     "wing_finger": ((-20.0, 26.0), (-30.0, 32.0), (-24.0, 24.0)),
     "wing_anchor_locked": ((0.0, 0.0), (0.0, 0.0), (0.0, 0.0)),
+    "elytron_hinge": ((-45.0, 45.0), (-35.0, 35.0), (-65.0, 65.0)),
+    "arthropod_chelicera": ((-34.0, 22.0), (-18.0, 18.0), (-22.0, 22.0)),
+    "arthropod_pedipalp": ((-36.0, 28.0), (-28.0, 28.0), (-24.0, 24.0)),
+    "pelagic_bell": ((-25.0, 25.0), (-25.0, 25.0), (-25.0, 25.0)),
     "fin_root": ((-40.0, 40.0), (-45.0, 45.0), (-55.0, 55.0)),
     "fin_ray": ((-25.0, 25.0), (-30.0, 30.0), (-25.0, 25.0)),
     # --- Mechanical / Vehicle / Industrial Mecha joints ---
@@ -129,13 +134,24 @@ BIO_JOINT_NAMES: frozenset[str] = frozenset(BIO_JOINT_PRESETS.keys())
 
 
 def resolve_bone_joint_limits(bone: Any) -> Any:
-    """Return explicit ``bone.joint_limits`` if set, else resolve ``bone.bio_joint`` preset."""
+    """Return explicit ``bone.joint_limits`` if set, else resolve rest-pose-aware ``bone.bio_joint`` preset."""
     jlim = getattr(bone, "joint_limits", None)
     if jlim is not None:
         return jlim
     bio = getattr(bone, "bio_joint", None)
     if bio is not None and bio in BIO_JOINT_PRESETS:
-        return BIO_JOINT_PRESETS[bio]
+        base = BIO_JOINT_PRESETS[bio]
+        if bio in ("hinge_knee", "hinge_elbow", "hinge_hock"):
+            rest_e = getattr(bone, "rest_euler", None)
+            if rest_e is not None and len(rest_e) >= 1:
+                rx = float(rest_e[0])
+                lo, hi = float(base[0][0]), float(base[0][1])
+                if rx > 10.0:
+                    lo = min(lo, -min(rx, 85.0))
+                elif rx < -10.0:
+                    hi = max(hi, min(-rx, 85.0))
+                return ((lo, hi), base[1], base[2])
+        return base
     return None
 
 
@@ -528,6 +544,20 @@ def solve_vestibulo_ocular_stabilization(
     r_counter_world = r_parent_rest @ r_parent_posed.T
     if np.allclose(r_counter_world, np.eye(3), atol=1e-6):
         return dict(pose_deltas)
+
+    # Smooth C1 acrobatic disengagement: during inverted somersaults, backflips, or
+    # frontflips (torso deviation > 55 deg), vestibulo-ocular horizon stabilization
+    # smoothly attenuates to 0 by 95 deg so _recover_euler_xyz_degrees never hits
+    # gimbal lock or the 180 deg antipodal branch-cut snap.
+    cos_dev = float(np.clip(0.5 * (float(np.trace(r_counter_world)) - 1.0), -1.0, 1.0))
+    dev_deg = math.degrees(math.acos(cos_dev))
+    if dev_deg >= 95.0:
+        return dict(pose_deltas)
+    if dev_deg > 55.0:
+        u = (dev_deg - 55.0) / 40.0
+        gain *= 1.0 - (3.0 * u * u - 2.0 * u * u * u)
+        if gain <= 1e-5:
+            return dict(pose_deltas)
 
     n_c = len(chain)
     raw_w = np.array([float(weight_decay) ** (n_c - 1 - i) for i in range(n_c)], dtype=np.float64)
