@@ -65,6 +65,9 @@ FLIGHT_MODES = frozenset({
     "takeoff_burst",
     "mantle",
     "swim_fins",
+    "jet_hover",
+    "jet_cruise",
+    "jet_boost",
 })
 SWIM_MODES = frozenset({
     "leviathan_cruise",
@@ -705,6 +708,8 @@ class FlightDecl:
     antagonist_bulge: float = 0.0
     pectoral_bulge: float = 0.0
     ground_clearance: bool = True
+    gimbal_deg: float = 3.5
+    bank_deg: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -1688,6 +1693,10 @@ def validate_program(program: Program) -> Program:
                     raise DSLValidationError(f"clip {clip.name}: flight limb_tuck must lie in [0.0, 1.0]")
                 if not _finite_number(fl.lift_recoil_u) or not (0.0 <= float(fl.lift_recoil_u) <= 16.0):
                     raise DSLValidationError(f"clip {clip.name}: flight lift_recoil_u must lie in [0.0, 16.0]")
+                if not _finite_number(getattr(fl, "gimbal_deg", 3.5)) or not (0.0 <= float(getattr(fl, "gimbal_deg", 3.5)) <= 25.0):
+                    raise DSLValidationError(f"clip {clip.name}: flight gimbal_deg must lie in [0.0, 25.0]")
+                if not _finite_number(getattr(fl, "bank_deg", 0.0)) or not (-35.0 <= float(getattr(fl, "bank_deg", 0.0)) <= 35.0):
+                    raise DSLValidationError(f"clip {clip.name}: flight bank_deg must lie in [-35.0, 35.0]")
             for sw in getattr(clip, "swims", ()):
                 if not isinstance(sw, SwimDecl):
                     raise DSLValidationError("swims must contain SwimDecl objects")

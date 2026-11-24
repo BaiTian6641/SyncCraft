@@ -892,6 +892,132 @@ class TestWholeBodyBiomechanicalSolver(unittest.TestCase):
         frames_m = evaluate_behavior_clip(prog_m, "dig_cycle", num_frames=12)
         self.assertTrue(all(fr.pose_scale_factors == {} for fr in frames_m), "Rigid hydraulic boom must stay 0% Sim(3) squished")
 
+    def test_jet_propulsion_vtol_hover_cruise_boost_and_cladding_exclusion(self) -> None:
+        """Verify universal VTOL/jet_hover, banked jet_cruise, jet_boost (ZERO bird flapping!) & zero-offset mirror_x cladding exclusion."""
+        jet_dsl = """
+@meta { archetype: entity, target_profile: bedrock_entity, texel_density: 16, dsl_version: "4.1", size_step: 0.5, audit_profile: sculpted }
+@palette {
+  alloy: ramp(base_lch=[0.74, 0.03, 240], steps=4)
+  vent: ramp(base_lch=[0.55, 0.20, 28], steps=4)
+}
+@rig {
+  root bone pelvis {
+    pivot_local: [0, 12.0, 0]
+    box core { size: [8, 6, 12], material: alloy }
+    bone head_root attach(parent_box=core, anchor=[0, 0.3, 1], align=[0, 0, -1], seat=0.1) {
+      box skull { size: [5, 4, 6], material: alloy, blend_with: [core] }
+      bone skull_side_l joint(parent=skull, at=[0, 0, 0]) mirror_x(skull_side_r) {
+        box cheek_l place(anchor=[0, 0, 0], align=[0, 0, 0], offset=[-2.8, 0, 1.0]) { size: [1.5, 3, 4], material: alloy, blend_with: [skull, core] }
+      }
+    }
+    bone tail_1 attach(parent_box=core, anchor=[0, 0.2, -1], align=[0, 0, 1], seat=0.1) {
+      box t1 { size: [4, 3, 8], material: alloy, blend_with: [core] }
+      bone tail_2 attach(parent_box=t1, anchor=[0, 0, -1], align=[0, 0, 1], seat=0.1) {
+        box t2 { size: [3, 2, 8], material: alloy, blend_with: [t1] }
+      }
+    }
+    bone leg_l_thigh joint(parent=core, at=[-4.5, -2.0, -2.0]) mirror_x(leg_r_thigh) {
+      box thigh_l place(anchor=[0, 0, 0], align=[0, 1, 0]) { size: [2.5, 6, 3], material: alloy, blend_with: [core] }
+      bone leg_l_shin attach(parent_box=thigh_l, anchor=[0, -1, 0], align=[0, 1, 0], seat=0.1) {
+        box shin_l { size: [2, 5.5, 2.5], material: alloy, blend_with: [thigh_l] }
+      }
+    }
+    bone wing_l_upper joint(parent=core, at=[-5.0, 2.5, 1.0]) mirror_x(wing_r_upper) {
+      rest_euler: [0, 0, 20]
+      joint_limits: [[-120, 120], [-95, 95], [-120, 120]]
+      box pylon_l place(anchor=[0, 0, 0], align=[0, -1, 0]) { size: [2.5, 8, 3], material: alloy, blend_with: [core] }
+      bone wing_l_fore joint(parent=pylon_l, at=[-2.5, 7.0, 0.0]) {
+        joint_limits: [[-180, 180], [-115, 115], [-115, 115]]
+        box nacelle_l place(anchor=[0, 0, 0], align=[0.5, 0, 0]) { size: [3, 4, 6], material: alloy, blend_with: [pylon_l] }
+        bone wing_l_f1 joint(parent=nacelle_l, at=[0, 3.2, -3.5]) {
+          bio_joint: gimbal_thruster
+          box eng1 place(anchor=[0, 0, 0], align=[0, 0, 1]) { size: [1.5, 1.5, 9], material: vent, blend_with: [nacelle_l] }
+        }
+        bone wing_l_f2 joint(parent=nacelle_l, at=[0, 0.0, -3.8]) {
+          bio_joint: gimbal_thruster
+          box eng2 place(anchor=[0, 0, 0], align=[0, 0, 1]) { size: [1.5, 1.5, 9], material: vent, blend_with: [nacelle_l] }
+        }
+        bone wing_l_f3 joint(parent=nacelle_l, at=[0, -3.2, -3.5]) {
+          bio_joint: gimbal_thruster
+          box eng3 place(anchor=[0, 0, 0], align=[0, 0, 1]) { size: [1.5, 1.5, 9], material: vent, blend_with: [nacelle_l] }
+        }
+      }
+    }
+  }
+}
+@muscles {
+  muscle wing_pectoralis_l { origin_bone: pelvis, insertion_bone: wing_l_upper, action_axis: z, moment_arm_deg: 24, scale_bulge: 0.0 }
+  muscle wing_pectoralis_r { origin_bone: pelvis, insertion_bone: wing_r_upper, action_axis: z, moment_arm_deg: -24, scale_bulge: 0.0 }
+}
+@behavior {
+  clip vtol_hover {
+    duration_s: 1.6, loop: true, in_place: true, auto_rig: true
+    flight jh { mode: jet_hover, flap_hz: 0.625, lift_recoil_u: 1.2, body_pitch_deg: 12, limb_tuck: 0.70, gimbal_deg: 3.0, in_place: true }
+  }
+  clip supersonic_bank {
+    duration_s: 1.4, loop: true, in_place: true, auto_rig: true
+    flight jc { mode: jet_cruise, flap_hz: 0.714, lift_recoil_u: 0.8, body_pitch_deg: 0, limb_tuck: 0.85, gimbal_deg: 2.5, bank_deg: 7.5, in_place: true }
+  }
+  clip midair_boost {
+    duration_s: 1.2, loop: false, in_place: true, auto_rig: true
+    flight jb { mode: jet_boost, flap_hz: 0.833, lift_recoil_u: 1.8, body_pitch_deg: 18, limb_tuck: 0.75, gimbal_deg: 4.0, in_place: true }
+  }
+}
+"""
+        prog = parse_program(jet_dsl)
+        from synccraft.dsl.parser import format_program
+        from synccraft.kinematics.morphology import analyze_morphology
+        from synccraft.kinematics.se3_chain import compile_geometry
+        # Canonical format + re-parse roundtrip must preserve gimbal_deg and bank_deg
+        re_prog = parse_program(format_program(prog))
+        self.assertEqual(len(re_prog.behavior.clips), 3)
+
+        # 1. Zero-offset mirror_x cladding helper bones (`skull_side_l`/`r`) must NOT be sucked into axial spine/neck
+        rest_sc = compile_geometry(prog, validate=False)
+        morph = analyze_morphology(prog, rest_sc)
+        self.assertNotIn("skull_side_l", morph.neck)
+        self.assertNotIn("skull_side_r", morph.neck)
+        self.assertNotIn("skull_side_l", morph.spine)
+        self.assertNotIn("skull_side_r", morph.spine)
+        # All 3 independent jet-thruster blades must be discovered as unlocked rays
+        l_wings = [w for w in morph.wings if w.side == "l"]
+        self.assertEqual(len(l_wings), 1)
+        self.assertEqual(len(l_wings[0].finger_bones), 3)
+        self.assertEqual(len(l_wings[0].locked_spar_bones), 0)
+
+        # 2. VTOL hover: ZERO bird flapping on wing_l_upper (must NOT auto-fire 24-deg wing_pectoralis muscle!), 0.0000u Z-drift
+        aud_h = audit_behavior_clip(prog, "vtol_hover", num_frames=16, max_frames=48)
+        self.assertTrue(aud_h["passed"], f"jet_hover failed: {aud_h}")
+        fa_h = aud_h["flight_audit"]
+        self.assertTrue(fa_h["passed"], f"jet_hover flight_audit failed: {fa_h}")
+        self.assertEqual(fa_h["max_root_z_units"], 0.0)
+        self.assertLess(fa_h["max_bilateral_asymmetry_units"], 1e-3)
+        fr_h = evaluate_behavior_clip(prog, "vtol_hover", num_frames=16)
+        max_pylon_flap = max(max(abs(c) for c in f.pose_euler_deltas.get("wing_l_upper", (0, 0, 0))) for f in fr_h)
+        self.assertLess(max_pylon_flap, 4.0, f"jet_hover flapped wing pylon by {max_pylon_flap} deg!")
+        # Verify all 3 thruster nozzles actively gimbal independently
+        for f_bn in ("wing_l_f1", "wing_l_f2", "wing_l_f3"):
+            exc = max(max(abs(c) for c in f.pose_euler_deltas.get(f_bn, (0, 0, 0))) for f in fr_h)
+            self.assertGreater(exc, 0.5, f"Thruster blade {f_bn} failed to gimbal!")
+
+        # 3. Supersonic banked jet_cruise: rolls cleanly, supersonic root_motion speed, body-frame symmetry passes, 0 Z-drift
+        aud_c = audit_behavior_clip(prog, "supersonic_bank", num_frames=16, max_frames=48)
+        self.assertTrue(aud_c["passed"], f"jet_cruise failed: {aud_c}")
+        fa_c = aud_c["flight_audit"]
+        self.assertTrue(fa_c["passed"], f"jet_cruise flight_audit failed: {fa_c}")
+        self.assertEqual(fa_c["max_root_z_units"], 0.0)
+        self.assertGreater(fa_c["root_motion"]["speed_units_per_s"], 35.0)
+        self.assertLess(fa_c["max_bilateral_asymmetry_units"], 1e-3)
+        fr_c = evaluate_behavior_clip(prog, "supersonic_bank", num_frames=16)
+        max_roll = max(abs(f.pose_euler_deltas.get("pelvis", (0, 0, 0))[2]) for f in fr_c)
+        self.assertGreater(max_roll, 6.0, "jet_cruise bank_deg did not produce fighter-jet banking roll!")
+
+        # 4. Impulsive VTOL jet_boost: passes all flight + SAT contracts with 0 Z-drift
+        aud_b = audit_behavior_clip(prog, "midair_boost", num_frames=16, max_frames=48)
+        self.assertTrue(aud_b["passed"], f"jet_boost failed: {aud_b}")
+        self.assertTrue(aud_b["flight_audit"]["passed"], f"jet_boost flight_audit failed: {aud_b['flight_audit']}")
+        self.assertEqual(aud_b["flight_audit"]["max_root_z_units"], 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()

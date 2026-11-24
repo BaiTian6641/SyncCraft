@@ -241,18 +241,25 @@ def _apply_muscle_scale_bulge(
         )
 
 
+_JET_MODES: frozenset[str] = frozenset({"jet_hover", "jet_cruise", "jet_boost"})
+
+
 def _compute_flight_velocity_u_s(
     flight: FlightDecl,
     morph: MorphologyReport,
     duration_s: float,
 ) -> float:
-    """Compute matched Minecraft entity velocity (units/s) for cruise/glide/swim_fins modes."""
+    """Compute matched Minecraft entity velocity (units/s) for cruise/glide/swim_fins/jet modes."""
     mode = flight.mode
-    if mode in ("hover", "mantle"):
+    if mode in ("hover", "mantle", "jet_hover"):
         return 0.0
     wing_span = max((w.span for w in morph.wings), default=max(12.0, morph.body_span[0]))
     if mode == "cruise":
         return float(max(16.0, 1.35 * wing_span * max(0.4, flight.flap_hz)))
+    if mode == "jet_cruise":
+        return float(max(36.0, 2.60 * wing_span))
+    if mode == "jet_boost":
+        return float(max(24.0, 1.85 * wing_span * max(0.5, flight.flap_hz)))
     if mode in ("glide", "soar"):
         return float(max(20.0, 1.60 * wing_span))
     if mode == "takeoff_burst":
@@ -357,8 +364,11 @@ def evaluate_flight_clip(
     # Pair lookup so mirrored right wings receive exact X-reflected Euler symmetry
     left_role_for_pair: dict[int, str] = {w.pair_index: w.role for w in morph.wings if w.side == "l"}
 
-    # Mode-specific aerodynamic shaping factors
+    # Mode-specific aerodynamic / jet-thruster shaping factors
     mode = flight.mode
+    is_jet = mode in _JET_MODES
+    gimbal_deg = float(getattr(flight, "gimbal_deg", 3.5))
+    bank_deg = float(getattr(flight, "bank_deg", 0.0))
     if mode == "hover":
         stroke_scale, sweep_scale, pron_scale, fold_scale = 1.0, 1.0, 1.0, 1.0
         recoil_scale, pitch_bias_scale, pitch_osc_deg = 1.0, 1.0, 5.5
@@ -369,6 +379,24 @@ def evaluate_flight_clip(
         recoil_scale, pitch_bias_scale, pitch_osc_deg = 0.72, 0.22, 3.2
         down_frac = 0.46
         dihedral_bias_deg = -4.0
+    elif mode == "jet_hover":
+        # VTOL multi-thruster hover: ZERO wing paddling/flapping; pure thruster suspension + nozzle micro-gimbal!
+        stroke_scale, sweep_scale, pron_scale, fold_scale = 0.0, 0.0, 0.0, 0.0
+        recoil_scale, pitch_bias_scale, pitch_osc_deg = 1.0, 1.0, 1.4
+        down_frac = 0.50
+        dihedral_bias_deg = 0.0
+    elif mode == "jet_cruise":
+        # Supersonic / fighter-jet cruise: ZERO wing flapping; swept-back thruster stability + subtle aero bank!
+        stroke_scale, sweep_scale, pron_scale, fold_scale = 0.0, 0.0, 0.0, 0.0
+        recoil_scale, pitch_bias_scale, pitch_osc_deg = 0.28, 1.0, 0.7
+        down_frac = 0.50
+        dihedral_bias_deg = 0.0
+    elif mode == "jet_boost":
+        # Impulsive VTOL mid-air rocket-hop / afterburner surge: ZERO wing flapping; sharp thrust recoil & tremor!
+        stroke_scale, sweep_scale, pron_scale, fold_scale = 0.0, 0.0, 0.0, 0.0
+        recoil_scale, pitch_bias_scale, pitch_osc_deg = 1.25, 1.0, 2.2
+        down_frac = 0.42
+        dihedral_bias_deg = 0.0
     elif mode in ("glide", "soar"):
         stroke_scale, sweep_scale, pron_scale, fold_scale = 0.22, 0.18, 0.35, 0.18
         recoil_scale, pitch_bias_scale, pitch_osc_deg = 0.32, 0.18, 1.6
@@ -437,17 +465,30 @@ def evaluate_flight_clip(
         times_list.append(t_s)
         phases_list.append(phi_clip)
 
-        # Asymmetric aerodynamic stroke angle: theta=0 (top), pi/2 (mid-downstroke), pi (bottom), 3pi/2 (mid-upstroke)
+        # Asymmetric aerodynamic stroke angle (or uniform jet-propulsion harmonic angle)
+        u_jet = 2.0 * math.pi * cyc_phi
         theta = _asymmetric_wing_phase(cyc_phi, downstroke_frac=down_frac)
-        # Anti-phase aerodynamic lift COM recoil: peak upward lift right after mid-downstroke (theta ~ 0.65*pi)
+        in_place_active = bool(flight.in_place or getattr(clip, "in_place", False))
+        # Anti-phase aerodynamic lift COM recoil (or VTOL jet suspension + 3x rocket-exhaust micro-tremor)
         # In-place contract: ZERO huge +35u altitude offset; pure local COM heave around y=0!
-        lift_recoil_y = float(flight.lift_recoil_u) * recoil_scale * math.sin(theta - 0.35 * math.pi)
-        if mode == "mantle":
+        if mode == "jet_hover":
+            lift_recoil_y = float(flight.lift_recoil_u) * recoil_scale * (math.sin(u_jet) + 0.14 * math.sin(3.0 * u_jet))
+        elif mode == "jet_cruise":
+            lift_recoil_y = float(flight.lift_recoil_u) * recoil_scale * (math.sin(u_jet) + 0.12 * math.sin(3.0 * u_jet))
+        elif mode == "jet_boost":
+            lift_recoil_y = float(flight.lift_recoil_u) * recoil_scale * (math.sin(theta - 0.25 * math.pi) + 0.16 * math.sin(3.0 * theta))
+        elif mode == "mantle":
             # Grounded mantle squats/rises subtly without lifting feet off the floor
             lift_recoil_y = -abs(float(flight.lift_recoil_u) * 0.22) * (0.5 - 0.5 * math.cos(theta))
-        # Subtle fore-aft aerodynamic surge (±0.35 * lift_recoil_u) for hover weight
-        surge_z = (0.30 * float(flight.lift_recoil_u) * recoil_scale * math.cos(theta)) if mode in ("hover", "takeoff_burst") else 0.0
-        adv_z = 0.0 if (flight.in_place or getattr(clip, "in_place", False)) else (fwd_z * spd_u_s * t_s)
+        else:
+            lift_recoil_y = float(flight.lift_recoil_u) * recoil_scale * math.sin(theta - 0.35 * math.pi)
+        # Fore-aft aerodynamic surge strictly gated off when in_place=True or in jet VTOL modes!
+        surge_z = (
+            0.0
+            if (in_place_active or is_jet)
+            else ((0.30 * float(flight.lift_recoil_u) * recoil_scale * math.cos(theta)) if mode in ("hover", "takeoff_burst") else 0.0)
+        )
+        adv_z = 0.0 if in_place_active else (fwd_z * spd_u_s * t_s)
         root_delta: Vec3 = (0.0, float(lift_recoil_y), float(adv_z + fwd_z * surge_z))
         root_deltas_list.append(root_delta)
 
@@ -482,15 +523,17 @@ def evaluate_flight_clip(
                 pp = frame_pos_deltas.get(lb_n, (0.0, 0.0, 0.0))
                 frame_pos_deltas[lb_n] = (pp[0] + lpv[0], pp[1] + lpv[1], pp[2] + lpv[2])
 
-        # 2. Axial torso pitch & aerodynamic counter-recoil
+        # 2. Axial torso pitch & aerodynamic / jet-thruster counter-recoil
         pitch_bias = -float(flight.body_pitch_deg) * pitch_bias_scale * fwd_z
-        # During power downstroke (sin(theta) > 0), aerodynamic thrust pitches chest slightly upward
-        pitch_dyn = -pitch_osc_deg * math.sin(theta - 0.15 * math.pi) * fwd_z
+        # During power downstroke (or jet thrust pulse), thrust pitches chest slightly upward
+        pitch_dyn = -pitch_osc_deg * math.sin((u_jet if is_jet else theta) - 0.15 * math.pi) * fwd_z
         non_root_spine = [b for b in morph.spine if b != root_bone_name]
         if non_root_spine:
             # Share base hover body attitude across root (45%) + spine vertebrae (55%)
             rv = pose_map.setdefault(root_bone_name, np.zeros(3, dtype=np.float64))
             rv[0] += 0.45 * pitch_bias + 0.35 * pitch_dyn
+            if is_jet and abs(bank_deg) > 1e-4:
+                rv[2] += bank_deg * math.sin(u_jet)
             per_sp_bias = 0.55 * pitch_bias / float(len(non_root_spine))
             per_sp_dyn = 0.65 * pitch_dyn / float(len(non_root_spine))
             for s_i, sb in enumerate(non_root_spine):
@@ -501,8 +544,10 @@ def evaluate_flight_clip(
         else:
             rv = pose_map.setdefault(root_bone_name, np.zeros(3, dtype=np.float64))
             rv[0] += pitch_bias + pitch_dyn
+            if is_jet and abs(bank_deg) > 1e-4:
+                rv[2] += bank_deg * math.sin(u_jet)
 
-        # 3. Universal Multi-Pair Aerodynamic Wing / Airfoil / Flipper Stroke Synthesis
+        # 3. Universal Multi-Pair Aerodynamic Wing / Airfoil / Flipper OR Multi-Nozzle Jet-Thruster Synthesis
         # Compute canonical left-wing deltas per pair first, then mirror-reflect for right pair!
         pair_left_deltas: dict[tuple[int, int], np.ndarray] = {}
         pair_left_finger_deltas: dict[tuple[int, int], np.ndarray] = {}
@@ -530,8 +575,63 @@ def evaluate_flight_clip(
                 and rest_scene.bone_by_name[wg.chain[0]].mirrored
             )
 
-            # A. Shoulder / Wing Root (chain[0]): True SO(3) World-Frame Figure-8 Elliptical Aero-Stroke!
             wing_tip_ref = rest_scene.bone_by_name[wg.chain[-1]].pivot_world if len(wg.chain) >= 2 else None
+            if is_jet:
+                # VTOL / Supersonic Jet-Thruster Propulsion: ZERO bird-flapping or forward sweep bias!
+                # Synthesizes crisp high-frequency thrust-recoil micro-trim on shoulder/nacelle + independent
+                # phased nozzle gimbal vectoring across every engine ray in `finger_bones` (e.g. 3 thrusters/wing).
+                u_w = 2.0 * math.pi * phi_w
+                tremor_gain = 1.25 if mode == "jet_boost" else (0.75 if mode == "jet_cruise" else 1.0)
+                if wg.chain:
+                    b0 = wg.chain[0]
+                    if is_mirrored_right and (wg.pair_index, 0) in pair_left_deltas:
+                        d_l = pair_left_deltas[(wg.pair_index, 0)]
+                        d0 = np.array([d_l[0], -d_l[1], -d_l[2]], dtype=np.float64)
+                    else:
+                        sh_pitch = 0.35 * gimbal_deg * tremor_gain * math.sin(2.0 * u_w)
+                        sh_yaw = 0.22 * gimbal_deg * tremor_gain * math.cos(u_w)
+                        d0 = _project_world_aero_to_bone_euler(
+                            rest_scene, b0, wg.side, fwd_z, sh_pitch, sh_yaw, 0.0, tip_ref_world=wing_tip_ref
+                        )
+                        if wg.side == "l":
+                            pair_left_deltas[(wg.pair_index, 0)] = d0.copy()
+                    pose_map.setdefault(b0, np.zeros(3, dtype=np.float64))[:] += d0
+                if len(wg.chain) >= 2:
+                    b1 = wg.chain[1]
+                    if is_mirrored_right and (wg.pair_index, 1) in pair_left_deltas:
+                        d_l = pair_left_deltas[(wg.pair_index, 1)]
+                        d1 = np.array([d_l[0], -d_l[1], -d_l[2]], dtype=np.float64)
+                    else:
+                        nac_pitch = 0.55 * gimbal_deg * tremor_gain * (0.65 * math.sin(u_w - 0.35) + 0.35 * math.sin(3.0 * u_w))
+                        nac_yaw = 0.30 * gimbal_deg * tremor_gain * math.cos(2.0 * u_w)
+                        b1_tip = rest_scene.bone_by_name[wg.chain[2]].pivot_world if len(wg.chain) >= 3 else None
+                        d1 = _project_world_aero_to_bone_euler(
+                            rest_scene, b1, wg.side, fwd_z, nac_pitch, nac_yaw, 0.0, tip_ref_world=b1_tip
+                        )
+                        if wg.side == "l":
+                            pair_left_deltas[(wg.pair_index, 1)] = d1.copy()
+                    pose_map.setdefault(b1, np.zeros(3, dtype=np.float64))[:] += d1
+                n_eng = max(1, len(wg.finger_bones))
+                for fi, fb in enumerate(wg.finger_bones):
+                    if fb in wg.locked_spar_bones:
+                        continue
+                    if is_mirrored_right and (wg.pair_index, fi) in pair_left_finger_deltas:
+                        df_l = pair_left_finger_deltas[(wg.pair_index, fi)]
+                        df = np.array([df_l[0], -df_l[1], -df_l[2]], dtype=np.float64)
+                    else:
+                        # Independent phased gimbal micro-vectoring per thruster engine (exact integer harmonics!)
+                        eng_ph = u_w + (2.0 * math.pi * fi / float(n_eng))
+                        eng_pitch = gimbal_deg * tremor_gain * (0.62 * math.sin(eng_ph) + 0.38 * math.sin(3.0 * u_w + 1.05 * fi))
+                        eng_yaw = gimbal_deg * tremor_gain * 0.42 * math.cos(eng_ph)
+                        df = _project_world_aero_to_bone_euler(
+                            rest_scene, fb, wg.side, fwd_z, eng_pitch, eng_yaw, 0.0
+                        )
+                        if wg.side == "l":
+                            pair_left_finger_deltas[(wg.pair_index, fi)] = df.copy()
+                    pose_map.setdefault(fb, np.zeros(3, dtype=np.float64))[:] += df
+                continue
+
+            # A. Shoulder / Wing Root (chain[0]): True SO(3) World-Frame Figure-8 Elliptical Aero-Stroke!
             if wg.chain:
                 b0 = wg.chain[0]
                 if is_mirrored_right and (wg.pair_index, 0) in pair_left_deltas:
@@ -637,8 +737,8 @@ def evaluate_flight_clip(
         tuck = float(np.clip(flight.limb_tuck, 0.0, 1.0))
         if mode != "mantle" and tuck > 1e-4:
             for lb_i, lb in enumerate(morph.limbs):
-                phase_lb = theta - 0.45 * math.pi - 0.25 * (1 if lb.role.startswith("hind") else 0)
-                dangle_osc = 3.5 * math.sin(phase_lb)
+                phase_lb = (u_jet if is_jet else theta) - 0.45 * math.pi - 0.25 * (1 if lb.role.startswith("hind") else 0)
+                dangle_osc = (0.85 if is_jet else 3.5) * math.sin(phase_lb)
                 is_fore = lb.role.startswith("fore")
                 root_lb = rest_scene.bone_by_name[lb.chain[0]]
                 eff_pt = np.asarray(lb.contact_world, dtype=np.float64)
@@ -656,17 +756,17 @@ def evaluate_flight_clip(
                     if seg_i == 0:
                         lv[2] += abduct_z_sign * (8.0 if is_fore else -3.0) * tuck
                         up_deg = (22.0 if is_fore else 29.0) * tuck
-                        if mode in ("cruise", "glide", "soar"):
-                            up_deg = (34.0 if is_fore else 31.0) * tuck
+                        if mode in ("cruise", "glide", "soar", "jet_cruise", "jet_boost"):
+                            up_deg = (38.0 if is_fore else 34.0) * tuck
                         lv[0] += lift_x_sign * up_deg + dangle_osc
                     elif seg_i == 1 and len(lb.chain) >= 4:
                         # Digitigrade shin is already deeply flexed in rest pose: gentle tuck avoids calf-hamstring jam!
                         lv[0] += lift_x_sign * 8.0 * tuck + 0.4 * dangle_osc
                     elif seg_i == 1 or (seg_i == 2 and len(lb.chain) >= 4):
-                        lv[0] += lift_x_sign * (26.0 if is_fore else 25.0) * tuck + 0.5 * dangle_osc
+                        lv[0] += lift_x_sign * (28.0 if is_fore else 26.0) * tuck + 0.5 * dangle_osc
                     else:
-                        # Relaxed Monster Hunter raptor/dragon wrist/foot curl (MH4U White Fatalis hover pose!)
-                        lv[0] += 10.0 * tuck + 0.3 * dangle_osc
+                        # Relaxed raptor/dragon wrist/foot curl (streamlined landing gear retraction!)
+                        lv[0] += (14.0 if is_jet else 10.0) * tuck + 0.3 * dangle_osc
 
         # 5. Aerodynamic Counter-Balancing Tail Chains & Tentacles (ALL discovered chains!)
         tail_chains = morph.tail_chains if morph.tail_chains else ((morph.tail,) if morph.tail else ())
@@ -680,9 +780,16 @@ def evaluate_flight_clip(
                     continue
                 tv = pose_map.setdefault(tb, np.zeros(3, dtype=np.float64))
                 lag = 0.55 * (t_i + 1)
-                # Pitch rudder wave counters chest recoil; graceful S-curve yaw swish adds aerial life
-                tv[0] += (4.5 * pitch_bias_scale + amp_base * (1.0 + 0.14 * t_i) * math.sin(theta - lag - 0.5 * math.pi))
-                tv[1] += 0.55 * amp_base * (1.0 + 0.16 * t_i) * math.sin(theta - lag + tc_phase_off)
+                if is_jet:
+                    # Taut supersonic / VTOL aerodynamic stabilizer fin trim + counter-rudder on bank!
+                    tv[0] += 0.45 * amp_base * (1.0 + 0.10 * t_i) * math.sin(u_jet - 0.35 * lag)
+                    tv[1] += (0.35 * amp_base * math.sin(u_jet - 0.40 * lag + tc_phase_off)) - (
+                        0.22 * bank_deg / max(1.0, float(len(t_chain))) * math.sin(u_jet)
+                    )
+                else:
+                    # Pitch rudder wave counters chest recoil; graceful S-curve yaw swish adds aerial life
+                    tv[0] += (4.5 * pitch_bias_scale + amp_base * (1.0 + 0.14 * t_i) * math.sin(theta - lag - 0.5 * math.pi))
+                    tv[1] += 0.55 * amp_base * (1.0 + 0.16 * t_i) * math.sin(theta - lag + tc_phase_off)
 
         for tent_idx, tent in enumerate(morph.tentacles):
             for s_i, sb in enumerate(tent):
@@ -693,11 +800,15 @@ def evaluate_flight_clip(
                 sv[1] += 8.0 * math.cos(theta - 0.6 * s_i + 0.8 * tent_idx)
 
         # 6. Neural Muscle Activations (explicit muscle_drives + automatic pectoral downstroke recruitment!)
+        # In jet VTOL/cruise/boost modes, NEVER auto-recruit flapping wing muscles (wings are rigid jet-thruster pods!).
         acts = dict(state_muscle_tone)
-        downstroke_effort = float(np.clip(0.5 + 0.5 * math.sin(theta - 0.1 * math.pi), 0.0, 1.0))
-        for mus in getattr(program, "muscles", ()):
-            if mus.insertion_bone in wing_bone_set or "wing" in mus.name.lower() or "pect" in mus.name.lower() or "chest" in mus.name.lower():
-                acts[mus.name] = max(acts.get(mus.name, 0.0), 0.15 + 0.85 * downstroke_effort)
+        if is_jet:
+            downstroke_effort = float(np.clip(0.55 + 0.35 * math.sin(u_jet), 0.0, 1.0))
+        else:
+            downstroke_effort = float(np.clip(0.5 + 0.5 * math.sin(theta - 0.1 * math.pi), 0.0, 1.0))
+            for mus in getattr(program, "muscles", ()):
+                if mus.insertion_bone in wing_bone_set or "wing" in mus.name.lower() or "pect" in mus.name.lower() or "chest" in mus.name.lower():
+                    acts[mus.name] = max(acts.get(mus.name, 0.0), 0.15 + 0.85 * downstroke_effort)
         for md in clip.muscle_drives:
             u_m = (t_s * md.freq_hz + md.phase_deg / 360.0) % 1.0
             val = md.baseline + (md.peak - md.baseline) * (0.5 - 0.5 * math.cos(2.0 * math.pi * u_m))
@@ -1020,21 +1131,23 @@ def audit_flight_clip_contracts(
     max_root_y = max((abs(float(fr.root_translation_delta[1])) for fr in frames), default=0.0)
     max_root_z = max((abs(float(fr.root_translation_delta[2])) for fr in frames), default=0.0)
     in_place_active = bool(flight.in_place or getattr(clip, "in_place", False))
-    max_allowed_y = max(1.0, float(flight.lift_recoil_u) * 1.45 + 0.5)
+    max_allowed_y = max(1.0, float(flight.lift_recoil_u) * 1.65 + 0.5)
     max_allowed_z = max(1.0, float(flight.lift_recoil_u) * 0.65 + 0.5)
     in_place_ok = True if not in_place_active else (max_root_y <= max_allowed_y and max_root_z <= max_allowed_z)
 
-    # 2. Bilateral wing tip symmetry in world space (|y_L - y_R| and |z_L - z_R|)
+    # 2. Bilateral wing tip symmetry in root body-local frame (handles level flight AND banked fighter-jet turns!)
     max_asym_u = 0.0
     wing_by_role = {w.role: w for w in morph.wings}
+    root_b_name = rest_scene.bones[0].name
     for wg in morph.wings:
         if wg.mirror_of and wg.mirror_of in wing_by_role and wg.chain and wing_by_role[wg.mirror_of].chain:
             tip_r = wg.chain[-1]
             tip_l = wing_by_role[wg.mirror_of].chain[-1]
             for fr in frames:
-                pr = fr.scene.bone_by_name[tip_r].pivot_world
-                pl = fr.scene.bone_by_name[tip_l].pivot_world
-                asym = float(math.hypot(pr[1] - pl[1], pr[2] - pl[2]))
+                rb = fr.scene.bone_by_name[root_b_name]
+                pr_loc = rb.rotation.T @ (fr.scene.bone_by_name[tip_r].pivot_world - rb.pivot_world)
+                pl_loc = rb.rotation.T @ (fr.scene.bone_by_name[tip_l].pivot_world - rb.pivot_world)
+                asym = float(math.hypot(pr_loc[1] - pl_loc[1], pr_loc[2] - pl_loc[2]))
                 max_asym_u = max(max_asym_u, asym)
     symmetry_ok = max_asym_u <= 0.5
 

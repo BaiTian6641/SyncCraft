@@ -2364,6 +2364,8 @@ class _Parser:
         antagonist_bulge = 0.0
         pectoral_bulge = 0.0
         ground_clearance = True
+        gimbal_deg = 3.5
+        bank_deg = 0.0
         dur_override: float | None = None
         loop_override = True
         while not self.at("}"):
@@ -2411,6 +2413,10 @@ class _Parser:
                 pectoral_bulge = float(self.number())
             elif fk == "ground_clearance":
                 ground_clearance = self.boolean()
+            elif fk == "gimbal_deg":
+                gimbal_deg = float(self.number())
+            elif fk == "bank_deg":
+                bank_deg = float(self.number())
             elif fk == "duration_s":
                 dur_override = float(self.number())
             elif fk == "loop":
@@ -2443,6 +2449,8 @@ class _Parser:
             antagonist_bulge=antagonist_bulge,
             pectoral_bulge=pectoral_bulge,
             ground_clearance=ground_clearance,
+            gimbal_deg=gimbal_deg,
+            bank_deg=bank_deg,
         )
         eff_dur = dur_override if dur_override is not None else round(max(0.4, min(4.0, 1.0 / max(0.25, flap_hz))), 4)
         return fl, eff_dur, loop_override
@@ -4357,6 +4365,10 @@ def format_program(program: Program) -> str:
                     f_parts.append(f"pectoral_bulge: {fmt_num(fl.pectoral_bulge)}")
                 if not getattr(fl, "ground_clearance", True):
                     f_parts.append("ground_clearance: false")
+                if float(getattr(fl, "gimbal_deg", 3.5)) != 3.5:
+                    f_parts.append(f"gimbal_deg: {fmt_num(fl.gimbal_deg)}")
+                if float(getattr(fl, "bank_deg", 0.0)) != 0.0:
+                    f_parts.append(f"bank_deg: {fmt_num(fl.bank_deg)}")
                 lines.append(f"    flight {fl.name} {{ {', '.join(f_parts)} }}")
             for tr in clip.tracks:
                 tr_args = [

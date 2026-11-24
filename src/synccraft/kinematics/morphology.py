@@ -503,6 +503,22 @@ def analyze_morphology(program: Program, scene: Scene | None = None) -> Morpholo
             if ikc.bones:
                 ik_by_root[ikc.bones[0]] = ikc
 
+    # Collect zero-offset `mirror_x` sculpted cladding helper bones (e.g. `head_side_l`/`r` at X=0)
+    # so they are NEVER misclassified as axial spine/neck/tail vertebrae during auto_rig/head_stabilize!
+    zero_offset_mirrored_cladding: set[str] = set()
+
+    def _walk_mirror_cladding(bone_node: Any) -> None:
+        mx = getattr(bone_node, "mirror_name", None)
+        if mx and bone_node.name in bone_by_name and abs(float(bone_by_name[bone_node.name].pivot_world[0])) <= 0.15:
+            zero_offset_mirrored_cladding.add(bone_node.name)
+            zero_offset_mirrored_cladding.add(mx)
+        for it in getattr(bone_node, "items", ()):
+            if hasattr(it, "items"):
+                _walk_mirror_cladding(it)
+
+    if getattr(program, "root", None) is not None:
+        _walk_mirror_cladding(program.root)
+
     # 1. Identify axial trunk (`spine`), `neck`, and `tail` along the central sagittal plane
     root_name = sc.bones[0].name
     center_tol = max(1.0, 0.16 * float(span[0]))
@@ -516,7 +532,13 @@ def analyze_morphology(program: Program, scene: Scene | None = None) -> Morpholo
             is_wing_or_limb_kw = any(
                 k in low for k in ("leg", "arm", "wing", "femur", "humerus", "thigh", "shin", "paw", "foot", "claw", "horn", "gear", "wheel", "flipper", "tentacle")
             ) or _has_word_tok(low, "ear", "ears")
-            if abs(float(cb.pivot_world[0])) <= center_tol and ch not in paired_bones and not is_wing_or_limb_kw:
+            if (
+                abs(float(cb.pivot_world[0])) <= center_tol
+                and ch not in paired_bones
+                and ch not in zero_offset_mirrored_cladding
+                and not cb.mirrored
+                and not is_wing_or_limb_kw
+            ):
                 axial_bones.add(ch)
                 q_ax.append(ch)
 
