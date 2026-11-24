@@ -339,6 +339,13 @@ Paint the outer focal face strictly with all 7 depth layers (keeping all hidden 
    - *Humans / canines / birds / gentle creatures:* round dark pupil with rich iris collarette ring.
    - *Mechs / robots / vehicles:* recessed multi-ring concentric dark-glass lens housing with colored inner reticle ring & angled glass sheen.
 7. **Offset Wet Cornea Specular Catchlight + Subtle Rim Bounce:** Place a sharp `1×2` or `2×1` pure white-cream highlight offset on the upper-front iris/limbus edge, balanced by a tiny dim bounce glint on the opposite lower-rear iris. Keep emissive glow (if any) strictly selective to the mid-iris/lower refraction + catchlight so the dark pupil, limbus, and lid shadow stay razor sharp!
+8. **`v39.1` Single-Primary-Viewing-Plane Corner-Eye Law (ZERO Double-Pupil / Twin-Glint 3/4 Replication!):**
+   - **Failure Mode Caught:** On any corner-mounted eye cuboid where BOTH the front (`+Z` / `south`) AND outer lateral (`±X` / `west`/`east`) faces are exposed simultaneously at Hero `3/4` (`±35°–45°`), painting the full iris + pupil + specular catchlight onto **both** faces creates a jarring **replicated double-pupil / twin-glint bug eye wrapping around a `90°` corner**!
+   - **Mandatory Studio Rule:** Paint the **pupil + primary specular catchlight on ONLY the ONE anatomically dominant viewing face**:
+     - *Forward-facing eyes (owls, frogmouths, primates, cats, cute puffballs):* Paint the full round iris + pupil + single catchlight on **`south` (`+Z` front) ONLY**; on the outer side (`west`/`east`), paint **NO second pupil and NO second catchlight** — only a sleek `1 px` curved corneal profile right along the anterior edge touching `south`, smoothly blending rearward into surrounding head skin/plumage!
+     - *Lateral-facing eyes (toads, lizards, fish, songbirds, dragons):* Paint the full iris + pupil + single catchlight on the **outer lateral face (`west`/`east`) ONLY**; on `south` (`+Z`), paint **NO duplicate pupil and NO duplicate catchlight** — only the curved anterior iris/cornea rim or shaded eyelid bevel!
+     - *Glossy corner-wrapping compound insect eyes:* Wrap the dark chitin seamlessly across both faces, placing **ONE single coherent specular catchlight** on one face (never duplicate bright white spots across the 90° corner!).
+   - **Mandatory 3/4 Close-Up Check:** Always inspect `Head/Eyes Hero 3/4 (±35°)` to confirm every eye reads as **ONE coherent 3D orb**, NEVER two pupils meeting at a box edge!
 
 ---
 
