@@ -313,11 +313,18 @@ Traditional `16 px/block` (`1 px/unit`) leaves tiny focal structures like eyes w
 
 ---
 
-## 3. Sculpted 4-Part Periorbital Carving & Realistic Focal Eyes / Optics
+## 3. Scale-First Eye Architecture: Flush On-Surface Small-Animal Eyes vs. Sculpted 4-Part Recessed Boss Sockets (`v39.2`)
 
-Flat 2-pixel dots or unframed glowing cubes immediately betray an AI model. Real human Blockbench masters (`ArtDanPol 3D`, `Wackyblocks`, `Yaju Senpai`, `TheAdventurousMiner`) build **every eye or optical sensor as a 3D recessed architectural assembly**:
+Flat un-shaded dots AND chunky extruded eye bricks sticking off smooth small heads both immediately betray an AI model. Match eye construction strictly to creature scale & anatomy:
 
-### A. Modeling Scale — The 4-Part Periorbital Cradle (Zero Flat Stickers!)
+### 0. `v39.2` Anti-Extruded-Eye Law for Small Animals & Smooth-Headed Creatures (`small` / Smooth `standard` — CRITICAL!)
+- **Failure Mode Caught:** Extruding a separate solid `eye_l`/`eye_r` cuboid (`0.25–1.0u` thick) proud of a smooth head/cheek surface makes small animals (birds, fish, mammals, small lizards, wildlife, compact monsters) look weird and boxy from `0°` Dead-Front and `3/4` perspective — showing ugly protruding side-wall bricks sticking off the skull!
+- **Mandatory Studio Rule (`0.00u` Extrusion):**
+  1. **Preferred #1 — Paint Directly ON the Head Surface (`0` Separate Eye Boxes!):** Paint the eye directly onto the `head_core` / `cranium` / `cheek` surface texture (optionally setting `uv_scale: 2` on the cranium/head box itself if higher crispness is desired) — 100% flush with the silhouette, zero protruding side-walls from any angle!
+  2. **Preferred #2 — Flush `0.0u` Hard-Alpha Eye Plane:** If a separate eye element is needed for blinking or `uv_scale: 2`, use a zero-thickness `0.0u` hard-alpha plane seated flush (`<= +0.02u`) on the head surface with transparent outer margin — NEVER a chunky protruding 3D cube!
+  3. **Only Biological Exception:** Taxa whose verified official reference genuinely has external bulging domes, conical turrets, eyestalks, or hemisphere compound eyes (frogs/toads, chameleons, crabs/shrimp, wasps/dragonflies/spiders) — sculpted organically matching the reference, NEVER flat rectangular cheek dominoes!
+
+### A. Modeling Scale (Heroes, Dragons, Armored Bosses & Mechs) — The 4-Part Recessed Periorbital Cradle (Zero Outward Extrusion!)
 1. **Recessed Orbital Cavity Step (`cranium_orbital` / recessed housing):** Step the skull/helmet inward by `0.75–1.5u` at the eye bay so the eye sits inside real 3D physical depth (`0.00u` outward extrusion in `0°` Dead-Front!).
 2. **Sculpted Upper Eyelid Hood (`eyelid_upper`) under Overhanging Brow (`brow_ridge`):** Place a dedicated angled upper eyelid bar (`size ~ [1.5..2.0, 1.0, 3.0..3.5]`) hugging the top `20–25%` of the eye beneath the brow arch. This creates a natural almond/hooded contour and casts real physical shadow across the upper eye!
 3. **Sculpted Lower Eyelid Cradle (`eyelid_lower`) & Lacrimal Corner:** Seat a slim beveled lower lid rim directly between the bottom of the eye and the cheekbone/zygoma (`zygoma_l/r`), framing the lower ocular arc and anchoring the inner tear-duct corner (`inner canthus`).

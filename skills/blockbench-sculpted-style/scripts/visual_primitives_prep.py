@@ -466,8 +466,18 @@ def render_grid_panel(
     return combined
 
 
+def _load_rgb_clean(path: str) -> Image.Image:
+    """Load an image as RGB, compositing any alpha channel over neutral #808080 matte to eliminate RGBA bleed."""
+    im = Image.open(path)
+    if im.mode in ("RGBA", "LA") or (im.mode == "P" and "transparency" in im.info):
+        rgba = im.convert("RGBA")
+        matte = Image.new("RGBA", rgba.size, (128, 128, 128, 255))
+        return Image.alpha_composite(matte, rgba).convert("RGB")
+    return im.convert("RGB")
+
+
 def cmd_grid(args: argparse.Namespace) -> None:
-    src = Image.open(args.input).convert("RGB")
+    src = _load_rgb_clean(args.input)
     if getattr(args, "autocrop", False):
         src = _autocrop_letterbox(src)
     w, h = src.size
@@ -491,7 +501,7 @@ def cmd_grid(args: argparse.Namespace) -> None:
 
 
 def cmd_edges(args: argparse.Namespace) -> None:
-    src = Image.open(args.input).convert("RGB")
+    src = _load_rgb_clean(args.input)
     out_img = render_edge_image(src, mode=args.mode, sigma=args.sigma, gain=args.gain)
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -572,7 +582,7 @@ def _export_native_crop(
 
 
 def cmd_zoom(args: argparse.Namespace) -> None:
-    src = Image.open(args.input).convert("RGB")
+    src = _load_rgb_clean(args.input)
     if getattr(args, "autocrop", False):
         src = _autocrop_letterbox(src)
     out_dir = Path(args.out_dir)
@@ -602,7 +612,7 @@ def cmd_zoom(args: argparse.Namespace) -> None:
 
 
 def cmd_trace(args: argparse.Namespace) -> None:
-    src = Image.open(args.input).convert("RGB")
+    src = _load_rgb_clean(args.input)
     if getattr(args, "autocrop", False):
         src = _autocrop_letterbox(src)
     w, h = src.size

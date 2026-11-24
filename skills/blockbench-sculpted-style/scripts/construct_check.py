@@ -1098,15 +1098,47 @@ def run_audit(raw_args: List[str]) -> int:
             if not is_bulging_taxon and head_h_core >= 3.0:
                 if eye_h_ratio > 0.32:
                     warnings.append(
-                        f"[WARN G14: Oversized Eye Ratio] eye_h/head_h={eye_h_ratio:.2f} (> 0.32). Shrink 3D eye cuboids to match true reference ratio (0.12-0.30); use native uv_scale=1 on small creatures (clean 2x2-4x4 px eyes) or uv_scale=2 (64x max) on hero/epic bosses!"
+                        f"[WARN G14: Oversized Eye Ratio] eye_h/head_h={eye_h_ratio:.2f} (> 0.32). Shrink 3D eye cuboids to match true reference ratio (0.12-0.30); paint flush on head surface (0 extruded boxes) on small creatures or recessed uv_scale=2 (64x max) on hero/epic bosses!"
                     )
-                if eye_extr > 0.08:
+                if eye_extr > 0.02:
                     warnings.append(
-                        f"[WARN G14: Extruded Outward Eye] Eye protrudes {eye_extr:+.2f}u laterally beyond the cranium wall (> +0.08u). Tuck eye_l/r flush-recessed inside cranium_core & orbital bezel (max_eye_x <= cranium_half_w)!"
+                        f"[WARN G14: Extruded Outward Eye] Eye protrudes {eye_extr:+.2f}u laterally beyond the cranium wall (> +0.02u). On small/smooth-headed creatures, paint eyes directly ON the head surface texture (0 extruded eye boxes!) or use a flush 0.0u plane; on dragons/bosses, recess eye_l/r inside a sculpted brow/cheek socket (max_eye_x <= cranium_half_w)!"
                     )
                 if eye_above_crown > 0.10:
                     warnings.append(
                         f"[WARN G14: Eye Exceeds Head Top] Eye top rises {eye_above_crown:+.2f}u above cranium top (> +0.10u). Lower and compact eye_l/r cleanly inside the skull profile!"
+                    )
+                # v39.2 Anti-Extruded-Eye Check: catch solid eye bricks protruding off a tapered cheek/face/snout wall!
+                _local_extr_hits: List[str] = []
+                for eb in eye_boxes:
+                    if min(eb.size) <= 0.05:
+                        continue  # Zero-thickness flush eye plane is clean
+                    ex0, ex1 = eb.center[0] - 0.5 * eb.size[0], eb.center[0] + 0.5 * eb.size[0]
+                    ey0, ey1 = eb.center[1] - 0.5 * eb.size[1], eb.center[1] + 0.5 * eb.size[1]
+                    ez0, ez1 = eb.center[2] - 0.5 * eb.size[2], eb.center[2] + 0.5 * eb.size[2]
+                    front_facing = eb.size[0] > eb.size[2] + 0.25
+                    local_hosts = [
+                        ob for ob in ref_frame
+                        if ob is not eb
+                        and min(ey1, ob.center[1] + 0.5 * ob.size[1]) - max(ey0, ob.center[1] - 0.5 * ob.size[1]) > 0.25 * eb.size[1]
+                        and (
+                            (front_facing and min(ex1, ob.center[0] + 0.5 * ob.size[0]) - max(ex0, ob.center[0] - 0.5 * ob.size[0]) > 0.25 * eb.size[0])
+                            or (not front_facing and min(ez1, ob.center[2] + 0.5 * ob.size[2]) - max(ez0, ob.center[2] - 0.5 * ob.size[2]) > 0.25 * eb.size[2])
+                        )
+                    ]
+                    if local_hosts:
+                        if front_facing:
+                            host_z = max(ob.center[2] + 0.5 * ob.size[2] for ob in local_hosts)
+                            if ez1 - host_z > 0.04:
+                                _local_extr_hits.append(f"{eb.name}(+{ez1 - host_z:.2f}u front)")
+                        else:
+                            host_x = max(abs(ob.center[0]) + 0.5 * ob.size[0] for ob in local_hosts)
+                            eye_x = abs(eb.center[0]) + 0.5 * eb.size[0]
+                            if eye_x - host_x > 0.04:
+                                _local_extr_hits.append(f"{eb.name}(+{eye_x - host_x:.2f}u side)")
+                if _local_extr_hits and (tier in ("small", "standard") or len(lid_or_brow) < 2):
+                    warnings.append(
+                        f"[WARN G14: Extruded Protruding Eye Box] Solid eye cuboid(s) {_local_extr_hits[:4]} stick outward past the local head/cheek surface! On small animals & smooth-headed creatures, NEVER extrude a thick eye brick off the head — paint the eye directly ON the head surface texture (0 separate eye boxes!) or use a flush 0.0u hard-alpha plane; on dragons/bosses, recess inside a sculpted 4-part brow/cheek orbital cavity!"
                     )
             # Check for eye viewing-face occlusion/clipping by head_core, snout/throat_mask, or maxilla!
             eye_blockers: List[str] = []
@@ -1139,7 +1171,7 @@ def run_audit(raw_args: List[str]) -> int:
             if eye_blockers:
                 uniq_b = sorted(set(eye_blockers))[:4]
                 warnings.append(
-                    f"[WARN G14: Eye Blocked/Overlapped] Solid head/snout/mask box(es) {uniq_b} clip or cover >=40% of the eye's viewing face! Reposition eye_l/r cleanly proud of head_core/snout_mask (while staying <= cranium_half_w) with zero overlap!"
+                    f"[WARN G14: Eye Blocked/Overlapped] Solid head/snout/mask box(es) {uniq_b} clip or cover >=40% of the eye's viewing face! Either paint the eye directly ON the head surface texture (ZERO separate eye cube on small/smooth heads!) OR carve a true recessed orbital cavity in cranium/cheek so eye_l/r sits cleanly visible WITHOUT protruding beyond the skull wall!"
                 )
         print(
             f"eye_carving_telemetry: focal_eye_boxes={len(eye_boxes)}  periorbital_framing_elems={len(lid_or_brow)}{eye_h_ratio_str}{eye_extr_str}{eye_crown_str}"

@@ -221,6 +221,8 @@ def verify_bbmodel_ground(
             eff_stance = "biped_2foot"
         else:
             eff_stance = "quadruped_4foot"
+    elif eff_stance == "biped":
+        free_arm_keys = [k for k in ("FL", "FR") if k in leg_keys]
 
     check_foot_keys = [k for k in leg_keys if k not in free_arm_keys]
     if eff_stance in ("floating", "hover"):
