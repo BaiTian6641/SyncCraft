@@ -137,18 +137,19 @@ Never batch-script multiple stages in one loop without inspecting visual renders
 | **W2** | Head/Focal Gate & Limbs | Render **Dead-Front (`0°`), 3/4 (`35°`), Pure Side (`90°`), Top-Down (`85°`)** close-ups; verify all **4 eye invariants** (`G14`), isolated digit spread, and joint tapers; log `>= 3` fixes. |
 | **W3** | Refined Detail & **Trait Rating Gate #1** | Eliminate staircase cylinders, floating parts, extruded small-animal eyes, detached jaw hinges, and `0.0u` dual-sided Z-fighting; pass `audit_scene` (`0` coll, `0` cont) & `construct_check.py` (`rc=0`, `0` WARN); **open references + `W3` side-by-side and rate Traits 1–5 (`0–10`) — any trait `< 8.5/10` MUST be fixed before `T1`!** |
 | **T1** | Unlit Macro Value Gate | Block major value zones unlit; pass `25%` squint silhouette readability check. |
-| **T2** | Silky Painterly Craft & **Trait Rating Gate #2** | Paint silky continuous piecewise-linear `16x`/`32x` cross-cube pixel relief (`lum_step = 4.5–6.0`, `jump>25 <= 12%`) + flush on-surface eyes (`small`) or recessed `uv_scale: 2` (`hero/epic_boss`); **open references + `T2_8panel` + `T2_closeup` side-by-side and rate ALL 6 Traits (`0–10`) in `PROJECT_GOAL.md` — any trait `< 8.5/10` BLOCKS export until fixed & re-rated `>= 8.5/10`!** |
+| **T2** | True `32x` Pixel-Relief Craft & **Trait Rating Gate #2** | Paint deliberate hand-crafted `16x`/`32x` cross-cube pixel-relief carving (**`jump>25 ∈ [4.5%, 14.0%]`, `lum_step ∈ [5.0, 8.5]`** — NEVER flat `< 3.5%` plastic airbrush gradients AND never `> 18%` noisy TV static!) + flush on-surface eyes (`small`) or recessed `uv_scale: 2` (`hero/epic_boss`); **open references + `T2_8panel` + `T2_closeup` side-by-side and rate ALL 6 Traits (`0–10`) in `PROJECT_GOAL.md` — any trait `< 8.5/10` BLOCKS export until fixed & re-rated `>= 8.5/10`!** |
 | **A0** | Video & Moveset Motion Study | On any known boss/character/animal, search YouTube / video platforms + moveset references FIRST; log `ANIMATION_REFS.md` 4-beat phases and explicit `+Z/-Z/±X/+Y` limb/wing/tail targets so zero signature attacks are guessed. |
 | **A1–A2** | Full-Body Motion & Export | Verify `100%` active spine/limb/tail/appendage chains, `288`-frame swept-SAT (`0` collisions), `verify_bbmodel_ground.py` (`PASS=True`), `construct_check.py` across `.blockdsl`, `.bbmodel`, `.geo.json` (`rc=0`, `0` WARN), AND pass the **Blind-Label Filmstrip Silhouette Test** against `A0` references. |
 
-### 6.1 Anti-Drift Single-Family Scope & Mandatory Fresh `SKILL.md` Read Law (`v39.2`)
-1. **Never Batch 3–5 Distinct Bespoke Skeletons Into One Long Subagent Run:** Context compression inevitably strips away eye, jaw, and painterly rules by creature #3, causing visible quality degradation. Sub-divide multi-creature campaigns to **1 bespoke skeleton (or 1 shared-skeleton family + its color/morph variants) MAX per fresh subagent session**!
-2. **Fresh `read_file` of `SKILL.md` Before EVERY Single Model:** Every subagent MUST read `skills/blockbench-sculpted-style/SKILL.md` fresh at the start of every new model build — NEVER work from compressed memory!
-3. **Mandatory 6-Trait Reference-vs-Model Rating Scorecard (Logged in `PROJECT_GOAL.md` at `W3` & `T2`):** Rate each trait strictly (`0.0–10.0`) by comparing official references directly beside the rendered `8panel` & `closeup`:
-   - `T1. Overall Silhouette & Body Proportions`
-   - `T2. Head Shape & Snout Length/Depth Ratio`
+### 6.1 Anti-Drift Single-Monster Scope, Anti-Flat-Gradient Law & Mandatory Fresh `SKILL.md` Read (`v39.3`)
+1. **Strict `1` Monster (or `1` Shared-Skeleton Family) MAX Per Fresh `Model="inherit"` Subagent:** Packing `2+` distinct bespoke skeletons into one subagent session causes context compression, rushed toy geometry, skipped YouTube/ecology research, and flat plastic-gradient textures. Dedicate ONE fresh top-model subagent to each distinct creature skeleton!
+2. **Fresh `read_file` of `SKILL.md` Before EVERY Stage (`W1`, `T1`, `A1`):** Never work from compressed memory and never batch-generate `W1–A2` in one script — re-read the skill and visually audit rendered outputs at every pass!
+3. **Anti-Flat-Gradient True Blockbench Pixel-Relief Band (`jump>25 ∈ [4.5%, 14.0%]`, `lum_step ∈ [5.0, 8.5]`):** Both extremes fail Blockbench craft: `jump>25 < 3.5%` looks like a cheap smooth airbrushed plastic toy with zero scale/feather/fur relief, while `jump>25 > 18%` looks like gritty TV static. Carve crisp organized `2 px` pixel clusters, `1–2 px` dark plate/feather overlap crevices, `1 px` sunlit bevel glints, and `45–50°` hue-shifted palettes!
+4. **Mandatory 6-Trait Reference-vs-Model Rating Scorecard (Logged in `PROJECT_GOAL.md` at `W3` & `T2`):** Rate each trait strictly (`0.0–10.0`) by comparing official references directly beside the rendered `8panel` & `closeup`:
+   - `T1. Overall Silhouette & Sculpted Non-Toy Proportions`
+   - `T2. Head Shape & Snout/Beak Length/Depth Ratio`
    - `T3. Eye Surface Integration & Expression` *(zero weird extruded eye bricks!)*
    - `T4. Closed-Rest Flush Sawtooth Jaw, Anchored Rear Hinge & Perimeter Inner Teeth` *(`0` exposed internal teeth at rest!)*
-   - `T5. Signature Anatomical Traits` *(wings/thrusters, horns/crests, shells/fins, limbs/claws, tail)*
-   - `T6. Silky v39.2 Painterly Craft (lum_step 4.5–6.0, jump>25 <= 12%) & Palette Fidelity`
+   - `T5. Signature Anatomical Traits` *(layered wings/feathers/thrusters, horns/crests, shells/fins, limbs/claws, tail)*
+   - `T6. True 32x Pixel-Relief Craft (jump>25 ∈ [4.5%, 14.0%], lum_step ∈ [5.0, 8.5]) & Palette Fidelity`
    - **Blocking Rule:** Any trait `< 8.5/10` triggers an immediate targeted refinement pass BEFORE advancing!
