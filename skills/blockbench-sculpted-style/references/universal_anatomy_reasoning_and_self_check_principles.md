@@ -153,3 +153,7 @@ Never batch-script multiple stages in one loop without inspecting visual renders
    - `T5. Signature Anatomical Traits` *(layered wings/feathers/thrusters, horns/crests, shells/fins, limbs/claws, tail)*
    - `T6. True 32x Pixel-Relief Craft (jump>25 ∈ [4.5%, 14.0%], lum_step ∈ [5.0, 8.5]) & Palette Fidelity`
    - **Blocking Rule:** Any trait `< 8.5/10` triggers an immediate targeted refinement pass BEFORE advancing!
+
+### 6.2 Dynamic BB5 Wing-Seam & Appendage Continuity Gate + UV Axis Hygiene (`v39.4`)
+1. **Zero Floating Wing Claws, Detached `wing_l_f4` Spars, or Broken Elbow/Patagium Seams:** Before certifying ANY winged creature (`wingdrake`, `wyvern`, `elder_dragon`, `bird`, `insect`, `jet_boss`), run `studio_render_kit.verify_bb5_wing_continuity(bb_path)` across Rest + all exported `.bbmodel` animation clips (`samples_per_clip >= 25`) AND inspect a dedicated macro wing-joint proof render verifying **`0.000u` physical air gap** (`min_overlap_u >= -0.02u`) between `wing_l/r_upper <-> wing_l/r_fore`, `wing_l/r_fore <-> wing_l/r_f1..f4` & front wing claw, and adjacent patagium bays!
+2. **Transverse Paw/Foot Scute UV Axis Law:** On `"up"` and `"down"` faces of forward-pointing (`+Z`) paws, feet, and hooves, UV `xx` runs laterally (`X`) while UV `yy` runs anteroposteriorly (`Z`) — always paint transverse armored knuckle scutes and toe creases along **`yy` rows** (never `xx` columns, which creates longitudinal racing stripes on top-down paw views!).

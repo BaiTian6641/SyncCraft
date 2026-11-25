@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Standard reusable Blockbench Studio Rendering, Reference Prep, Pixel-Relief Telemetry & Verification Kit (v39.3).
+"""Standard reusable Blockbench Studio Rendering, Reference Prep, Pixel-Relief Telemetry & Verification Kit (v39.4).
 
 Import this module directly in any creature/asset build script instead of rewriting camera renderers,
-turnaround grids, open-jaw close-ups, A2 filmstrips, reference downloaders, or craft telemetry from scratch.
+turnaround grids, open-jaw close-ups, A2 filmstrips, reference downloaders, BB5 wing-continuity checks,
+or craft telemetry from scratch.
 
 Quick usage:
     import sys
@@ -682,3 +683,304 @@ def stage_swarm_screenshot(
     shutil.copy2(src, dst)
     words = caption.strip().split()[:10]
     return f"Screenshot: {dst.resolve()} | {' '.join(words)}"
+
+
+# ---------------------------------------------------------------------------
+# 6. Dynamic Blockbench 5 (.bbmodel) World-Space Wing/Joint Continuity Audit (v39.4)
+# ---------------------------------------------------------------------------
+
+def _bb5_euler_xyz_deg(rx: float, ry: float, rz: float) -> np.ndarray:
+    ax, ay, az = math.radians(rx), math.radians(ry), math.radians(rz)
+    cx, sx = math.cos(ax), math.sin(ax)
+    cy, sy = math.cos(ay), math.sin(ay)
+    cz, sz = math.cos(az), math.sin(az)
+    Rx = np.array([[1.0, 0.0, 0.0], [0.0, cx, -sx], [0.0, sx, cx]], dtype=np.float64)
+    Ry = np.array([[cy, 0.0, sy], [0.0, 1.0, 0.0], [-sy, 0.0, cy]], dtype=np.float64)
+    Rz = np.array([[cz, -sz, 0.0], [sz, cz, 0.0], [0.0, 0.0, 1.0]], dtype=np.float64)
+    return Rz @ Ry @ Rx
+
+
+def _bb5_eval_channel(kfs: list[dict[str, Any]], t: float, default: float = 0.0) -> np.ndarray:
+    if not kfs:
+        return np.full(3, default, dtype=np.float64)
+    pts = sorted(kfs, key=lambda k: float(k["time"]))
+    if t <= float(pts[0]["time"]):
+        dp = pts[0]["data_points"][0]
+        return np.array([float(dp["x"]), float(dp["y"]), float(dp["z"])], dtype=np.float64)
+    if t >= float(pts[-1]["time"]):
+        dp = pts[-1]["data_points"][0]
+        return np.array([float(dp["x"]), float(dp["y"]), float(dp["z"])], dtype=np.float64)
+    for i in range(len(pts) - 1):
+        t0, t1 = float(pts[i]["time"]), float(pts[i + 1]["time"])
+        if t0 <= t <= t1:
+            alpha = (t - t0) / max(1e-9, t1 - t0)
+            d0, d1 = pts[i]["data_points"][0], pts[i + 1]["data_points"][0]
+            v0 = np.array([float(d0["x"]), float(d0["y"]), float(d0["z"])], dtype=np.float64)
+            v1 = np.array([float(d1["x"]), float(d1["y"]), float(d1["z"])], dtype=np.float64)
+            return v0 * (1.0 - alpha) + v1 * alpha
+    return np.full(3, default, dtype=np.float64)
+
+
+def _bb5_element_obb(
+    el: dict[str, Any],
+    bone_origin: np.ndarray,
+    parent_R: np.ndarray,
+    parent_t: np.ndarray,
+    parent_s: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    f0 = np.array(el["from"], dtype=np.float64)
+    f1 = np.array(el["to"], dtype=np.float64)
+    loc_ctr = 0.5 * (f0 + f1)
+    loc_half = 0.5 * np.abs(f1 - f0)
+    rot = el.get("rotation")
+    if rot and any(abs(float(r)) > 1e-6 for r in rot):
+        org = np.array(el.get("origin", loc_ctr.tolist()), dtype=np.float64)
+        R_el = _bb5_euler_xyz_deg(float(rot[0]), float(rot[1]), float(rot[2]))
+        loc_ctr = org + R_el @ (loc_ctr - org)
+    else:
+        R_el = np.eye(3, dtype=np.float64)
+    corners_raw = (
+        np.array(
+            [[sx, sy, sz] for sx in (-1.0, 1.0) for sy in (-1.0, 1.0) for sz in (-1.0, 1.0)],
+            dtype=np.float64,
+        )
+        * loc_half[None, :]
+    )
+    corners_el = corners_raw @ R_el.T + loc_ctr[None, :]
+    corners_scaled = (corners_el - bone_origin[None, :]) * parent_s[None, :] + bone_origin[None, :]
+    wc = corners_scaled @ parent_R.T + parent_t[None, :]
+    w_ctr = np.mean(wc, axis=0)
+    v_x, v_y, v_z = wc[4] - wc[0], wc[2] - wc[0], wc[1] - wc[0]
+    hx = max(1e-6, 0.5 * float(np.linalg.norm(v_x)))
+    hy = max(1e-6, 0.5 * float(np.linalg.norm(v_y)))
+    hz = max(1e-6, 0.5 * float(np.linalg.norm(v_z)))
+    ax = np.column_stack([v_x / (2.0 * hx), v_y / (2.0 * hy), v_z / (2.0 * hz)])
+    return w_ctr, ax, np.array([hx, hy, hz], dtype=np.float64)
+
+
+def _bb5_obb_signed_overlap(
+    obb_a: tuple[np.ndarray, np.ndarray, np.ndarray],
+    obb_b: tuple[np.ndarray, np.ndarray, np.ndarray],
+    cutoff: float = -float("inf"),
+) -> float:
+    """Exact 15-axis SAT signed overlap (> 0 = physical intersection, < 0 = negative air gap).
+
+    When `cutoff` is provided, short-circuits cleanly if the exact overlap cannot exceed `cutoff`.
+    """
+    ca, Ra, ha = obb_a
+    cb, Rb, hb = obb_b
+    d = cb - ca
+    # Exact bounding-sphere upper bound: overlap <= (|ha| + |hb|) - |d|
+    dist_c = float(np.linalg.norm(d))
+    if (float(np.linalg.norm(ha)) + float(np.linalg.norm(hb)) - dist_c) <= cutoff:
+        return cutoff
+    min_ov = float("inf")
+    for k in range(3):
+        for u in (Ra[:, k], Rb[:, k]):
+            ra = float(abs(u @ Ra[:, 0]) * ha[0] + abs(u @ Ra[:, 1]) * ha[1] + abs(u @ Ra[:, 2]) * ha[2])
+            rb = float(abs(u @ Rb[:, 0]) * hb[0] + abs(u @ Rb[:, 1]) * hb[1] + abs(u @ Rb[:, 2]) * hb[2])
+            ov = (ra + rb) - abs(float(d @ u))
+            if ov < min_ov:
+                min_ov = ov
+                if min_ov <= cutoff:
+                    return float(min_ov)
+    for i in range(3):
+        ri = Ra[:, i]
+        for j in range(3):
+            cr = np.cross(ri, Rb[:, j])
+            n = float(np.linalg.norm(cr))
+            if n > 1e-6:
+                u = cr / n
+                ra = float(abs(u @ Ra[:, 0]) * ha[0] + abs(u @ Ra[:, 1]) * ha[1] + abs(u @ Ra[:, 2]) * ha[2])
+                rb = float(abs(u @ Rb[:, 0]) * hb[0] + abs(u @ Rb[:, 1]) * hb[1] + abs(u @ Rb[:, 2]) * hb[2])
+                ov = (ra + rb) - abs(float(d @ u))
+                if ov < min_ov:
+                    min_ov = ov
+                    if min_ov <= cutoff:
+                        return float(min_ov)
+    return float(min_ov)
+
+
+def evaluate_bb5_world_obbs(
+    bb: dict[str, Any],
+    anim_pos: dict[str, np.ndarray] | None = None,
+    anim_rot: dict[str, np.ndarray] | None = None,
+    anim_scl: dict[str, np.ndarray] | None = None,
+    only_elems: set[str] | None = None,
+) -> tuple[dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]], dict[str, list[str]], list[tuple[str, str]]]:
+    """Evaluate element OBBs in Blockbench 5 FK world space (with Sim(3) scale, rotation, position).
+
+    Returns `(obbs_by_elem_name, bone_to_elem_names, parent_child_bone_pairs)`.
+    """
+    el_by_uuid = {e["uuid"]: e for e in bb.get("elements", [])}
+    grp_by_uuid = {g["uuid"]: g for g in bb.get("groups", [])}
+    apos = anim_pos or {}
+    arot = anim_rot or {}
+    ascl = anim_scl or {}
+    obbs: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
+    bone_elems: dict[str, list[str]] = {}
+    edges: list[tuple[str, str]] = []
+
+    def walk(
+        nodes: list[Any],
+        parent_name: str | None,
+        parent_R: np.ndarray,
+        parent_t: np.ndarray,
+        parent_s: np.ndarray,
+        bone_origin: np.ndarray,
+    ) -> None:
+        for nd in nodes:
+            if isinstance(nd, str):
+                el = el_by_uuid.get(nd)
+                if el is not None:
+                    en = str(el.get("name", nd))
+                    if only_elems is None or en in only_elems:
+                        obbs[en] = _bb5_element_obb(el, bone_origin, parent_R, parent_t, parent_s)
+                    if parent_name is not None:
+                        bone_elems.setdefault(parent_name, []).append(en)
+            elif isinstance(nd, dict):
+                guid = str(nd.get("uuid", ""))
+                g = grp_by_uuid.get(guid, nd)
+                gname = str(g.get("name", guid))
+                if parent_name is not None:
+                    edges.append((parent_name, gname))
+                org = np.array(g.get("origin", [0.0, 0.0, 0.0]), dtype=np.float64)
+                rest_r = g.get("rotation", [0.0, 0.0, 0.0])
+                dpos = apos.get(guid, np.zeros(3, dtype=np.float64))
+                drot = arot.get(guid, np.zeros(3, dtype=np.float64))
+                dscl = ascl.get(guid, np.ones(3, dtype=np.float64))
+                R_bone = _bb5_euler_xyz_deg(
+                    float(rest_r[0]) + float(drot[0]),
+                    float(rest_r[1]) + float(drot[1]),
+                    float(rest_r[2]) + float(drot[2]),
+                )
+                cur_s = parent_s * dscl
+                new_R = parent_R @ R_bone
+                scaled_rel = bone_origin + (org + dpos - bone_origin) * parent_s
+                new_t = parent_R @ (scaled_rel - R_bone @ org) + parent_t
+                walk(nd.get("children", []), gname, new_R, new_t, cur_s, org)
+
+    walk(bb.get("outliner", []), None, np.eye(3), np.zeros(3), np.ones(3), np.zeros(3))
+    return obbs, bone_elems, edges
+
+
+def verify_bb5_wing_continuity(
+    bb_path_or_dict: str | Path | dict[str, Any],
+    *,
+    custom_pairs: list[tuple[str, list[str], list[str]]] | None = None,
+    bone_filter: Callable[[str, str], bool] | None = None,
+    samples_per_clip: int = 25,
+    min_overlap_threshold: float = -0.02,
+) -> dict[str, Any]:
+    """Verify dynamic Blockbench 5 world-space OBB continuity across Rest + EVERY animated clip.
+
+    Catches detached front wing claws, floating `wing_l_f4` spars, or disconnected elbow/wrist/patagium
+    seams that static single-pose checks can miss during flight, folding, or thrust inversions.
+
+    Args:
+        bb_path_or_dict: Path to `.bbmodel` or parsed `.bbmodel` dict.
+        custom_pairs: Optional explicit `[(label, elems_a, elems_b), ...]` checks. When omitted,
+            auto-discovers all `(parent_bone, child_bone)` wing/patagium/claw pairs that carry elements.
+        bone_filter: Optional `(parent_bone, child_bone) -> bool` predicate (defaults to wing/patagium/claw edges).
+        samples_per_clip: Number of evenly spaced timestamps sampled per animation clip (default 25).
+        min_overlap_threshold: Minimum allowed signed overlap in Blockbench units (default `-0.02u`).
+    """
+    bb = (
+        json.loads(Path(bb_path_or_dict).read_text(encoding="utf-8"))
+        if not isinstance(bb_path_or_dict, dict)
+        else bb_path_or_dict
+    )
+    rest_obbs, bone_elems, edges = evaluate_bb5_world_obbs(bb)
+
+    if custom_pairs is not None:
+        check_pairs = list(custom_pairs)
+    else:
+        if bone_filter is None:
+            _wing_tokens = ("wing", "patag", "alula", "pinion", "thruster", "nacelle", "elytr")
+            def bone_filter(p: str, c: str) -> bool:
+                pl, cl = p.lower(), c.lower()
+                return any(t in cl for t in _wing_tokens) or any(t in pl for t in _wing_tokens)
+        check_pairs = []
+        for pb, cb in edges:
+            if bone_filter(pb, cb) and bone_elems.get(pb) and bone_elems.get(cb):
+                check_pairs.append((f"{pb}->{cb}", list(bone_elems[pb]), list(bone_elems[cb])))
+
+    needed_elems: set[str] = set()
+    for _, ga, gb in check_pairs:
+        needed_elems.update(ga)
+        needed_elems.update(gb)
+
+    min_by_label: dict[str, tuple[float, str, float]] = {}
+    checks_total = 0
+
+    def _eval_pose(obbs: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]], clip_name: str, t_s: float) -> None:
+        nonlocal checks_total
+        for label, ga, gb in check_pairs:
+            valid_a = [obbs[a] for a in ga if a in obbs]
+            valid_b = [obbs[b] for b in gb if b in obbs]
+            if not valid_a or not valid_b:
+                continue
+            best = -float("inf")
+            for oa in valid_a:
+                for ob in valid_b:
+                    ov = _bb5_obb_signed_overlap(oa, ob, cutoff=best)
+                    if ov > best:
+                        best = ov
+            checks_total += 1
+            prev = min_by_label.get(label)
+            if prev is None or best < prev[0]:
+                min_by_label[label] = (best, clip_name, t_s)
+
+    _eval_pose(rest_obbs, "REST", 0.0)
+
+    for anim in bb.get("animations", []):
+        cname = str(anim.get("name", "unnamed"))
+        length = max(0.01, float(anim.get("length", 1.0)))
+        animators = anim.get("animators", {}) or {}
+        # Pre-split channels once per animation clip
+        split_ch: dict[str, tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]] = {}
+        for guid, adata in animators.items():
+            if not isinstance(adata, dict):
+                continue
+            kfs = adata.get("keyframes", []) or []
+            pk = [k for k in kfs if k.get("channel") == "position"]
+            rk = [k for k in kfs if k.get("channel") == "rotation"]
+            sk = [k for k in kfs if k.get("channel") == "scale"]
+            if pk or rk or sk:
+                split_ch[guid] = (pk, rk, sk)
+        n_samp = max(2, int(samples_per_clip))
+        for si in range(n_samp):
+            t_s = length * (si / max(1, n_samp - 1))
+            apos: dict[str, np.ndarray] = {}
+            arot: dict[str, np.ndarray] = {}
+            ascl: dict[str, np.ndarray] = {}
+            for guid, (pk, rk, sk) in split_ch.items():
+                if pk:
+                    apos[guid] = _bb5_eval_channel(pk, t_s, 0.0)
+                if rk:
+                    arot[guid] = _bb5_eval_channel(rk, t_s, 0.0)
+                if sk:
+                    ascl[guid] = _bb5_eval_channel(sk, t_s, 1.0)
+            obbs, _, _ = evaluate_bb5_world_obbs(bb, apos, arot, ascl, only_elems=needed_elems)
+            _eval_pose(obbs, cname, t_s)
+
+    failures = {
+        lbl: {"min_overlap_u": round(ov, 4), "clip": cl, "t_s": round(ts, 3)}
+        for lbl, (ov, cl, ts) in min_by_label.items()
+        if ov < min_overlap_threshold
+    }
+    worst_label, (worst_ov, worst_clip, worst_t) = (
+        min(min_by_label.items(), key=lambda kv: kv[1][0])
+        if min_by_label
+        else ("NONE", (0.0, "REST", 0.0))
+    )
+    return {
+        "passed": len(failures) == 0,
+        "pairs_checked": len(min_by_label),
+        "checks_total": checks_total,
+        "min_overlap_u": round(float(worst_ov), 4),
+        "worst_joint": worst_label,
+        "worst_clip": worst_clip,
+        "worst_t_s": round(float(worst_t), 3),
+        "failures": failures,
+    }
