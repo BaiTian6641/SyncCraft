@@ -34,6 +34,8 @@ from .generators_noise import (
     voronoi_noise,
 )
 from .generators_painterly import (
+    anatomical_muscle_scales,
+    colossal_dragon_membrane,
     directional_brushstrokes,
     gradient_eye_paint,
     layered_scale_plates,
@@ -79,12 +81,22 @@ from .ops_fx_color import (
     wave_distort,
 )
 from .pbr import (
+    BAKE_LIGHTING_PRESETS,
     LABPBR_METAL_CODES,
+    bake_pbr_to_albedo,
+    export_baked_pbr_package,
     export_pbr_bundle,
     height_to_normal_map,
     pack_labpbr_1_3,
     render_pbr_material_sheet,
     render_pbr_preview_2d,
+)
+from .sim_animate import (
+    eval_anim_driver,
+    feedback_step_sequence,
+    fluid_smoke_sim_field,
+    iterate_inline,
+    particle_sim_field,
 )
 from .pipeline import (
     MATERIAL_BUS_PORTS,
@@ -122,6 +134,8 @@ from .pixel_art_ops import (
 from .presets import (
     PRESET_REGISTRY,
     build_aethelion_texgraph,
+    build_arcane_ember_vfx_block,
+    build_colossal_dragon_texgraph,
     build_dragon_wing_membrane_tile,
     build_molten_scales_block,
     build_mossy_carved_brick,

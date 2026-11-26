@@ -1,0 +1,7 @@
+{
+  "name": "synccraft-pbr-rebuilder-blockbench",
+  "version": "1.0.0",
+  "description": "Blockbench 5 plugin for importing LabPBR 1.3 / Bedrock MER / .synccraft.pbr.json bundles, previewing live Three.js PBR shaders, and rebuilding/baking PBR textures.",
+  "main": "synccraft_pbr_rebuilder.js",
+  "license": "Apache-2.0"
+}

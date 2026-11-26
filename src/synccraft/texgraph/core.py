@@ -39,6 +39,8 @@ from .generators_noise import (
     voronoi_noise,
 )
 from .generators_painterly import (
+    anatomical_muscle_scales,
+    colossal_dragon_membrane,
     directional_brushstrokes,
     gradient_eye_paint,
     layered_scale_plates,
@@ -83,11 +85,20 @@ from .ops_fx_color import (
     wave_distort,
 )
 from .pbr import (
+    bake_pbr_to_albedo,
+    export_baked_pbr_package,
     export_pbr_bundle,
     height_to_normal_map,
     pack_labpbr_1_3,
     render_pbr_material_sheet,
     render_pbr_preview_2d,
+)
+from .sim_animate import (
+    eval_anim_driver,
+    feedback_step_sequence,
+    fluid_smoke_sim_field,
+    iterate_inline,
+    particle_sim_field,
 )
 from .pipeline import (
     MATERIAL_BUS_PORTS,
@@ -140,6 +151,7 @@ _TIME_AWARE_OPS: frozenset[str] = frozenset(
         "perlin", "fbm", "voronoi", "domain_warp", "noise_3d",
         "radial_rings", "energy_veins", "scroll", "pulse", "sprite_mask",
         "cosine_gradient", "wave_distort",
+        "iterate_inline", "feedback_loop", "particle_sim", "fluid_smoke_sim", "anim_driver",
     }
 )
 
@@ -244,12 +256,50 @@ class TexGraph:
         # Staged Multi-Pass Pipeline (Pass 1 Bake -> Pass 2 Macro -> Pass 3 Relief -> Pass 4 Grade -> Pass 5 Final)
         self.passes: list[PassSpec] = []
         self._active_pass: PassSpec | None = None
-        # Future-UI-ready graph metadata: exposed parameters & visual node groups/frames
+        # Future-UI-ready graph metadata: exposed parameters, procedural drivers & visual node groups/frames
         self.exposed_params: dict[str, dict[str, Any]] = {}
+        self.param_drivers: list[dict[str, Any]] = []
         self.groups: list[dict[str, Any]] = []
         self._counter = 0
         self._static_cache: dict[str, Any] = {}
         self._dynamic_ids: set[str] = set()
+
+    def bind_driver(
+        self,
+        node_id: str,
+        param_key: str,
+        *,
+        kind: str = "sine",
+        min_val: float = 0.0,
+        max_val: float = 1.0,
+        freq: float = 1.0,
+        phase_offset: float = 0.0,
+        duty: float = 0.5,
+        octaves: int = 3,
+        seed: int | None = None,
+        keyframes: list[Any] | None = None,
+    ) -> "TexGraph":
+        """Bind a Pixel-Composer-style Animation Driver (`sine|triangle|sawtooth|square|wiggler|keyframes`) to any node parameter!"""
+        base, _ = _parse_ref(node_id)
+        if base not in self.nodes:
+            raise KeyError(f"Unknown node for animation driver: {node_id!r}")
+        drv: dict[str, Any] = {
+            "node_id": base,
+            "param_key": str(param_key),
+            "kind": str(kind),
+            "min_val": float(min_val),
+            "max_val": float(max_val),
+            "freq": float(freq),
+            "phase_offset": float(phase_offset),
+            "duty": float(duty),
+            "octaves": int(octaves),
+            "seed": int(self.seed if seed is None else seed),
+        }
+        if keyframes:
+            drv["keyframes"] = [list(k) for k in keyframes]
+        self.param_drivers.append(drv)
+        self._static_cache.clear()
+        return self
 
     def expose_param(
         self,
@@ -914,13 +964,48 @@ class TexGraph:
             ins["color"] = color
         return self.add("emissive_composite", id=id, inputs=ins, glow_bleed_px=glow_bleed_px, glow_strength=glow_strength)
 
+    # --- Pixel-Composer-Parity Generate / Iterate / Simulate / Animate Builders (v5) ---
+    def anim_driver(self, kind: str = "sine", *, id: str | None = None, **kw: Any) -> str:
+        """Procedural timeline driver node emitting a scalar field driven by wavetable, wiggler, or keyframes."""
+        return self.add("anim_driver", id=id, kind=kind, **kw)
+
+    def iterate_inline(self, src: str, mode: str = "warp_cascade", *, steps: int = 5, id: str | None = None, **kw: Any) -> str:
+        """Pixel-Composer-style Iterate Inline recursive multi-step accumulation loop."""
+        return self.add("iterate_inline", id=id, inputs={"src": src}, mode=mode, steps=steps, **kw)
+
+    def feedback_loop(self, src: str, *, decay: float = 0.80, drift_x_px: float = 0.0, drift_y_px: float = -1.0, blur_radius: int = 1, pre_roll: int = 6, loop_frames: int = 16, blend_mode: str = "screen", id: str | None = None) -> str:
+        """Pixel-Composer-style Feedback Inline temporal state buffer with warm-up pre-roll for seamless looping trails."""
+        return self.add("feedback_loop", id=id, inputs={"src": src}, decay=decay, drift_x_px=drift_x_px, drift_y_px=drift_y_px, blur_radius=blur_radius, pre_roll=pre_roll, loop_frames=loop_frames, blend_mode=blend_mode)
+
+    def particle_sim(self, *, count: int = 48, emitter: str = "bottom", emitter_mask: str | None = None, id: str | None = None, **kw: Any) -> str:
+        """Deterministic looping Pixel Particle System (ports: rgba, density, heat)."""
+        ins = {"emitter_mask": emitter_mask} if emitter_mask else {}
+        return self.add("particle_sim", id=id, inputs=ins, count=count, emitter=emitter, **kw)
+
+    def fluid_smoke_sim(self, *, source_mask: str | None = None, steps: int = 16, id: str | None = None, **kw: Any) -> str:
+        """2D Semi-Lagrangian Smoke / Flame / Plasma Fluid Simulation (ports: rgba, density, temperature)."""
+        ins = {"source_mask": source_mask} if source_mask else {}
+        return self.add("fluid_smoke_sim", id=id, inputs=ins, steps=steps, **kw)
+
+    def anatomical_muscle_scales(self, *, id: str | None = None, **kw: Any) -> str:
+        """3D-Anatomical Scale-to-Muscle Texture Fitting MaterialBus generator."""
+        return self.add("anatomical_muscle_scales", id=id, **kw)
+
+    def colossal_dragon_membrane(self, span_u: str, trail_v: str, *, face_is_down: str | None = None, id: str | None = None, **kw: Any) -> str:
+        """Monumental Normal Dragon Wing Membrane MaterialBus (curved tendon ribs + pleats + tattered arch + backlit SSS)."""
+        ins: dict[str, str] = {"span_u": span_u, "trail_v": trail_v}
+        if face_is_down:
+            ins["face_is_down"] = face_is_down
+        return self.add("colossal_dragon_membrane", id=id, inputs=ins, **kw)
+
     # ------------------------------------------------------------------
-    # Declarative JSON Recipe Import / Export (v3.0 Multi-Pass & Multi-Port)
+    # Declarative JSON Recipe Import / Export (v3.1 Multi-Pass, Multi-Port & Drivers)
     # ------------------------------------------------------------------
     def to_recipe(self) -> dict[str, Any]:
-        is_v3 = bool(self.passes or self.output_material_node or any("." in r for sp in self.nodes.values() for r in sp.inputs.values()))
+        is_v31 = bool(self.param_drivers)
+        is_v3 = bool(is_v31 or self.passes or self.output_material_node or any("." in r for sp in self.nodes.values() for r in sp.inputs.values()))
         rec: dict[str, Any] = {
-            "version": "3.0" if is_v3 else "2.1",
+            "version": "3.1" if is_v31 else ("3.0" if is_v3 else "2.1"),
             "name": self.name,
             "width": self.width,
             "height": self.height,
@@ -937,6 +1022,8 @@ class TexGraph:
             rec["pbr_config"] = dict(self.pbr_config)
         if self.passes:
             rec["passes"] = [ps.to_dict() for ps in self.passes]
+        if self.param_drivers:
+            rec["drivers"] = copy.deepcopy(self.param_drivers)
         if self.exposed_params:
             rec["exposed_params"] = copy.deepcopy(self.exposed_params)
         if self.groups:
@@ -997,6 +1084,8 @@ class TexGraph:
                     color=str(pd.get("color", "#1E293B")),
                 )
             )
+        if data.get("drivers"):
+            g.param_drivers = copy.deepcopy(data["drivers"])
         if data.get("exposed_params"):
             g.exposed_params = copy.deepcopy(data["exposed_params"])
         if data.get("groups"):
@@ -1004,14 +1093,15 @@ class TexGraph:
         return g
 
     # ------------------------------------------------------------------
-    # DAG Evaluation Engine (Multi-Port + Static Caching Across Frames)
+    # DAG Evaluation Engine (Multi-Port + Drivers + Static Caching Across Frames)
     # ------------------------------------------------------------------
     def _compute_dynamic_set(self) -> set[str]:
+        driven_ids = {d["node_id"] for d in self.param_drivers}
         dyn: set[str] = set()
         for nid in self.node_order:
             sp = self.nodes[nid]
-            is_dyn = False
-            if sp.op in ("scroll", "pulse"):
+            is_dyn = nid in driven_ids
+            if sp.op in ("scroll", "pulse", "anim_driver", "feedback_loop", "particle_sim", "fluid_smoke_sim", "iterate_inline"):
                 is_dyn = True
             elif sp.op in _TIME_AWARE_OPS:
                 p = sp.params
@@ -1027,10 +1117,32 @@ class TexGraph:
                 dyn.add(nid)
         return dyn
 
+    def _effective_params(self, sp: NodeSpec, phase: float) -> dict[str, Any]:
+        if not self.param_drivers:
+            return sp.params
+        out: dict[str, Any] | None = None
+        for d in self.param_drivers:
+            if d["node_id"] == sp.id:
+                if out is None:
+                    out = dict(sp.params)
+                out[d["param_key"]] = eval_anim_driver(
+                    phase,
+                    kind=d.get("kind", "sine"),
+                    min_val=d.get("min_val", 0.0),
+                    max_val=d.get("max_val", 1.0),
+                    freq=d.get("freq", 1.0),
+                    phase_offset=d.get("phase_offset", 0.0),
+                    duty=d.get("duty", 0.5),
+                    octaves=d.get("octaves", 3),
+                    seed=d.get("seed", self.seed),
+                    keyframes=d.get("keyframes"),
+                )
+        return sp.params if out is None else out
+
     def _eval_node(self, sp: NodeSpec, vals: dict[str, Any], phase: float) -> Any:
         H, W = self.height, self.width
         tile = self.tileable
-        p = sp.params
+        p = self._effective_params(sp, phase)
         op = sp.op
         bus_keys = _BUS_INPUT_KEYS.get(op, frozenset())
         ins = {k: _resolve_ref(vals, v, allow_bus=(k in bus_keys)) for k, v in sp.inputs.items()}
@@ -1159,6 +1271,12 @@ class TexGraph:
                 return mc.wing_trail_v
             if ch == "face_is_down":
                 return mc.face_is_down
+            if ch == "wing_bay_u":
+                return mc.wing_bay_u
+            if ch == "wing_bay_v":
+                return mc.wing_bay_v
+            if ch == "wing_bay_mask":
+                return mc.wing_bay_mask
             raise ValueError(f"Unknown mesh_channel: {ch!r}")
 
         if op == "height_to_normal":
@@ -1546,6 +1664,174 @@ class TexGraph:
             )
             return {"albedo": alb, "rgba": alb, "emissive": em}
 
+        # --- Pixel-Composer-Parity Generate / Iterate / Simulate / Animate Ops (v5) ---
+        if op == "anim_driver":
+            v = eval_anim_driver(
+                phase,
+                kind=str(p.get("kind", "sine")),
+                min_val=float(p.get("min_val", 0.0)),
+                max_val=float(p.get("max_val", 1.0)),
+                freq=float(p.get("freq", 1.0)),
+                phase_offset=float(p.get("phase_offset", 0.0)),
+                duty=float(p.get("duty", 0.5)),
+                octaves=int(p.get("octaves", 3)),
+                seed=seed,
+                keyframes=p.get("keyframes"),
+            )
+            return np.full((H, W), float(v), dtype=np.float32)
+
+        if op == "iterate_inline":
+            return iterate_inline(
+                ins["src"],
+                mode=str(p.get("mode", "warp_cascade")),
+                steps=int(p.get("steps", 5)),
+                strength=float(p.get("strength", 0.35)),
+                decay=float(p.get("decay", 0.82)),
+                step_dx=float(p.get("step_dx", 0.0)),
+                step_dy=float(p.get("step_dy", 0.0)),
+                step_scale=float(p.get("step_scale", 1.0)),
+                step_rotate_deg=float(p.get("step_rotate_deg", 0.0)),
+                blend_mode=str(p.get("blend_mode", "screen")),
+                seed=seed,
+                tileable=p.get("tileable", tile),
+                phase=phase,
+            )
+
+        if op == "feedback_loop":
+            # Evaluate pre-roll history ending deterministically at `phase` so single-frame & flipbook match 100%!
+            src_ref = sp.inputs["src"]
+            src_base, _ = _parse_ref(src_ref)
+            n_loop = max(4, int(p.get("loop_frames", 16)))
+            pre = max(1, int(p.get("pre_roll", 6)))
+            dt_ph = 1.0 / float(n_loop)
+            # Build minimal ancestor topological slice for fast temporal sub-stepping
+            anc: set[str] = set()
+            stack = [src_base]
+            while stack:
+                cur_n = stack.pop()
+                if cur_n in anc:
+                    continue
+                anc.add(cur_n)
+                for r_in in self.nodes[cur_n].inputs.values():
+                    stack.append(_parse_ref(r_in)[0])
+            sub_order = [nid for nid in self.node_order if nid in anc]
+            dyn_all = self._compute_dynamic_set()
+
+            def _eval_src_at(t_ph: float) -> np.ndarray:
+                if abs(((t_ph - phase + 0.5) % 1.0) - 0.5) < 1e-6:
+                    return np.asarray(ins["src"], dtype=np.float32)
+                sub_vals: dict[str, Any] = {}
+                for nid_s in sub_order:
+                    if nid_s not in dyn_all and nid_s in vals:
+                        sub_vals[nid_s] = vals[nid_s]
+                    else:
+                        sub_vals[nid_s] = self._eval_node(self.nodes[nid_s], sub_vals, float(t_ph % 1.0))
+                return np.asarray(_resolve_ref(sub_vals, src_ref), dtype=np.float32)
+
+            state: np.ndarray | None = None
+            dec = float(p.get("decay", 0.80))
+            dx_px = int(round(float(p.get("drift_x_px", 0.0))))
+            dy_px = int(round(float(p.get("drift_y_px", -1.0))))
+            b_rad = int(p.get("blur_radius", 1))
+            b_mode = str(p.get("blend_mode", "screen"))
+            t_tile = bool(p.get("tileable", tile))
+            for k in range(pre, -1, -1):
+                t_ph = (phase - k * dt_ph) % 1.0
+                cur_f = _eval_src_at(t_ph)
+                if state is None:
+                    state = cur_f.copy()
+                else:
+                    prev = state
+                    if dx_px != 0 or dy_px != 0:
+                        prev = np.roll(np.roll(prev, dy_px, axis=0), dx_px, axis=1)
+                    if b_rad > 0:
+                        prev = gaussian_blur(prev, radius=b_rad, tileable=t_tile)
+                    prev = prev * dec
+                    state = blend_layers(prev, cur_f, mode=b_mode, opacity=1.0)
+            return np.clip(state, 0.0, 1.0).astype(np.float32)
+
+        if op == "particle_sim":
+            return particle_sim_field(
+                H, W,
+                count=int(p.get("count", 48)),
+                emitter=str(p.get("emitter", "bottom")),
+                emitter_mask=ins.get("emitter_mask"),
+                vel_x=float(p.get("vel_x", 0.0)),
+                vel_y=float(p.get("vel_y", -0.55)),
+                spread=float(p.get("spread", 0.25)),
+                gravity_y=float(p.get("gravity_y", -0.18)),
+                turbulence=float(p.get("turbulence", 0.22)),
+                vortex=float(p.get("vortex", 0.0)),
+                size_px=float(p.get("size_px", 1.6)),
+                trail_steps=int(p.get("trail_steps", 3)),
+                phase=phase,
+                seed=seed,
+                tileable=p.get("tileable", tile),
+                color_stops=p.get("color_stops"),
+            )
+
+        if op == "fluid_smoke_sim":
+            return fluid_smoke_sim_field(
+                H, W,
+                source_mask=ins.get("source_mask"),
+                steps=int(p.get("steps", 16)),
+                buoyancy=float(p.get("buoyancy", 1.65)),
+                curl_strength=float(p.get("curl_strength", 1.85)),
+                dissipation=float(p.get("dissipation", 0.93)),
+                viscosity=float(p.get("viscosity", 0.15)),
+                phase=phase,
+                seed=seed,
+                tileable=p.get("tileable", tile),
+                color_stops=p.get("color_stops"),
+            )
+
+        if op == "anatomical_muscle_scales":
+            mc = self.mesh_context
+            if mc is None:
+                u, v = uv_grid(H, W)
+                wpn = np.stack((u, 1.0 - v, np.full_like(u, 0.5)), axis=-1)
+                wn = np.stack((np.zeros_like(u), np.ones_like(u), np.zeros_like(u)), axis=-1)
+                ao_m = np.ones((H, W), dtype=np.float32)
+                bev_m = np.zeros((H, W), dtype=np.float32)
+                cav_m = np.zeros((H, W), dtype=np.float32)
+                luv = np.stack((u, v), axis=-1)
+            else:
+                wpn, wn, ao_m, bev_m, cav_m, luv = mc.world_pos_norm, mc.world_normal, mc.baked_ao, mc.edge_bevel, mc.joint_cavity, mc.local_uv
+            return anatomical_muscle_scales(
+                wpn, wn, ao_m, bev_m, cav_m, luv,
+                scale_stops=p.get("scale_stops", ((0.00, "#11101C"), (0.24, "#24253B"), (0.52, "#3E4766"), (0.78, "#647496"), (0.94, "#9BB0CF"), (1.00, "#DCE8FA"))),
+                belly_stops=p.get("belly_stops", ((0.00, "#2E2733"), (0.42, "#6E646C"), (0.80, "#B8AE9E"), (1.00, "#ECE4D3"))),
+                plate_cols=int(p.get("plate_cols", 24)),
+                plate_rows=int(p.get("plate_rows", 28)),
+                muscle_groove_depth=float(p.get("muscle_groove_depth", 0.42)),
+                scale_relief=float(p.get("scale_relief", 0.36)),
+                roughness_base=float(p.get("roughness_base", 0.40)),
+                metallic_crown=float(p.get("metallic_crown", 0.14)),
+                smooth_blend=float(p.get("smooth_blend", 0.62)),
+                quantize_steps=int(p.get("quantize_steps", 7)),
+                seed=seed,
+            )
+
+        if op == "colossal_dragon_membrane":
+            return colossal_dragon_membrane(
+                ins["span_u"],
+                ins["trail_v"],
+                face_is_down=ins.get("face_is_down"),
+                palette_stops=p.get("palette_stops", ((0.00, "#1A0D1C"), (0.24, "#3B182E"), (0.52, "#6E2B3E"), (0.78, "#B45646"), (0.94, "#E9A26E"), (1.00, "#FFF0CC"))),
+                rim_color=str(p.get("rim_color", "#2A1224")),
+                tendon_color=str(p.get("tendon_color", "#251120")),
+                arch_depth=float(p.get("arch_depth", 0.26)),
+                arches=int(p.get("arches", 1)),
+                tatter_strength=float(p.get("tatter_strength", 0.09)),
+                tendon_ribs=int(p.get("tendon_ribs", 3)),
+                pleat_count=float(p.get("pleat_count", 9.0)),
+                pleat_strength=float(p.get("pleat_strength", 0.18)),
+                backlit_sss=float(p.get("backlit_sss", 0.85)),
+                smooth_blend=float(p.get("smooth_blend", 0.74)),
+                quantize_steps=int(p.get("quantize_steps", 8)),
+                seed=seed,
+            )
+
         raise ValueError(f"Unsupported TexGraph op: {op!r}")
 
     def evaluate(
@@ -1753,6 +2039,36 @@ class TexGraph:
             sheet.save(sp, format="PNG", optimize=True)
             written["pbr_sheet"] = str(sp)
         return {"files": written, "eval": ev}
+
+    def export_baked_pbr(
+        self,
+        out_dir: Path | str,
+        stem: str | None = None,
+        *,
+        phase: float = 0.0,
+        preset: str = "studio_hero",
+        bake_params: dict[str, Any] | None = None,
+        bbmodel_doc: dict[str, Any] | None = None,
+        recipe_path: str | None = None,
+        embed_maps_in_manifest: bool = False,
+    ) -> dict[str, Any]:
+        """Evaluate full PBR channels and export Baked Studio Albedo (`_baked.png`), `.synccraft.pbr.json` manifest & optional `_baked.bbmodel`!"""
+        ev = self.evaluate(phase=phase, build_pbr=True)
+        assert ev.pbr_maps is not None
+        st = stem or self.name
+        res = export_baked_pbr_package(
+            ev.pbr_maps,
+            out_dir,
+            st,
+            emissive_rgba=ev.emissive,
+            preset=preset,
+            bake_params=bake_params,
+            bbmodel_doc=bbmodel_doc,
+            recipe_path=recipe_path,
+            embed_maps_in_manifest=embed_maps_in_manifest,
+        )
+        res["eval"] = ev
+        return res
 
     def render_pbr_flipbook(
         self,

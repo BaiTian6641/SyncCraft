@@ -14,6 +14,8 @@ Supports:
 """
 from __future__ import annotations
 
+import base64
+import copy
 import io
 import json
 import math
@@ -430,3 +432,312 @@ def export_pbr_bundle(
         written["pbr_preview"] = _save(f"{stem}_pbr_preview.png", rgba_float_to_u8(pbr_preview_rgba))
 
     return written
+
+
+# ---------------------------------------------------------------------------
+# Baked Studio PBR Texture Format + Canonical `.synccraft.pbr.json` Manifest
+# ---------------------------------------------------------------------------
+
+BAKE_LIGHTING_PRESETS: dict[str, dict[str, Any]] = {
+    "studio_hero": {
+        "label": "Studio Hero (Warm Key / Cool Rim)",
+        "key_az_deg": -36.0,
+        "key_el_deg": 54.0,
+        "key_rgb": [2.25, 2.16, 2.02],
+        "fill_az_deg": 138.0,
+        "fill_el_deg": 28.0,
+        "fill_rgb": [0.78, 0.92, 1.18],
+        "sky_rgb": [0.46, 0.52, 0.64],
+        "ground_rgb": [0.26, 0.23, 0.30],
+        "ao_strength": 0.62,
+        "spec_strength": 1.0,
+        "sss_strength": 0.85,
+        "emissive_strength": 1.55,
+        "blend_with_albedo": 0.22,
+        "exposure": 1.08,
+    },
+    "dramatic_rim": {
+        "label": "Dramatic Obsidian Rim",
+        "key_az_deg": -52.0,
+        "key_el_deg": 42.0,
+        "key_rgb": [2.55, 2.38, 2.15],
+        "fill_az_deg": 152.0,
+        "fill_el_deg": 24.0,
+        "fill_rgb": [0.65, 1.05, 1.48],
+        "sky_rgb": [0.34, 0.40, 0.56],
+        "ground_rgb": [0.18, 0.16, 0.24],
+        "ao_strength": 0.78,
+        "spec_strength": 1.25,
+        "sss_strength": 1.05,
+        "emissive_strength": 1.85,
+        "blend_with_albedo": 0.14,
+        "exposure": 1.12,
+    },
+    "high_noon": {
+        "label": "High Noon Daylight",
+        "key_az_deg": -18.0,
+        "key_el_deg": 72.0,
+        "key_rgb": [2.35, 2.32, 2.24],
+        "fill_az_deg": 160.0,
+        "fill_el_deg": 35.0,
+        "fill_rgb": [0.85, 0.96, 1.12],
+        "sky_rgb": [0.56, 0.64, 0.78],
+        "ground_rgb": [0.34, 0.32, 0.28],
+        "ao_strength": 0.50,
+        "spec_strength": 0.88,
+        "sss_strength": 0.75,
+        "emissive_strength": 1.25,
+        "blend_with_albedo": 0.26,
+        "exposure": 1.05,
+    },
+    "moonlit_obsidian": {
+        "label": "Moonlit Obsidian",
+        "key_az_deg": 40.0,
+        "key_el_deg": 48.0,
+        "key_rgb": [1.55, 1.88, 2.45],
+        "fill_az_deg": -135.0,
+        "fill_el_deg": 24.0,
+        "fill_rgb": [0.72, 0.48, 0.85],
+        "sky_rgb": [0.28, 0.36, 0.54],
+        "ground_rgb": [0.16, 0.14, 0.24],
+        "ao_strength": 0.72,
+        "spec_strength": 1.20,
+        "sss_strength": 0.90,
+        "emissive_strength": 1.95,
+        "blend_with_albedo": 0.16,
+        "exposure": 1.10,
+    },
+}
+
+
+def bake_pbr_to_albedo(
+    pbr_maps: dict[str, np.ndarray],
+    *,
+    preset: str = "studio_hero",
+    key_az_deg: float | None = None,
+    key_el_deg: float | None = None,
+    normal_strength: float = 1.0,
+    spec_strength: float | None = None,
+    ao_strength: float | None = None,
+    sss_strength: float | None = None,
+    emissive_strength: float | None = None,
+    blend_with_albedo: float | None = None,
+    exposure: float | None = None,
+    emissive_rgba: np.ndarray | None = None,
+) -> np.ndarray:
+    """Physically bake LabPBR 1.3 maps (`albedo`, `_n`, `_s`) into a crisp game-ready sRGB Baked Albedo RGBA [0, 1].
+
+    Designed so flat/vanilla Blockbench & Minecraft renderers without shader packs still exhibit
+    metallic gold reflections, normal-mapped scale bevels, cool contact AO, wing SSS & emissive glow!
+    """
+    cfg = dict(BAKE_LIGHTING_PRESETS.get(preset, BAKE_LIGHTING_PRESETS["studio_hero"]))
+    az1 = float(cfg["key_az_deg"] if key_az_deg is None else key_az_deg)
+    el1 = float(cfg["key_el_deg"] if key_el_deg is None else key_el_deg)
+    s_spec = float(cfg["spec_strength"] if spec_strength is None else spec_strength)
+    s_ao = float(cfg["ao_strength"] if ao_strength is None else ao_strength)
+    s_sss = float(cfg["sss_strength"] if sss_strength is None else sss_strength)
+    s_em = float(cfg["emissive_strength"] if emissive_strength is None else emissive_strength)
+    b_alb = float(np.clip(cfg["blend_with_albedo"] if blend_with_albedo is None else blend_with_albedo, 0.0, 1.0))
+    exp = float(cfg["exposure"] if exposure is None else exposure)
+
+    alb_u8 = pbr_maps["albedo"]
+    H, W = alb_u8.shape[:2]
+    alb = alb_u8.astype(np.float32) / 255.0
+    base_lin = srgb_to_linear(alb[..., :3])
+    alpha = alb[..., 3:4]
+
+    # Unpack LabPBR 1.3 _n (R=Nx, G=Ny, B=AO, A=POM Height) & _s (R=Smooth, G=F0/Metal, B=Por/SSS, A=Emissive)
+    n_u8 = pbr_maps["labpbr_n"].astype(np.float32)
+    s_u8 = pbr_maps["labpbr_s"].astype(np.float32)
+
+    nx = (n_u8[..., 0] / 127.5 - 1.0) * float(normal_strength)
+    ny = (n_u8[..., 1] / 127.5 - 1.0) * float(normal_strength)
+    nz = np.sqrt(np.maximum(0.04, 1.0 - np.clip(nx * nx + ny * ny, 0.0, 0.96)))
+    N = np.stack((nx, ny, nz), axis=-1)
+    N = N / np.maximum(1e-6, np.linalg.norm(N, axis=-1, keepdims=True))
+
+    ao_raw = np.clip(n_u8[..., 2:3] / 255.0, 0.08, 1.0)
+    ao_m = 1.0 - (1.0 - ao_raw) * np.clip(s_ao, 0.0, 1.5)
+    ao_m = np.clip(ao_m, 0.12, 1.0)
+
+    smooth = np.clip(s_u8[..., 0:1] / 255.0, 0.0, 1.0)
+    rough = np.clip(1.0 - smooth, 0.06, 1.0)
+    g_raw = s_u8[..., 1:2]
+    metal = (g_raw >= 229.5).astype(np.float32)
+    diel_f0 = np.clip(g_raw / 255.0, 0.02, 0.25)
+    b_raw = s_u8[..., 2:3]
+    sss_m = np.where(b_raw >= 64.5, (b_raw - 64.0) / 191.0, 0.0).astype(np.float32)
+    em_scalar = np.where(s_u8[..., 3:4] < 254.5, s_u8[..., 3:4] / 254.0, 0.0).astype(np.float32)
+
+    F0 = diel_f0 * (1.0 - metal) + base_lin * metal
+    V = np.array([0.0, 0.0, 1.0], dtype=np.float32)
+    ndotv = np.maximum(0.05, N[..., 2:3])
+
+    def _dir(az: float, el: float) -> np.ndarray:
+        a, e = math.radians(az), math.radians(el)
+        v = np.array([math.cos(e) * math.sin(a), math.cos(e) * math.cos(a), math.sin(e)], dtype=np.float32)
+        return v / max(1e-6, float(np.linalg.norm(v)))
+
+    L1 = _dir(az1, el1)
+    L2 = _dir(float(cfg["fill_az_deg"]), float(cfg["fill_el_deg"]))
+
+    def _shade(L_vec: np.ndarray, rad: np.ndarray) -> np.ndarray:
+        H_v = L_vec + V
+        H_v = H_v / max(1e-6, float(np.linalg.norm(H_v)))
+        ndotl = np.maximum(0.0, np.sum(N * L_vec[None, None, :], axis=-1, keepdims=True))
+        ndoth = np.maximum(0.0, np.sum(N * H_v[None, None, :], axis=-1, keepdims=True))
+        hdotv = float(max(0.0, np.dot(H_v, V)))
+        a2 = (rough * rough) ** 2
+        denom = (ndoth * ndoth) * (a2 - 1.0) + 1.0
+        D = a2 / (math.pi * denom * denom + 1e-6)
+        k_g = ((rough + 1.0) ** 2) / 8.0
+        G = (ndotv / (ndotv * (1.0 - k_g) + k_g)) * (ndotl / (ndotl * (1.0 - k_g) + k_g + 1e-6))
+        F = F0 + (1.0 - F0) * ((1.0 - hdotv) ** 5)
+        spec = ((D * G * F) / (4.0 * ndotv * ndotl + 1e-4)) * s_spec
+        kD = (1.0 - F) * (1.0 - metal)
+        diff = kD * base_lin / math.pi
+        wrap = np.clip((np.sum(N * L_vec[None, None, :], axis=-1, keepdims=True) + 0.48) / 1.48, 0.0, 1.0)
+        sss_c = sss_m * s_sss * (1.0 - metal) * base_lin * (wrap * 0.45)
+        return (diff + spec) * rad[None, None, :] * ndotl + sss_c * rad[None, None, :]
+
+    col = (
+        _shade(L1, np.array(cfg["key_rgb"], dtype=np.float32))
+        + _shade(L2, np.array(cfg["fill_rgb"], dtype=np.float32))
+    )
+
+    # Hemisphere IBL + crisp metallic sky reflection
+    sky_w = np.clip(0.5 + 0.5 * N[..., 1:2], 0.0, 1.0)
+    sky_c = np.array(cfg["sky_rgb"], dtype=np.float32)[None, None, :]
+    gnd_c = np.array(cfg["ground_rgb"], dtype=np.float32)[None, None, :]
+    env_diff = sky_w * sky_c + (1.0 - sky_w) * gnd_c
+    R_y = np.clip(2.0 * N[..., 2:3] * N[..., 1:2], -1.0, 1.0)
+    env_spec = np.where(R_y > 0.0, sky_c * (1.25 + 0.95 * R_y), gnd_c * 0.95)
+    F_amb = F0 + (np.maximum(1.0 - rough, F0) - F0) * ((1.0 - ndotv) ** 5)
+    col = col + ((1.0 - F_amb) * (1.0 - metal) * base_lin * env_diff + F_amb * env_spec * s_spec * (1.0 - 0.52 * rough)) * ao_m
+
+    # Blend subtle fraction of original unlit albedo so flat Blockbench models stay rich on every face
+    if b_alb > 1e-4:
+        col = col * (1.0 - b_alb) + base_lin * ao_m * b_alb
+
+    # Emissive glow (either explicit RGBA or unpacked from LabPBR _s alpha)
+    if emissive_rgba is not None:
+        ef = np.asarray(emissive_rgba, dtype=np.float32)
+        if ef.max() > 1.5:
+            ef = ef / 255.0
+        if ef.ndim == 3 and ef.shape[2] >= 3:
+            ea = ef[..., 3:4] if ef.shape[2] == 4 else np.ones((H, W, 1), dtype=np.float32)
+            col = col + srgb_to_linear(ef[..., :3]) * ea * s_em
+    elif float(em_scalar.max()) > 1e-4:
+        col = col + base_lin * em_scalar * s_em
+
+    # ACES Filmic tonemap -> crisp sRGB
+    x = np.maximum(0.0, col * exp)
+    mapped = np.clip((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0)
+    srgb = linear_to_srgb(mapped)
+    return np.concatenate((srgb, alpha), axis=-1).astype(np.float32)
+
+
+def _u8_to_data_url(arr_u8: np.ndarray) -> str:
+    buf = io.BytesIO()
+    Image.fromarray(arr_u8, mode="RGBA").save(buf, format="PNG", optimize=True)
+    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+def export_baked_pbr_package(
+    pbr_maps: dict[str, np.ndarray],
+    out_dir: Path | str,
+    stem: str,
+    *,
+    emissive_rgba: np.ndarray | None = None,
+    preset: str = "studio_hero",
+    bake_params: dict[str, Any] | None = None,
+    bbmodel_doc: dict[str, Any] | None = None,
+    recipe_path: str | None = None,
+    embed_maps_in_manifest: bool = False,
+) -> dict[str, Any]:
+    """Export a complete Baked Studio Texture + `.synccraft.pbr.json` Manifest + optional `_baked.bbmodel`!
+
+    Produces:
+      - `<stem>_baked.png`           : Physically baked studio Albedo (ready for vanilla Blockbench/Minecraft!)
+      - `<stem>.synccraft.pbr.json`  : Canonical PBR rebuild manifest loadable by SyncCraft PBR Rebuilder plugin
+      - `<stem>_baked.bbmodel`       : Optional `.bbmodel` copy with the baked studio texture embedded
+      - All standard LabPBR 1.3 (`_n`, `_s`), Bedrock RTX (`_mer`, `.texture_set.json`) & standalone PBR maps
+    """
+    d = Path(out_dir)
+    d.mkdir(parents=True, exist_ok=True)
+    bp = dict(bake_params or {})
+    baked_f = bake_pbr_to_albedo(pbr_maps, preset=preset, emissive_rgba=emissive_rgba, **bp)
+    baked_u8 = rgba_float_to_u8(baked_f)
+
+    written = export_pbr_bundle(
+        pbr_maps,
+        d,
+        stem,
+        emissive_rgba=emissive_rgba,
+        pbr_preview_rgba=baked_f,
+        include_standalone=True,
+    )
+    baked_path = d / f"{stem}_baked.png"
+    Image.fromarray(baked_u8, mode="RGBA").save(baked_path, format="PNG", optimize=True)
+    written["baked_albedo"] = str(baked_path)
+
+    H, W = baked_u8.shape[:2]
+    manifest: dict[str, Any] = {
+        "schema": "synccraft.pbr.bundle/1.0",
+        "stem": stem,
+        "width": W,
+        "height": H,
+        "pbr_standard": "labpbr_1_3+bedrock_mer",
+        "bake_preset": preset,
+        "bake_params": {**BAKE_LIGHTING_PRESETS.get(preset, BAKE_LIGHTING_PRESETS["studio_hero"]), **bp},
+        "maps": {
+            "albedo": f"{stem}.png",
+            "baked": f"{stem}_baked.png",
+            "labpbr_n": f"{stem}_n.png",
+            "labpbr_s": f"{stem}_s.png",
+            "bedrock_mer": f"{stem}_mer.png",
+            "bedrock_texture_set": f"{stem}.texture_set.json",
+            "normal": f"{stem}_normal.png",
+            "height": f"{stem}_height.png",
+            "roughness": f"{stem}_roughness.png",
+            "metallic": f"{stem}_metallic.png",
+            "ao": f"{stem}_ao.png",
+        },
+    }
+    if emissive_rgba is not None:
+        manifest["maps"]["emissive"] = f"{stem}_emissive.png"
+    if recipe_path:
+        manifest["texgraph_recipe"] = str(recipe_path)
+    if embed_maps_in_manifest:
+        manifest["embedded_data_urls"] = {
+            "albedo": _u8_to_data_url(pbr_maps["albedo"]),
+            "baked": _u8_to_data_url(baked_u8),
+            "labpbr_n": _u8_to_data_url(pbr_maps["labpbr_n"]),
+            "labpbr_s": _u8_to_data_url(pbr_maps["labpbr_s"]),
+            "bedrock_mer": _u8_to_data_url(pbr_maps["bedrock_mer"]),
+            "normal": _u8_to_data_url(pbr_maps["normal_rgb"]),
+        }
+        if emissive_rgba is not None:
+            manifest["embedded_data_urls"]["emissive"] = _u8_to_data_url(rgba_float_to_u8(emissive_rgba))
+
+    man_path = d / f"{stem}.synccraft.pbr.json"
+    man_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    written["pbr_manifest"] = str(man_path)
+
+    if bbmodel_doc is not None:
+        doc_copy = copy.deepcopy(bbmodel_doc)
+        data_url = _u8_to_data_url(baked_u8)
+        if doc_copy.get("textures"):
+            t0 = doc_copy["textures"][0]
+            t0["width"] = W
+            t0["height"] = H
+            t0["uv_width"] = W
+            t0["uv_height"] = H
+            t0["source"] = data_url
+            t0["internal"] = True
+            t0["name"] = f"{stem}_baked.png"
+        baked_bb_path = d / f"{stem}_baked.bbmodel"
+        baked_bb_path.write_text(json.dumps(doc_copy, separators=(",", ":"), ensure_ascii=False), encoding="utf-8")
+        written["baked_bbmodel"] = str(baked_bb_path)
+
+    return {"files": written, "manifest": manifest, "baked_rgba": baked_f, "baked_u8": baked_u8}

@@ -61,6 +61,7 @@ SUPPORTED_BRIDGE_ACTIONS: tuple[str, ...] = (
     "retarget",
     "secondary_motion",
     "texture_pass",
+    "pbr_rebuild",
 )
 
 
@@ -194,6 +195,8 @@ class BlockbenchBridgeDispatcher:
             return self.handle_secondary_motion(body)
         if act == "texture_pass":
             return self.handle_texture_pass(body)
+        if act == "pbr_rebuild":
+            return self.handle_pbr_rebuild(body)
         raise ValueError(f"unknown bridge action {act!r}; expected one of {list(SUPPORTED_BRIDGE_ACTIONS)}")
 
     def handle_health(self) -> dict[str, Any]:
@@ -614,6 +617,52 @@ class BlockbenchBridgeDispatcher:
             "png_byte_length": len(png_bytes),
             "runtime_import_verified": False,
         }
+
+    def handle_pbr_rebuild(self, body: dict[str, Any]) -> dict[str, Any]:
+        """Re-evaluate a TexGraph recipe/preset against the live Blockbench .bbmodel and return baked Albedo + embedded PBR manifest."""
+        import tempfile
+        from pathlib import Path
+        from synccraft.texgraph import PRESET_REGISTRY, TexGraph, bake_bbmodel_maps
+
+        doc = body.get("bbmodel")
+        mesh_ctx = bake_bbmodel_maps(doc) if isinstance(doc, dict) else None
+        recipe = body.get("recipe")
+        preset_name = str(body.get("preset") or "neon_hex_conduit")
+        bake_preset = str(body.get("bake_preset") or "studio_hero")
+        bake_params = dict(body.get("bake_params") or {})
+
+        if isinstance(recipe, dict):
+            g = TexGraph.from_recipe(recipe, mesh_context=mesh_ctx)
+        elif preset_name in PRESET_REGISTRY:
+            sz = int(body.get("size", mesh_ctx.width if mesh_ctx else 32))
+            g = PRESET_REGISTRY[preset_name](size=sz)
+        else:
+            raise ValueError(f"pbr_rebuild requires a valid 'recipe' dict or known 'preset' (got {preset_name!r})")
+        if mesh_ctx is not None:
+            g.attach_mesh(mesh_ctx)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            pkg = g.export_baked_pbr(
+                Path(tmp),
+                stem=g.name,
+                phase=float(body.get("phase", 0.0)),
+                preset=bake_preset,
+                bake_params=bake_params,
+                embed_maps_in_manifest=True,
+            )
+            manifest = pkg["manifest"]
+            emb = manifest.get("embedded_data_urls") or {}
+            return {
+                "ok": True,
+                "mode": "pbr_rebuild",
+                "width": g.width,
+                "height": g.height,
+                "bake_preset": bake_preset,
+                "baked_data_url": emb.get("baked"),
+                "albedo_data_url": emb.get("albedo"),
+                "manifest": manifest,
+                "runtime_import_verified": False,
+            }
 
 
 def make_blockbench_http_server(

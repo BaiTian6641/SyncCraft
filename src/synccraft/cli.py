@@ -142,6 +142,15 @@ def main(argv=None):
     tg_repack.add_argument("--padding", type=int, default=1)
     tg_repack.add_argument("--zone-map", type=Path, help="optional PNG path for visual UV Zone Diagnostic Map")
 
+    tg_bake = tg_subs.add_parser("bake", help="export Baked Studio Albedo (_baked.png), .synccraft.pbr.json manifest & optional _baked.bbmodel")
+    tg_bake.add_argument("source", help="path to .texgraph.json recipe or preset:<name>")
+    tg_bake.add_argument("-o", "--out-dir", type=Path, required=True, help="output directory for baked PBR package")
+    tg_bake.add_argument("--stem", help="output file stem (defaults to graph name)")
+    tg_bake.add_argument("--preset", default="studio_hero", choices=["studio_hero", "dramatic_rim", "high_noon", "moonlit_obsidian"])
+    tg_bake.add_argument("--bbmodel", type=Path, help="optional .bbmodel to bake 3D maps from and write <stem>_baked.bbmodel")
+    tg_bake.add_argument("--size", type=int, default=32)
+    tg_bake.add_argument("--embed-manifest", action="store_true", help="embed PBR maps as data URLs inside .synccraft.pbr.json for single-file Blockbench import")
+
     tg_subs.add_parser("presets", help="list available built-in TexGraph presets")
     tg_subs.add_parser("schema", help="emit UI-ready typed JSON schema for all TexGraph nodes")
 
@@ -186,6 +195,31 @@ def main(argv=None):
                 export_html_inspector,
             )
 
+            if args.tg_cmd == "bake":
+                mesh_ctx = None
+                bb_doc = None
+                if args.bbmodel:
+                    bb_doc = json.loads(args.bbmodel.read_text(encoding="utf-8"))
+                    mesh_ctx = bake_bbmodel_maps(bb_doc)
+                if args.source.startswith("preset:"):
+                    pname = args.source.split(":", 1)[1]
+                    if pname not in PRESET_REGISTRY:
+                        raise ValueError(f"Unknown preset {pname!r}; choices: {sorted(PRESET_REGISTRY)}")
+                    graph = PRESET_REGISTRY[pname](size=args.size)
+                else:
+                    graph = TexGraph.from_recipe(args.source, mesh_context=mesh_ctx)
+                if mesh_ctx is not None:
+                    graph.attach_mesh(mesh_ctx)
+                baked = graph.export_baked_pbr(
+                    args.out_dir,
+                    stem=args.stem or graph.name,
+                    preset=args.preset,
+                    bbmodel_doc=bb_doc,
+                    recipe_path=args.source if not args.source.startswith("preset:") else None,
+                    embed_maps_in_manifest=bool(args.embed_manifest),
+                )
+                print(_json({"mode": "baked_pbr", "preset": args.preset, "files": baked["files"]}))
+                return 0
             if args.tg_cmd == "presets":
                 from synccraft.texgraph.pipeline import SUBGRAPH_REGISTRY
                 print(_json({"presets": sorted(PRESET_REGISTRY.keys()), "subgraphs": sorted(SUBGRAPH_REGISTRY.keys())}))

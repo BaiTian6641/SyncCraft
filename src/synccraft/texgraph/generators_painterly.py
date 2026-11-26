@@ -554,3 +554,327 @@ def sculpted_pinion_wing(
         "gold_mask": gold_band,
         "blade_mask": alpha,
     }
+
+
+def anatomical_muscle_scales(
+    world_pos_norm: np.ndarray,
+    world_normal: np.ndarray,
+    baked_ao: np.ndarray,
+    edge_bevel: np.ndarray,
+    joint_cavity: np.ndarray,
+    local_uv: np.ndarray,
+    *,
+    scale_stops: Sequence[tuple[float, str]] = (
+        (0.00, "#11101C"),
+        (0.24, "#24253B"),
+        (0.52, "#3E4766"),
+        (0.78, "#647496"),
+        (0.94, "#9BB0CF"),
+        (1.00, "#DCE8FA"),
+    ),
+    belly_stops: Sequence[tuple[float, str]] = (
+        (0.00, "#2E2733"),
+        (0.42, "#6E646C"),
+        (0.80, "#B8AE9E"),
+        (1.00, "#ECE4D3"),
+    ),
+    plate_cols: int = 24,
+    plate_rows: int = 28,
+    muscle_groove_depth: float = 0.42,
+    scale_relief: float = 0.36,
+    roughness_base: float = 0.40,
+    metallic_crown: float = 0.14,
+    smooth_blend: float = 0.62,
+    quantize_steps: int = 7,
+    seed: int = 42,
+) -> dict[str, np.ndarray]:
+    """3D-Anatomical Scale-to-Muscle Texture Fitting Generator (Distilled from Reference Images 2, 3, 4).
+
+    Fits chunky Blockbench dragon plates, limb tendon-bars, dorsal chevrons, and ventral rib-scutes
+    directly to the creature's baked 3D geometry & muscle volumes:
+    - **Muscle-Flow Alignment**: Uses 3D surface normal & local face coordinates to orient chunky
+      interlocking armor plates lengthwise along limbs/neck/tail and wrap ribcage plates cleanly!
+    - **Deep Muscle-Belly Separation**: Darkens & recesses inter-muscle contact valleys (``joint_cavity``
+      + ``baked_ao``) while crowning raised dorsal muscle crests (``world_normal.y > 0.35`` + ``edge_bevel``)
+      with crisp 1px honed highlights!
+    - **Countershaded Belly Scutes**: Automatically transitions undersides (``world_normal.y < -0.25``)
+      into smooth transverse ribbed belly armor with clean tonal hierarchy!
+
+    Returns a full multi-port ``MATERIAL`` bus dict plus ``"muscle_crevice"`` & ``"crown_highlight"`` ports.
+    """
+    from .pbr import height_to_normal_map
+
+    H, W = baked_ao.shape[:2]
+    wpn = np.asarray(world_pos_norm, dtype=np.float32)
+    wn = np.asarray(world_normal, dtype=np.float32)
+    ao = np.clip(np.asarray(baked_ao, dtype=np.float32), 0.0, 1.0)
+    bev = np.clip(np.asarray(edge_bevel, dtype=np.float32), 0.0, 1.0)
+    cav = np.clip(np.asarray(joint_cavity, dtype=np.float32), 0.0, 1.0)
+    lu = np.clip(np.asarray(local_uv[..., 0], dtype=np.float32), 0.0, 1.0)
+    lv = np.clip(np.asarray(local_uv[..., 1], dtype=np.float32), 0.0, 1.0)
+
+    # 1. Anatomical Orientation Masks (dorsal crown vs lateral muscle walls vs ventral belly)
+    ny = wn[..., 1]
+    dorsal_w = np.clip((ny - 0.15) / 0.65, 0.0, 1.0)
+    ventral_w = np.clip((-ny - 0.22) / 0.55, 0.0, 1.0)
+    lateral_w = np.clip(1.0 - dorsal_w * 0.75 - ventral_w * 0.85, 0.0, 1.0)
+
+    # 2. Chunky Overlapping Armor / Muscle Plates (Atlas-coherent + local face-aligned tendon bars!)
+    body_plates = layered_scale_plates(
+        H, W,
+        cols=max(8, int(plate_cols)),
+        rows=max(8, int(plate_rows)),
+        stagger=0.5,
+        gap=0.08,
+        top_rim=0.22,
+        variance=0.18,
+        seed=seed + 7,
+    )
+    # Local muscle tendon bands following each cuboid's long face axis (like Reference Image 3!)
+    u_bars = np.abs(np.sin(lu * math.pi * 3.0))
+    v_rungs = np.abs(np.sin(lv * math.pi * 4.0 + 0.45 * np.abs(lu - 0.5) * math.pi))
+    muscle_striation = (0.58 * u_bars + 0.42 * v_rungs).astype(np.float32)
+    # Per-face cylindrical muscle roundness (softly swells center of each cuboid, darkens flank seams!)
+    cyl_swell = np.clip(1.0 - 1.35 * ((lu - 0.5) ** 2 + 0.55 * (lv - 0.5) ** 2), 0.25, 1.0).astype(np.float32)
+    brush = directional_brushstrokes(H, W, angle_deg=-14.0, scale_along=3.5, scale_across=15.0, contrast=0.22, seed=seed + 31)
+
+    # 3. Combine Anatomical Muscle Volume + Fitted Scale Relief!
+    muscle_crevice = np.clip(cav * 0.75 + (1.0 - ao) * 0.55 + body_plates["seam"] * 0.42, 0.0, 1.0).astype(np.float32)
+    crown_hi = np.clip(dorsal_w * 0.55 + bev * 0.45 * (1.0 - cav) + cyl_swell * 0.22, 0.0, 1.0).astype(np.float32)
+
+    scale_h = np.clip(
+        0.48 * body_plates["height"]
+        + 0.26 * (lateral_w * muscle_striation + (1.0 - lateral_w) * cyl_swell)
+        + 0.16 * cyl_swell
+        + 0.10 * brush
+        - float(muscle_groove_depth) * 0.48 * cav,
+        0.0,
+        1.0,
+    ).astype(np.float32)
+
+    # Half-Lambert 3D macro wrap + fitted scale relief + razor dorsal/edge crowns!
+    key_l = np.array([0.36, 0.86, 0.36], dtype=np.float32)
+    key_l /= np.linalg.norm(key_l)
+    ndotl = np.clip(np.sum(wn * key_l[None, None, :], axis=-1) * 0.5 + 0.5, 0.0, 1.0)
+    tone = np.clip(
+        0.16
+        + 0.42 * ndotl
+        + float(scale_relief) * (scale_h - 0.42)
+        + 0.18 * bev * (0.4 + 0.6 * dorsal_w) * (1.0 - cav)
+        - float(muscle_groove_depth) * (0.55 * cav + 0.45 * (1.0 - ao))
+        + 0.08 * wpn[..., 1],
+        0.0,
+        1.0,
+    ).astype(np.float32)
+
+    body_rgba = multi_stop_gradient(
+        tone,
+        scale_stops,
+        space="oklab",
+        smooth_blend=smooth_blend,
+        quantize_steps=quantize_steps,
+        dither="clustered",
+        dither_strength=0.05,
+    )
+
+    # Smooth transverse ribbed belly scutes along ventral underside
+    belly_rungs = 0.5 + 0.5 * np.sin(lv * math.pi * 7.0)
+    belly_tone = np.clip(0.32 + 0.46 * (0.65 * ndotl + 0.35 * belly_rungs) - 0.30 * cav, 0.0, 1.0).astype(np.float32)
+    belly_rgba = multi_stop_gradient(belly_tone, belly_stops, space="oklab", smooth_blend=0.72, quantize_steps=6)
+
+    bw = (ventral_w * 0.86)[..., None]
+    albedo = np.concatenate((
+        np.clip(body_rgba[..., :3] * (1.0 - bw) + belly_rgba[..., :3] * bw, 0.0, 1.0),
+        np.ones((H, W, 1), dtype=np.float32),
+    ), axis=-1).astype(np.float32)
+
+    normal_rgb = height_to_normal_map(scale_h, strength=2.6, tileable=False)
+    roughness = np.clip(float(roughness_base) + 0.20 * muscle_crevice - 0.12 * crown_hi, 0.14, 0.92).astype(np.float32)
+    metallic = np.clip(float(metallic_crown) * crown_hi * (1.0 - ventral_w), 0.0, 1.0).astype(np.float32)
+    ao_out = np.clip(ao * (1.0 - 0.30 * body_plates["seam"]), 0.14, 1.0).astype(np.float32)
+    sss = np.clip(0.16 * ventral_w, 0.0, 1.0).astype(np.float32)
+    porosity = np.full((H, W), 0.12, dtype=np.float32)
+    emissive = np.zeros((H, W, 4), dtype=np.float32)
+
+    return {
+        "__bus__": np.array([1.0], dtype=np.float32),
+        "albedo": albedo,
+        "height": scale_h,
+        "normal": normal_rgb,
+        "roughness": roughness,
+        "metallic": metallic,
+        "ao": ao_out,
+        "emissive": emissive,
+        "sss": sss,
+        "porosity": porosity,
+        "muscle_crevice": muscle_crevice,
+        "crown_highlight": crown_hi,
+    }
+
+
+def colossal_dragon_membrane(
+    span_u: np.ndarray,
+    trail_v: np.ndarray,
+    *,
+    face_is_down: np.ndarray | None = None,
+    palette_stops: Sequence[tuple[float, str]] = (
+        (0.00, "#1A0D1C"),
+        (0.24, "#3B182E"),
+        (0.52, "#6E2B3E"),
+        (0.78, "#B45646"),
+        (0.94, "#E9A26E"),
+        (1.00, "#FFF0CC"),
+    ),
+    rim_color: str = "#2A1224",
+    tendon_color: str = "#251120",
+    arch_depth: float = 0.26,
+    arches: int = 1,
+    tatter_strength: float = 0.09,
+    tendon_ribs: int = 3,
+    pleat_count: float = 9.0,
+    pleat_strength: float = 0.18,
+    backlit_sss: float = 0.85,
+    smooth_blend: float = 0.74,
+    quantize_steps: int = 8,
+    seed: int = 42,
+) -> dict[str, np.ndarray]:
+    """Monumental Normal Dragon Wing Membrane Generator (Full Multi-Port `MATERIAL` Bus).
+
+    Distilled directly from Reference Images 1, 2, 3, 4 (Crimson Gothic Dragon, Blue-Teal Wyvern,
+    Slate-Black Volcanic Dragon & Amber Backlit Dragon):
+    - **100% Top/Bottom Aligned Cutouts**: Uses ``span_u`` (0=root->1=tip) and ``trail_v``
+      (0=leading spar -> 1=trailing tip) so dorsal & ventral alpha silhouettes NEVER invert!
+    - **Deep Concave Gothic Arch + Organic Battle Tatters**: Sweeping catenary scallop with crisp
+      hand-pixelled serrated notches along the trailing hem!
+    - **Arched Cross-Bay Tendon Ribs (Image 4 & 2)**: Curved muscular-elastic tendon arches bowing
+      gracefully across the wing bay from finger spar to finger spar with raised bevel normals!
+    - **Sweeping Diagonal Tension Pleats (Image 3)**: Painterly leathery skin folds radiating out
+      from the carpal wrist toward the trailing arch!
+    - **Bone-Hugging Shadow Frame + Luminous Backlit SSS Belly**: Velvety deep contact shadow along
+      leading & lateral spars opening into a warm translucent thin-skin cushion (`SSS = 0.85`)!
+
+    Returns a full multi-port ``MATERIAL`` bus plus ``"alpha"``, ``"tendon_mask"``, ``"tatter_rim"``.
+    """
+    from .pbr import height_to_normal_map
+
+    u = np.clip(np.asarray(span_u, dtype=np.float32), 0.0, 1.0)
+    v = np.clip(np.asarray(trail_v, dtype=np.float32), 0.0, 1.0)
+    H, W = u.shape[:2]
+    is_dn = (
+        np.clip(np.asarray(face_is_down, dtype=np.float32), 0.0, 1.0)
+        if face_is_down is not None
+        else np.zeros((H, W), dtype=np.float32)
+    )
+
+    # 1. Sweeping Gothic Concave Trailing Arch + Organic Battle-Tattered Serrated Notches!
+    # Note: v=0 is leading spar (+Z), v=1 is trailing edge (-Z); anchor tightly to BOTH finger tips (u=0 and u=1)!
+    k = max(1, int(arches))
+    au = (u * k) % 1.0
+    tip_env = np.power(np.sin(np.clip(au, 0.0, 1.0) * math.pi), 0.78).astype(np.float32)
+    arch_cut = float(arch_depth) * np.power(1.0 - (2.0 * au - 1.0) ** 2, 1.15)
+    # Deterministic sharp organic tatter notches strictly in the suspended mid-arch (zero fingertip detachment!)
+    n_notch = value_noise(H, W, scale=max(10.0, W / 14.0), scale_y=2.0, seed=seed + 23, tileable=False)
+    n_serr = 0.5 + 0.5 * np.sin(u * math.pi * 15.0 + float(seed))
+    tatters = (
+        np.where(n_notch > 0.62, (n_notch - 0.62) * 2.8 * float(tatter_strength), 0.0)
+        + n_serr * float(tatter_strength) * 0.24
+    ) * tip_env
+    max_v = np.clip(0.995 - arch_cut - tatters, 0.28, 0.995)
+
+    dist_from_trail = max_v - v
+    solid = (dist_from_trail >= 0.0) & (u >= 0.002) & (u <= 0.998)
+    alpha = solid.astype(np.float32)
+    tatter_rim = (solid & (dist_from_trail <= 0.045)).astype(np.float32)
+
+    # 2. Both-Spar Bone-Hugging Contact Shadow (v->0 leading bone, u->0 & u->1 finger spars!)
+    bone_lead = np.clip(v / 0.20, 0.0, 1.0)
+    bone_side = np.clip(np.minimum(u, 1.0 - u) / 0.14, 0.0, 1.0)
+    trail_fade = np.clip(dist_from_trail / 0.14, 0.0, 1.0)
+    bone_open = np.power(bone_lead * bone_side, 0.58) * (0.50 + 0.50 * trail_fade)
+
+    # 3. Arched Cross-Bay Curved Elastic Tendon Ribs (like Reference Images 2 & 4!)
+    n_ribs = max(1, int(tendon_ribs))
+    tendon_mask = np.zeros((H, W), dtype=np.float32)
+    for r_i in range(n_ribs):
+        base_v = 0.28 + (r_i / float(max(1, n_ribs))) * 0.46
+        # Graceful upward catenary bow across the bay
+        rib_v = base_v - 0.105 * (1.0 - (2.0 * u - 1.0) ** 2)
+        d_rib = np.abs(v - rib_v)
+        rib_w = 0.025 + 0.011 * (1.0 - r_i / float(max(1, n_ribs)))
+        tendon_mask = np.maximum(tendon_mask, np.clip(1.0 - d_rib / rib_w, 0.0, 1.0))
+    tendon_mask = (tendon_mask * alpha).astype(np.float32)
+
+    # 4. Sweeping Diagonal Tension Pleats & Forked Venation (like Reference Image 3!)
+    ang = np.arctan2(v + 0.08, (u - 0.35) * 1.45)
+    pleats = 0.5 + 0.5 * np.sin(ang * float(pleat_count) * math.pi + 0.65 * np.sin(v * 5.0))
+    vein_n = fbm_noise(H, W, scale=5.5, octaves=3, mode="ridged", seed=seed + 61, tileable=False)
+    veins = np.clip((vein_n - 0.72) * 3.2, 0.0, 1.0) * np.clip(1.0 - v * 0.85, 0.15, 1.0) * alpha
+    brush = directional_brushstrokes(H, W, angle_deg=-22.0, scale_along=3.0, scale_across=15.0, contrast=0.20, seed=seed + 83)
+
+    # 5. Backlit Translucent Thin-Skin Cushion (brightest in mid-bay belly away from thick bones!)
+    du_c = (u - 0.50) * 1.65
+    dv_c = (v - 0.48) * 1.75
+    belly_pool = np.clip(1.0 - np.sqrt(du_c * du_c + dv_c * dv_c), 0.0, 1.0)
+    belly_pool = belly_pool * belly_pool * (3.0 - 2.0 * belly_pool)
+
+    dn_drop = 1.0 - 0.12 * is_dn
+    tone = (
+        0.12
+        + 0.40 * bone_open
+        + 0.38 * belly_pool * float(backlit_sss)
+        + (pleats - 0.5) * float(pleat_strength)
+        + (brush - 0.5) * 0.09
+        - 0.24 * tendon_mask
+        - 0.12 * veins
+    ) * dn_drop
+    tone = np.clip(tone, 0.0, 1.0).astype(np.float32)
+
+    rgba = multi_stop_gradient(
+        tone,
+        palette_stops,
+        space="oklab",
+        smooth_blend=smooth_blend,
+        quantize_steps=quantize_steps,
+        dither="clustered",
+        dither_strength=0.05,
+        alpha_mask=alpha,
+    )
+
+    # Blend dark velvety tendon & trailing rim accents cleanly (never flat solid stickers)
+    tc = np.array(hex_to_srgb(tendon_color), dtype=np.float32)
+    rc = np.array(hex_to_srgb(rim_color), dtype=np.float32)
+    tw = (tendon_mask * 0.46)[..., None]
+    rw = (tatter_rim * 0.52)[..., None]
+    rgb = rgba[..., :3] * (1.0 - tw) + tc[None, None, :] * tw
+    rgb = rgb * (1.0 - rw) + rc[None, None, :] * rw
+    albedo = np.concatenate((np.clip(rgb, 0.0, 1.0), alpha[..., None]), axis=-1).astype(np.float32)
+
+    # Physical PBR Maps: raised tendon ribs + pleat relief + high SSS in translucent mid-bay!
+    height_f = np.clip(
+        (0.32 + 0.26 * (1.0 - bone_open) + 0.26 * tendon_mask + 0.16 * (pleats - 0.5) + 0.08 * veins) * alpha,
+        0.0,
+        1.0,
+    ).astype(np.float32)
+    normal_rgb = height_to_normal_map(height_f, strength=2.6, tileable=False)
+    roughness = np.clip(0.54 - 0.14 * tendon_mask - 0.08 * belly_pool, 0.25, 0.85).astype(np.float32)
+    metallic = np.zeros((H, W), dtype=np.float32)
+    ao_out = np.clip((0.52 + 0.48 * bone_open) * (1.0 - 0.25 * tendon_mask), 0.18, 1.0).astype(np.float32)
+    sss_out = np.clip((0.28 + 0.72 * belly_pool) * float(backlit_sss) * (1.0 - 0.55 * tendon_mask) * alpha, 0.0, 1.0).astype(np.float32)
+    porosity = np.full((H, W), 0.22, dtype=np.float32)
+    emissive = np.zeros((H, W, 4), dtype=np.float32)
+
+    return {
+        "__bus__": np.array([1.0], dtype=np.float32),
+        "albedo": albedo,
+        "alpha": alpha,
+        "height": height_f,
+        "normal": normal_rgb,
+        "roughness": roughness,
+        "metallic": metallic,
+        "ao": ao_out,
+        "emissive": emissive,
+        "sss": sss_out,
+        "porosity": porosity,
+        "tendon_mask": tendon_mask,
+        "tatter_rim": tatter_rim,
+    }

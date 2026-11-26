@@ -88,6 +88,9 @@ class MeshBakeContext:
     wing_span_u: np.ndarray = field(default_factory=lambda: np.zeros((1, 1), dtype=np.float32))
     wing_trail_v: np.ndarray = field(default_factory=lambda: np.zeros((1, 1), dtype=np.float32))
     face_is_down: np.ndarray = field(default_factory=lambda: np.zeros((1, 1), dtype=np.float32))
+    wing_bay_u: np.ndarray = field(default_factory=lambda: np.zeros((1, 1), dtype=np.float32))
+    wing_bay_v: np.ndarray = field(default_factory=lambda: np.zeros((1, 1), dtype=np.float32))
+    wing_bay_mask: np.ndarray = field(default_factory=lambda: np.ones((1, 1), dtype=np.float32))
     islands: list[BakedIsland] = field(default_factory=list)
     elem_names: list[str] = field(default_factory=list)
     elem_bones: list[str] = field(default_factory=list)
@@ -429,6 +432,145 @@ def bake_bbmodel_maps(
                 zone_masks[zone][y0:y1, x0:x1] = 1.0
 
     world_pos_norm = np.clip((world_pos - scene_min.astype(np.float32)) / scene_span.astype(np.float32), 0.0, 1.0)
+
+    # 3D Wing Bay Barycentric Sector Projection (exact finger-to-finger clipping for giant bat-dragon membranes!)
+    wing_bay_u = wing_span_u.copy()
+    wing_bay_v = wing_trail_v.copy()
+    wing_bay_mask = np.ones((H, W), dtype=np.float32)
+
+    def _obb_endpoints(o: dict[str, Any]) -> tuple[np.ndarray, np.ndarray]:
+        """Return (proximal_end, distal_end) along an OBB's longest axis (proximal = closer to X=0/carpal)."""
+        ax = int(np.argmax(o["half"]))
+        axis_w = o["R"][:, ax] * float(o["half"][ax])
+        p_a = o["center"] - axis_w
+        p_b = o["center"] + axis_w
+        # Proximal end is closer to body/centerline (smaller |x|, or larger z if same |x|)
+        if abs(p_a[0]) < abs(p_b[0]) - 0.5 or (abs(abs(p_a[0]) - abs(p_b[0])) <= 0.5 and p_a[2] > p_b[2]):
+            return p_a, p_b
+        return p_b, p_a
+
+    # Index left-wing spars (`center[0] < 0`) by short element name
+    left_obbs: dict[str, dict[str, Any]] = {}
+    for o in obbs:
+        if float(o["center"][0]) < -0.5:
+            sn = o["name"].split("__")[-1].lower()
+            left_obbs[sn] = o
+
+    def _find_obb(*cands: str) -> dict[str, Any] | None:
+        for c in cands:
+            if c in left_obbs:
+                return left_obbs[c]
+        return None
+
+    f1_o = _find_obb("f1_spar", "f1_prox_spar")
+    f1_d = _find_obb("f1_dist_spar", "f1_dist")
+    f2_o = _find_obb("f2_spar", "f2_prox_spar")
+    f2_d = _find_obb("f2_dist_spar", "f2_dist")
+    f3_o = _find_obb("f3_spar", "f3_prox_spar")
+    f3_d = _find_obb("f3_dist_spar", "f3_dist")
+    f4_o = _find_obb("f4_spar")
+    rad_o = _find_obb("wing_rad_core", "wing_radius")
+    hum_o = _find_obb("wing_hum_core", "wing_humerus")
+
+    def _finger_span(prox: dict[str, Any], dist: dict[str, Any] | None) -> tuple[np.ndarray, np.ndarray]:
+        r_p, t_p = _obb_endpoints(prox)
+        if dist is not None:
+            _, t_d = _obb_endpoints(dist)
+            return r_p, t_d
+        return r_p, t_p
+
+    bay_defs: list[tuple[str, tuple[np.ndarray, np.ndarray, np.ndarray]]] = []
+    if f1_o and f2_o:
+        r1, t1 = _finger_span(f1_o, f1_d)
+        r2, t2 = _finger_span(f2_o, f2_d)
+        bay_defs.append(("wing_bay_1", (0.5 * (r1 + r2), t1, t2)))
+    if f2_o and f3_o:
+        r2, t2 = _finger_span(f2_o, f2_d)
+        r3, t3 = _finger_span(f3_o, f3_d)
+        bay_defs.append(("wing_bay_2", (0.5 * (r2 + r3), t2, t3)))
+    if f3_o and f4_o:
+        r3, t3 = _finger_span(f3_o, f3_d)
+        r4, t4 = _obb_endpoints(f4_o)
+        bay_defs.append(("wing_bay_3", (0.5 * (r3 + r4), t3, t4)))
+    if rad_o and f4_o:
+        r_rad, t_rad = _obb_endpoints(rad_o)  # r_rad=elbow, t_rad=wrist
+        r4, t4 = _obb_endpoints(f4_o)
+        # Bay 4 spans cleanly from forearm/f4 tip back toward elbow trailing point (shared with inner sail!)
+        el_trail = np.array([r_rad[0] * 0.72, max(scene_min[1] + 12.0, 0.5 * (r_rad[1] + t4[1]) - 6.0), t4[2] + 8.0], dtype=np.float64)
+        bay_defs.append(("wing_bay_4", (t_rad, t4, r_rad)))
+        bay_defs.append(("wing_bay_4_quad", (r_rad, t4, el_trail)))
+        if hum_o:
+            r_hum, t_hum = _obb_endpoints(hum_o)  # shoulder -> elbow
+            flank_back = np.array([r_hum[0] * 0.55, max(scene_min[1] + 12.0, r_hum[1] - 14.0), r_hum[2] - 26.0], dtype=np.float64)
+            bay_defs.append(("wing_inner_sail", (r_hum, t_hum, flank_back)))
+            bay_defs.append(("wing_inner_sail_quad", (t_hum, el_trail, flank_back)))
+    elif hum_o and rad_o:
+        r_hum, t_hum = _obb_endpoints(hum_o)
+        flank_back = np.array([r_hum[0] * 0.55, max(scene_min[1] + 12.0, r_hum[1] - 14.0), r_hum[2] - 26.0], dtype=np.float64)
+        bay_defs.append(("wing_inner_sail", (r_hum, t_hum, flank_back)))
+
+    # Project texels of each matching bay onto exact 3D finger-to-finger sector (s, t)
+    bay_map = {k: v for k, v in bay_defs}
+    for bay_name, (orig_p, tip_a, tip_b) in bay_map.items():
+        if bay_name.endswith("_quad"):
+            continue
+        bay_o = left_obbs.get(bay_name)
+        if bay_o is None:
+            continue
+        b_idx = bay_o["idx"]
+        pix_m = (elem_id_map == b_idx) & island_mask
+        if not np.any(pix_m):
+            continue
+        pts = world_pos[pix_m].astype(np.float64)
+        e1 = tip_a - orig_p
+        e2 = tip_b - orig_p
+        a11 = float(np.dot(e1, e1)) + 1e-8
+        a12 = float(np.dot(e1, e2))
+        a22 = float(np.dot(e2, e2)) + 1e-8
+        det = a11 * a22 - a12 * a12
+        if abs(det) < 1e-6:
+            continue
+        rel = pts - orig_p[None, :]
+        d1 = rel @ e1
+        d2 = rel @ e2
+        s = (a22 * d1 - a12 * d2) / det
+        t = (-a12 * d1 + a11 * d2) / det
+
+        quad_key = f"{bay_name}_quad"
+        if quad_key in bay_map:
+            # Quad bay: union of leading triangle AND trailing triangle (smooth elbow-to-flank / wrist-to-elbow sweep!)
+            o2, ta2, tb2 = bay_map[quad_key]
+            q1, q2 = ta2 - o2, tb2 - o2
+            qa11, qa12, qa22 = float(np.dot(q1, q1)) + 1e-8, float(np.dot(q1, q2)), float(np.dot(q2, q2)) + 1e-8
+            qdet = qa11 * qa22 - qa12 * qa12
+            if abs(qdet) > 1e-6:
+                rq = pts - o2[None, :]
+                s2 = (qa22 * (rq @ q1) - qa12 * (rq @ q2)) / qdet
+                t2 = (-qa12 * (rq @ q1) + qa11 * (rq @ q2)) / qdet
+                in_tri1 = (s >= -0.05) & (t >= -0.05) & ((s + t) <= 1.07)
+                in_tri2 = (s2 >= -0.05) & (t2 >= -0.05) & ((s2 + t2) <= 1.07)
+                in_sec = in_tri1 | in_tri2
+                if bay_name == "wing_inner_sail":
+                    # Smooth u from elbow (0) -> shoulder/flank (1), v from humerus (0) -> trailing arch (1)
+                    r_val = np.where(in_tri2, np.clip(s2 + t2, 0.0, 1.05), np.clip(t + 0.35 * s, 0.0, 1.05))
+                    u_val = np.where(in_tri2, np.clip(t2 / np.maximum(0.05, s2 + t2), 0.0, 1.0), np.clip(1.0 - s, 0.0, 1.0))
+                else:
+                    r_val = np.where(in_tri1, np.clip(s + 0.35 * t, 0.0, 1.05), np.clip(s2 + t2, 0.0, 1.05))
+                    u_val = np.where(in_tri1, np.clip(t / np.maximum(0.05, s + t), 0.0, 1.0), np.clip(0.50 + 0.50 * (t2 / np.maximum(0.05, s2 + t2)), 0.0, 1.0))
+                wing_bay_u[pix_m] = np.clip(u_val, 0.0, 1.0).astype(np.float32)
+                wing_bay_v[pix_m] = np.clip(r_val, 0.0, 1.0).astype(np.float32)
+                wing_bay_mask[pix_m] = in_sec.astype(np.float32)
+                continue
+
+        # Standard finger-to-finger triangular sector (with 4.5% tuck under both spars so zero gaps!)
+        r_sum = s + t
+        in_sec = (s >= -0.045) & (t >= -0.045) & (r_sum >= -0.02) & (r_sum <= 1.045)
+        u_val = np.clip(t / np.maximum(0.02, r_sum), 0.0, 1.0)
+        v_val = np.clip(r_sum, 0.0, 1.0)
+        wing_bay_u[pix_m] = u_val.astype(np.float32)
+        wing_bay_v[pix_m] = v_val.astype(np.float32)
+        wing_bay_mask[pix_m] = in_sec.astype(np.float32)
+
     return MeshBakeContext(
         width=W,
         height=H,
@@ -448,6 +590,9 @@ def bake_bbmodel_maps(
         wing_span_u=wing_span_u,
         wing_trail_v=wing_trail_v,
         face_is_down=face_is_down,
+        wing_bay_u=wing_bay_u,
+        wing_bay_v=wing_bay_v,
+        wing_bay_mask=wing_bay_mask,
         islands=islands,
         elem_names=elem_names,
         elem_bones=elem_bones,

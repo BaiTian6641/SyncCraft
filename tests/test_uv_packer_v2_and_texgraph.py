@@ -397,23 +397,25 @@ class TestTexGraphEngine(unittest.TestCase):
             sculpted_pinion_wing,
         )
 
-        # 1. Verify schema v3.0 multi-port, MATERIAL bus, multipass & subgraphs metadata
+        # 1. Verify schema v3.1 multi-port, MATERIAL bus, multipass, drivers & subgraphs metadata
         schema = export_node_schema_json()
-        self.assertEqual(schema["schema_version"], "3.0")
+        self.assertEqual(schema["schema_version"], "3.1")
         self.assertTrue(schema["supports_multi_port"])
         self.assertTrue(schema["supports_material_bus"])
         self.assertTrue(schema["supports_multipass"])
+        self.assertTrue(schema["supports_param_drivers"])
+        self.assertTrue(schema["supports_generate_iterate_simulate_animate"])
         self.assertIn("Material Bus (PBR)", schema["categories"])
-        self.assertGreaterEqual(schema["subgraph_count"], 5)
+        self.assertGreaterEqual(schema["subgraph_count"], 7)
         self.assertIn("sculpted_pinion_wing_pbr", SUBGRAPH_REGISTRY)
         self.assertIn("dragon_armor_plates_pbr", SUBGRAPH_REGISTRY)
 
-        # 2. Multi-pass Temple Carved Stone with Substance Height-Blend & v3.0 lossless JSON round-trip!
+        # 2. Multi-pass Temple Carved Stone with Substance Height-Blend & v3.0/3.1 lossless JSON round-trip!
         g = build_temple_carved_stone(size=32)
         self.assertEqual(len(g.passes), 4)
         self.assertIsNotNone(g.output_material_node)
         rec = g.to_recipe()
-        self.assertEqual(rec["version"], "3.0")
+        self.assertIn(rec["version"], ("3.0", "3.1"))
         self.assertEqual(len(rec["passes"]), 4)
         self.assertEqual(rec["output_material"], g.output_material_node)
 
@@ -492,6 +494,184 @@ class TestTexGraphEngine(unittest.TestCase):
         self.assertGreater(float((pw["alpha"] > 0.5).mean()), 0.40)
         self.assertGreater(float(pw["metallic"].max()), 0.85)
         self.assertGreater(float(pw["glow_mask"].max()), 0.60)
+
+    def test_v5_generate_iterate_simulate_animate_baked_pbr_and_plugin(self) -> None:
+        import shutil
+        import subprocess
+        from synccraft.backends.blockbench_plugin_bridge import BlockbenchBridgeDispatcher
+        from synccraft.texgraph import (
+            SUBGRAPH_REGISTRY,
+            anatomical_muscle_scales,
+            build_arcane_ember_vfx_block,
+            colossal_dragon_membrane,
+            eval_anim_driver,
+            export_node_schema_json,
+            feedback_step_sequence,
+            fluid_smoke_sim_field,
+            is_material_bus,
+            iterate_inline,
+            particle_sim_field,
+        )
+
+        # 1. Schema v3.1 + Generate/Iterate/Simulate/Animate ops & subgraphs
+        schema = export_node_schema_json()
+        self.assertEqual(schema["schema_version"], "3.1")
+        self.assertTrue(schema["supports_param_drivers"])
+        self.assertTrue(schema["supports_generate_iterate_simulate_animate"])
+        all_ops = {n["op"] for items in schema["nodes_by_category"].values() for n in items}
+        for op_name in (
+            "anim_driver",
+            "iterate_inline",
+            "feedback_loop",
+            "particle_sim",
+            "fluid_smoke_sim",
+            "anatomical_muscle_scales",
+            "colossal_dragon_membrane",
+        ):
+            self.assertIn(op_name, all_ops)
+        self.assertIn("anatomical_muscle_scales_pbr", SUBGRAPH_REGISTRY)
+        self.assertIn("colossal_dragon_membrane_pbr", SUBGRAPH_REGISTRY)
+
+        # 2. Seamless Timeline Animation Drivers (wavetables, circular looping wiggler, eased keyframes)
+        w0 = eval_anim_driver(0.0, kind="wiggler", min_val=0.2, max_val=0.9, octaves=3, seed=11)
+        w1 = eval_anim_driver(1.0, kind="wiggler", min_val=0.2, max_val=0.9, octaves=3, seed=11)
+        self.assertAlmostEqual(w0, w1, places=5)
+        self.assertGreaterEqual(w0, 0.2 - 1e-5)
+        self.assertLessEqual(w0, 0.9 + 1e-5)
+        kf_mid = eval_anim_driver(0.5, kind="keyframes", keyframes=[[0.0, 0.0, "smoothstep"], [0.5, 1.0, "smoothstep"], [1.0, 0.0]])
+        self.assertAlmostEqual(kf_mid, 1.0, places=5)
+
+        # 3. Iterate Inline + Stateful Feedback Loop + Looping Particles + 2D Fluid Smoke Sim
+        base = np.linspace(0.0, 1.0, 32 * 32, dtype=np.float32).reshape(32, 32)
+        it_out = iterate_inline(base, mode="warp_cascade", steps=3, strength=0.3, decay=0.65, seed=7)
+        self.assertEqual(it_out.shape, (32, 32))
+        fb_seq = feedback_step_sequence(lambda ph: np.roll(base, int(ph * 4), axis=1), num_frames=4, pre_roll=2, decay=0.75, drift_x_px=1.0, blur_radius=1)
+        self.assertEqual(len(fb_seq), 4)
+        self.assertEqual(fb_seq[0].shape, (32, 32))
+        ps = particle_sim_field(32, 32, count=24, phase=0.5, trail_steps=4, seed=9)
+        self.assertEqual(ps["density"].shape, (32, 32))
+        self.assertEqual(ps["rgba"].shape, (32, 32, 4))
+        self.assertGreater(float(ps["density"].max()), 0.25)
+        fs = fluid_smoke_sim_field(32, 32, steps=8, phase=0.25, seed=5)
+        self.assertEqual(fs["density"].shape, (32, 32))
+        self.assertEqual(fs["temperature"].shape, (32, 32))
+        self.assertGreater(float(fs["density"].max()), 0.20)
+
+        # 4. Arcane Ember VFX 4-Pass Recipe v3.1 Driver Round-Trip + Baked PBR Format + CLI `bake`
+        g_vfx = build_arcane_ember_vfx_block(size=32)
+        self.assertEqual(len(g_vfx.passes), 4)
+        self.assertGreaterEqual(len(g_vfx.param_drivers), 1)
+        rec = g_vfx.to_recipe()
+        self.assertEqual(rec["version"], "3.1")
+        self.assertIn("drivers", rec)
+        self.assertGreaterEqual(len(rec["drivers"]), 1)
+        g_rt = TexGraph.from_recipe(rec)
+        self.assertEqual(len(g_rt.param_drivers), len(g_vfx.param_drivers))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            td = Path(tmp)
+            pkg = g_rt.export_baked_pbr(td, stem="ember_test", preset="studio_hero", embed_maps_in_manifest=True)
+            self.assertTrue((td / "ember_test_baked.png").is_file())
+            self.assertTrue((td / "ember_test.synccraft.pbr.json").is_file())
+            manifest = json.loads((td / "ember_test.synccraft.pbr.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["schema"], "synccraft.pbr.bundle/1.0")
+            self.assertIn("embedded_data_urls", manifest)
+            self.assertIn("labpbr_n", manifest["embedded_data_urls"])
+            self.assertIn("bedrock_mer", manifest["embedded_data_urls"])
+            self.assertIn("baked", manifest["embedded_data_urls"])
+
+            # CLI `synccraft texgraph bake` smoke test
+            rc = cli_main([
+                "texgraph", "bake", "preset:arcane_ember_vfx",
+                "--out-dir", str(td / "cli_bake"), "--stem", "vfx_cli", "--size", "32", "--preset", "dramatic_rim", "--embed-manifest",
+            ])
+            self.assertEqual(rc, 0)
+            self.assertTrue((td / "cli_bake" / "vfx_cli_baked.png").is_file())
+            self.assertTrue((td / "cli_bake" / "vfx_cli.synccraft.pbr.json").is_file())
+
+        # 5. Colossal Dragon Membrane & 3D Muscle-Fitted Scales + Wing Bay Channels
+        uu, vv = np.meshgrid(np.linspace(0.0, 1.0, 48, dtype=np.float32), np.linspace(0.0, 1.0, 48, dtype=np.float32))
+        cm = colossal_dragon_membrane(uu, vv, tendon_ribs=3, backlit_sss=0.88)
+        self.assertTrue(is_material_bus(cm))
+        # Fingertip anchoring: u=0.01 and u=0.99 stay solid all the way near v=0.95 while mid-arch scoops cleanly!
+        self.assertGreater(float(cm["alpha"][42, 1]), 0.5)
+        self.assertGreater(float(cm["alpha"][42, 46]), 0.5)
+        self.assertLess(float(cm["alpha"][46, 24]), 0.5)
+        self.assertGreater(float(cm["tendon_mask"].max()), 0.70)
+        self.assertGreater(float(cm["sss"].max()), 0.65)
+
+        prog = parse_program(_CREATURE_DSL)
+        scene = compile_geometry(prog)
+        sem = pack_semantic_uv_atlas(prog, scene, padding=1, mirror_lr_uv="adaptive")
+        atlas = {"width": sem["width"], "height": sem["height"], "faces": sem["faces"], "rgba": np.full((sem["height"], sem["width"], 4), 200, dtype=np.uint8)}
+        bb = export_bbmodel(scene, name="muscle_test", atlas=atlas, program=prog)
+        ctx = bake_bbmodel_maps(bb)
+        self.assertEqual(ctx.wing_bay_u.shape, (ctx.height, ctx.width))
+        self.assertEqual(ctx.wing_bay_mask.shape, (ctx.height, ctx.width))
+        ms = anatomical_muscle_scales(ctx.world_pos_norm, ctx.world_normal, ctx.baked_ao, ctx.edge_bevel, ctx.joint_cavity, ctx.local_uv)
+        self.assertTrue(is_material_bus(ms))
+        self.assertEqual(ms["albedo"].shape, (ctx.height, ctx.width, 4))
+
+        # 6. Bridge `pbr_rebuild` Endpoint
+        disp = BlockbenchBridgeDispatcher()
+        res = disp.dispatch("pbr_rebuild", {"preset": "arcane_ember_vfx", "size": 32, "lighting_preset": "studio_hero", "embed_maps": True})
+        self.assertTrue(res["ok"])
+        self.assertTrue(res["baked_data_url"].startswith("data:image/png;base64,"))
+        self.assertEqual(res["manifest"]["schema"], "synccraft.pbr.bundle/1.0")
+
+        # 7. Blockbench 5 PBR Rebuilder Plugin JavaScript Runtime Verification (`node` or macOS JavaScriptCore `jsc`)
+        plugin_js = Path(__file__).resolve().parents[1] / "editors" / "blockbench-pbr-rebuilder" / "synccraft_pbr_rebuilder.js"
+        self.assertTrue(plugin_js.is_file())
+        js_bin = shutil.which("node") or ("/System/Library/Frameworks/JavaScriptCore.framework/Versions/A/Helpers/jsc" if Path("/System/Library/Frameworks/JavaScriptCore.framework/Versions/A/Helpers/jsc").is_file() else None)
+        if js_bin:
+            is_node = Path(js_bin).name == "node"
+            harness = (
+                f"var _p = {json.dumps(str(plugin_js))};\n"
+                + ("var P = require(_p);\n" if is_node else "var module = { exports: {} }; load(_p); var P = module.exports;\n")
+                + """
+if (!P || !P.BAKE_PRESETS || !P.unpackPbrChannels || !P.bakePbrPixels || !P.createPbrRebuilderController) throw new Error("Missing exports");
+var W = 4, H = 4, N = W * H;
+var alb = new Uint8ClampedArray(N * 4);
+var nMap = new Uint8ClampedArray(N * 4);
+var sMap = new Uint8ClampedArray(N * 4);
+var merMap = new Uint8ClampedArray(N * 4);
+for (var i = 0; i < N; i++) {
+  alb[i*4]=80; alb[i*4+1]=120; alb[i*4+2]=180; alb[i*4+3]=255;
+  nMap[i*4]=145; nMap[i*4+1]=112; nMap[i*4+2]=240; nMap[i*4+3]=255;
+  sMap[i*4]=210; sMap[i*4+1]=238; sMap[i*4+2]=40; sMap[i*4+3]=128;
+  merMap[i*4]=200; merMap[i*4+1]=50; merMap[i*4+2]=70; merMap[i*4+3]=255;
+}
+var ch1 = P.unpackPbrChannels(W, H, { labpbrN: nMap, labpbrS: sMap });
+if (!(ch1.metallic[0] > 0.8 && ch1.roughness[0] < 0.25 && ch1.emissive[0] > 0.4)) throw new Error("LabPBR unpack failed");
+var ch2 = P.unpackPbrChannels(W, H, { bedrockMer: merMap });
+if (!(ch2.metallic[0] > 0.7 && ch2.emissive[0] > 0.15 && ch2.roughness[0] < 0.35)) throw new Error("MER unpack failed");
+var baked = P.bakePbrPixels(W, H, alb, { labpbrN: nMap, labpbrS: sMap }, { preset: "studio_hero" });
+if (baked.length !== N * 4 || baked[3] !== 255) throw new Error("bakePbrPixels failed");
+var actions = [], undoStart = 0, undoDone = 0;
+function FakeAction(id, cfg) { this.id = id; this.cfg = cfg; this.deleted = false; this.delete = function(){ this.deleted = true; }; }
+var fakeMat = { map: { image: { width: W, height: H }, needsUpdate: false } };
+var fakeMesh = { material: fakeMat };
+var fakeTex = { name: "dragon", width: W, height: H, ctx: { getImageData: function(){ return { data: new Uint8ClampedArray(alb) }; }, putImageData: function(){} }, updateChangesAfterEdit: function(){ this.edited = true; } };
+var rt = {
+  Action: FakeAction,
+  MenuBar: { addAction: function(a){ actions.push(a); } },
+  Undo: { initEdit: function(){ undoStart++; }, finishEdit: function(){ undoDone++; } },
+  Blockbench: { showQuickMessage: function(){} },
+  Texture: { selected: fakeTex, all: [fakeTex] },
+  Cube: { all: [{ mesh: fakeMesh }] },
+  Canvas: { scene: { add: function(){}, remove: function(){} } }
+};
+var ctrl = P.createPbrRebuilderController(rt);
+ctrl.onload();
+if (actions.length !== 4) throw new Error("Expected 4 Blockbench actions, got " + actions.length);
+ctrl.loadManifestObject({ format: "synccraft.pbr.bundle", stem: "dragon", width: W, height: H, maps: { labpbr_n: "d_n.png" } });
+ctrl.onunload();
+if (!actions[0].deleted) throw new Error("onunload did not clean up actions");
+"""
+            )
+            cmd = [js_bin, "-e", harness]
+            r = subprocess.run(cmd, capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, f"Plugin JS runtime test failed: {r.stderr or r.stdout}")
 
 
 if __name__ == "__main__":

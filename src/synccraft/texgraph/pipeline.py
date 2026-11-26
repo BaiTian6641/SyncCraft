@@ -760,3 +760,63 @@ def _sg_emerald_moss(
     h_lift = g.levels(turing, out_min=0.58, out_max=0.98, id=f"{prefix}_h")
     ao = g.ao_from_height(h_lift, radius=3, strength=0.85, id=f"{prefix}_ao")
     return g.material_make(alb, height=h_lift, roughness=0.88, metallic=0.0, ao=ao, sss=0.35, porosity=0.85, normal_strength=2.6, id=f"{prefix}_mat")
+
+
+@register_subgraph(
+    "anatomical_muscle_scales_pbr",
+    description="3D-anatomical scale-to-muscle texture fitting MaterialBus (directional muscle flow + osteoderm crowns + belly countershading).",
+    defaults={
+        "plate_cols": 24,
+        "plate_rows": 28,
+        "muscle_groove_depth": 0.42,
+        "scale_relief": 0.36,
+        "roughness_base": 0.40,
+        "metallic_crown": 0.14,
+        "smooth_blend": 0.62,
+        "quantize_steps": 7,
+    },
+)
+def _sg_anatomical_muscle_scales(
+    g: Any,
+    *,
+    prefix: str,
+    inputs: dict[str, str],
+    seed: int = 42,
+    **kw: Any,
+) -> str:
+    return g.add("anatomical_muscle_scales", id=f"{prefix}_mat", seed=seed, **kw)
+
+
+@register_subgraph(
+    "colossal_dragon_membrane_pbr",
+    description="Monumental full-chord dragon wing membrane MaterialBus (curved tendon ribs + diagonal pleats + tattered arch + backlit SSS).",
+    defaults={
+        "arch_depth": 0.26,
+        "arches": 1,
+        "tatter_strength": 0.09,
+        "tendon_ribs": 3,
+        "pleat_count": 9.0,
+        "pleat_strength": 0.18,
+        "backlit_sss": 0.85,
+        "smooth_blend": 0.74,
+        "quantize_steps": 8,
+    },
+)
+def _sg_colossal_dragon_membrane(
+    g: Any,
+    *,
+    prefix: str,
+    inputs: dict[str, str],
+    seed: int = 42,
+    **kw: Any,
+) -> str:
+    span_u = inputs.get("span_u") or (g.mesh_channel("wing_span_u", id=f"{prefix}_su") if g.mesh_context else g.gradient("horizontal", id=f"{prefix}_su"))
+    trail_v = inputs.get("trail_v") or (g.mesh_channel("wing_trail_v", id=f"{prefix}_tv") if g.mesh_context else g.gradient("vertical", id=f"{prefix}_tv"))
+    is_dn = inputs.get("face_is_down") or (g.mesh_channel("face_is_down", id=f"{prefix}_dn") if g.mesh_context else g.constant(0.0, id=f"{prefix}_dn"))
+    return g.add(
+        "colossal_dragon_membrane",
+        id=f"{prefix}_mat",
+        inputs={"span_u": span_u, "trail_v": trail_v, "face_is_down": is_dn},
+        seed=seed,
+        **kw,
+    )

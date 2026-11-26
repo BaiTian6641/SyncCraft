@@ -216,39 +216,123 @@ def build_stylized_wood_and_foliage(size: int = 32, *, seed: int = 207) -> TexGr
 
 
 def build_dragon_wing_membrane_tile(size: int = 64, *, seed: int = 515) -> TexGraph:
-    """Dedicated Backlit Translucent Smooth-Gradient Dragon Wing Membrane Showcase (Inspired by Images 1 & 4!)."""
+    """Monumental Normal Dragon Wing Membrane Studio Showcase (Arched Tendon Ribs + Diagonal Pleats + Battle Tatters + Backlit SSS)."""
     g = TexGraph(size, size, tileable=False, seed=seed, name="dragon_wing_membrane_studio")
-    u = g.gradient("horizontal", id="wu")
-    v = g.levels(g.gradient("vertical", id="wv"), invert=True, id="wv_up")
+    with g.pass_("pass_1_coords", title="Wing Coords", description="Aligned span_u & trail_v wing coordinates.") as p1:
+        u = g.gradient("horizontal", id="wu")
+        v = g.gradient("vertical", id="wv")
+        p1.preview_ref = v
+    with g.pass_("pass_2_membrane", title="Colossal Membrane", description="Bone-hugging AO, curved cross-bay tendon ribs, diagonal pleats & tattered concave arch.") as p2:
+        wing_mat = g.colossal_dragon_membrane(
+            u,
+            v,
+            palette_stops=[
+                (0.00, "#260F16"),
+                (0.24, "#5C2122"),
+                (0.52, "#9F4732"),
+                (0.78, "#DD8E58"),
+                (0.94, "#F8CD94"),
+                (1.00, "#FFF5DC"),
+            ],
+            rim_color="#3E1719",
+            tendon_color="#401A1B",
+            arch_depth=0.24,
+            arches=1,
+            tatter_strength=0.085,
+            tendon_ribs=3,
+            pleat_count=9.0,
+            pleat_strength=0.18,
+            backlit_sss=0.88,
+            smooth_blend=0.76,
+            quantize_steps=9,
+            seed=seed,
+            id="amber_dragon_wing",
+        )
+        p2.preview_ref = f"{wing_mat}.albedo"
+    g.set_output_material(wing_mat, normal_strength=2.5)
+    return g
 
-    w = g.smooth_wing(
-        u,
-        v,
-        palette_stops=[
-            (0.00, "#3D181E"),
-            (0.24, "#7C3028"),
-            (0.52, "#C46E41"),
-            (0.80, "#EAB27D"),
-            (1.00, "#FFF2D6"),
-        ],
-        rim_color="#59221E",
-        arch_depth=0.22,
-        arches=1,
-        tatter_strength=0.05,
-        fold_count=5.0,
-        fold_strength=0.14,
-        glow_center_strength=0.92,
-        bone_shadow_width=0.24,
-        rim_width=0.04,
-        smooth_blend=0.78,
-        quantize_steps=9,
-        seed=seed,
-        id="amber_dragon_wing",
-    )
-    pbr_nrm = g.height_to_normal(w["height"], strength=2.2, id="wing_normal")
-    pbr_sss = g.math(w["alpha"], g.constant(0.82, id="w_sss"), op="mul", id="wing_sss")
-    pbr_rough = g.constant(0.52, id="wing_rough")
-    g.set_output(w["rgba"], height_node=w["height"], normal_node=pbr_nrm, roughness_node=pbr_rough, metallic_node=g.constant(0.0, id="w_met"), sss_node=pbr_sss, normal_strength=2.2)
+
+def build_arcane_ember_vfx_block(size: int = 32, *, seed: int = 808) -> TexGraph:
+    """Pixel-Composer-Parity 4-Stage Pipeline Showcase: Generate -> Iterate -> Simulate -> Animate (16-Frame Looping PBR)."""
+    g = TexGraph(size, size, tileable=True, seed=seed, name="arcane_ember_vfx_block")
+
+    # Stage 1: GENERATE — Dark Basalt Frame & Glowing Forge Conduit Mask
+    with g.pass_("pass_1_generate", title="Generate Base", description="Basalt masonry tiles & forge vent emitter mask.", color="#1E293B") as p1:
+        plates = g.layered_plates(cols=3, rows=3, stagger=0.5, gap=0.14, top_rim=0.22, variance=0.18, seed=seed, id="basalt_plates")
+        seams = g.layered_plates(cols=3, rows=3, stagger=0.5, gap=0.16, output="seam", seed=seed, id="basalt_seams")
+        sh = g.shade(plates, use_mesh=False, bump_strength=1.9, spec_strength=0.22, id="basalt_sh")
+        basalt_alb = g.multi_stop_gradient(
+            sh,
+            stops=[(0.0, "#120D1D"), (0.35, "#231F38"), (0.70, "#3D3C5C"), (1.0, "#757BA3")],
+            smooth_blend=0.62,
+            quantize_steps=6,
+            id="basalt_rgba",
+        )
+        basalt_mat = g.material_make(basalt_alb, height=plates, roughness=0.52, metallic=0.12, ao=g.ao_from_height(plates, radius=3, id="basalt_ao"), normal_strength=2.8, id="basalt_mat")
+        p1.preview_ref = f"{basalt_mat}.albedo"
+
+    # Stage 2: ITERATE — Cascading Inline Curl-Warp Erosion on Forge Seam Energy
+    with g.pass_("pass_2_iterate", title="Iterate Inline", description="Multi-step recursive curl-warp cascade along forge fissures.", color="#431407") as p2:
+        warped_seams = g.iterate_inline(seams, mode="warp_cascade", steps=4, strength=0.28, decay=0.78, seed=seed + 13, id="iterated_fissures")
+        p2.preview_ref = warped_seams
+
+    # Stage 3: SIMULATE — 2D Fluid Smoke/Flame Advection + Looping Ember Particles + Feedback Trail!
+    with g.pass_("pass_3_simulate", title="Simulate Fluid & Sparks", description="Semi-Lagrangian 2D flame advection + looping pixel particles + temporal feedback trails.", color="#7C2D12") as p3:
+        fluid = g.fluid_smoke_sim(
+            source_mask=warped_seams,
+            steps=14,
+            buoyancy=1.75,
+            curl_strength=1.95,
+            dissipation=0.92,
+            seed=seed + 29,
+            color_stops=[(0.0, "#1C0818"), (0.30, "#9A1B29"), (0.60, "#EA580C"), (0.85, "#FACC15"), (1.0, "#FFFBEB")],
+            id="forge_fluid_sim",
+        )
+        sparks = g.particle_sim(
+            count=28,
+            emitter_mask=seams,
+            vel_y=-0.65,
+            spread=0.22,
+            gravity_y=-0.12,
+            turbulence=0.25,
+            size_px=1.5,
+            trail_steps=3,
+            seed=seed + 41,
+            color_stops=[(0.0, "#EA580C"), (0.55, "#FACC15"), (1.0, "#FFFFFF")],
+            id="ember_particles",
+        )
+        # Stateful Feedback Inline buffer leaving crisp glowing smoke/spark trails across frames!
+        trails = g.feedback_loop(f"{sparks}.density", decay=0.76, drift_x_px=0.0, drift_y_px=-1.0, blur_radius=1, pre_roll=5, loop_frames=16, id="spark_feedback")
+        vfx_mask = g.math(g.math(f"{fluid}.density", warped_seams, op="max", id="fl_seam_m"), trails, op="max", id="vfx_em_mask")
+        p3.preview_ref = f"{fluid}.rgba"
+
+    # Stage 4: ANIMATE — Timeline Parameter Drivers (Wavetable + Wiggler) & Final PBR Output!
+    with g.pass_("pass_4_animate", title="Animate Drivers & PBR", description="Seamless wiggler & sine drivers pulsing glow intensity and PBR emissive output.", color="#312E81") as p4:
+        em_comp = g.emissive_composite(
+            f"{basalt_mat}.albedo",
+            vfx_mask,
+            color=f"{fluid}.rgba",
+            glow_bleed_px=2,
+            glow_strength=0.58,
+            id="animated_forge_glow",
+        )
+        final_mat = g.material_make(
+            f"{em_comp}.albedo",
+            height=f"{basalt_mat}.height",
+            normal=f"{basalt_mat}.normal",
+            roughness=g.blend(f"{basalt_mat}.roughness", g.constant(0.18, id="lava_r"), mask=vfx_mask, id="final_r"),
+            metallic=f"{basalt_mat}.metallic",
+            ao=f"{basalt_mat}.ao",
+            emissive=f"{em_comp}.emissive",
+            normal_strength=2.8,
+            id="final_arcane_ember_mat",
+        )
+        p4.preview_ref = f"{final_mat}.albedo"
+
+    # Bind real Pixel-Composer-style procedural animation drivers!
+    g.bind_driver(em_comp, "glow_strength", kind="wiggler", min_val=0.45, max_val=0.78, freq=1.0, octaves=3, seed=seed + 7)
+    g.set_output_material(final_mat, normal_strength=2.8)
     return g
 
 
@@ -838,6 +922,200 @@ def build_rhenoplos_texgraph(mesh_ctx: MeshBakeContext, *, seed: int = 3940) -> 
     return g
 
 
+def build_colossal_dragon_texgraph(mesh_ctx: MeshBakeContext, *, seed: int = 5309) -> TexGraph:
+    """5-Pass Industry-Standard Material-Bus TexGraph for Monumental Normal-Wing Dragons (Distilled from Reference Images 2, 3 & 4).
+
+    Combines:
+    - **Pass 1 (`pass_1_bake`)**: 3D geometry bake + 100% aligned top/bottom wing coords (`wing_span_u`, `wing_trail_v`, `face_is_down`).
+    - **Pass 2 (`pass_2_muscle_scales`)**: 3D-Anatomical Scale-to-Muscle Fitting (`anatomical_muscle_scales_pbr`) wrapping chunky
+      slate-obsidian & storm-teal armor plates along limbs, neck rings, ribcage & thighs with recessed muscle crevices & pale belly scutes!
+    - **Pass 3 (`pass_3_colossal_wings`)**: Colossal Full-Chord Bat-Dragon Membrane (`colossal_dragon_membrane_pbr`) with velvety
+      bone-hugging shadow, arched cross-bay tendon ribs, diagonal leathery tension pleats, backlit volcanic-amber SSS (`0.88`), & ragged battle tatters!
+    - **Pass 4 (`pass_4_grade`)**: Cool-shadow contact AO + cohesive atmospheric color grading + clean despeckle!
+    - **Pass 5 (`pass_5_ember_eyes_pbr`)**: Fluid-simulated (`fluid_smoke_sim`) + sparked (`particle_sim`) + wiggler-driven molten
+      chest core (`<= 3%` focal area like Reference Image 4!), bilateral radiant volcanic-amber gradient eyes, 100% aligned top/bottom
+      wing cutouts, and full UV island bleed padding -> `set_output_material(...)`!
+    """
+    g = TexGraph(
+        mesh_ctx.width,
+        mesh_ctx.height,
+        tileable=False,
+        seed=seed,
+        name="colossal_wing_dragon_v5_pbr",
+        mesh_context=mesh_ctx,
+    )
+
+    with g.pass_("pass_1_bake", title="3D Bake & Masks", description="3D muscle cavities, aligned wing coords & anatomical masks.", color="#1E293B") as p1:
+        baked_ao = g.mesh_channel("baked_ao", id="mesh_baked_ao")
+        flow_lit = g.body_flow_gradient("top_light_wrap", gamma=0.95, id="body_light_wrap")
+        lu = g.mesh_channel("local_u", id="mesh_lu")
+        lv = g.mesh_channel("local_v", id="mesh_lv")
+        side_s = g.mesh_channel("side_sign", id="mesh_side_sign")
+        span_u = g.mesh_channel("wing_bay_u", id="mesh_wing_bay_u")
+        trail_v = g.mesh_channel("wing_bay_v", id="mesh_wing_bay_v")
+        bay_sector_m = g.mesh_channel("wing_bay_mask", id="mesh_wing_bay_mask")
+        face_dn = g.mesh_channel("face_is_down", id="mesh_face_is_down")
+        up_down_f = g.mesh_channel("face", faces="up,down", id="wing_updown_face")
+        not_updown = g.levels(up_down_f, invert=True, id="not_updown")
+
+        wing_mem_m = g.mesh_channel("element", pattern=r"(wing_mem|wing_lobe|wing_bay|membrane|patagium|wing_sail|wing_inner_sail|inner_sail)", id="wing_mem_mask")
+        horn_talon_m = g.mesh_channel("element", pattern=r"(horn|claw|talon|spike|spur|spine|tip_a|tip_b)", id="horn_talon_mask")
+        chest_core_m = g.mesh_channel("element", pattern=r"(ember_core|chest_core_gem|gemini_star|sternum_core|slit|gravity_)", id="ember_core_mask")
+        scute_m = g.mesh_channel("element", pattern=r"(ventral|sternum|throat|groin_bridge|belly|scute)", id="ventral_scute_mask")
+        oral_m = g.mesh_channel("element", pattern=r"(palate|pharynx|oral_floor|cheek_web|tongue)", id="oral_mask")
+        fang_m = g.mesh_channel("element", pattern=r"(teeth|fang)", id="fang_mask")
+        eye_all_m = g.mesh_channel("element", pattern=r"(^|/|__)eye_[lr]", id="eye_all_mask")
+        eye_out_m = g.mesh_channel("outward_eye", pattern=r"(^|/|__)eye_[lr]", id="eye_outward_mask")
+        mem_updown_m = g.math(wing_mem_m, up_down_f, op="mul", id="mem_updown_mask")
+        mem_side_m = g.math(wing_mem_m, not_updown, op="mul", id="mem_side_mask")
+        p1.preview_ref = baked_ao
+
+    with g.pass_("pass_2_muscle_scales", title="Muscle-Fit Scales", description="3D-fitted obsidian-slate & storm-teal osteoderm scales hugging muscle volumes.", color="#172554") as p2:
+        # 3D-Anatomical Scale-to-Muscle Fitting (inspired by Blue-Teal Wyvern Image 3 & Slate-Black Dragon Image 4!)
+        body_mat = g.use_subgraph(
+            "anatomical_muscle_scales_pbr",
+            prefix="dragon_muscle_scales",
+            seed=seed + 11,
+            plate_cols=max(20, mesh_ctx.width // 20),
+            plate_rows=max(22, mesh_ctx.height // 20),
+            scale_stops=[
+                (0.00, "#0F101E"),  # deep plum-slate muscle trough
+                (0.24, "#1F233A"),  # dark volcanic basalt scale
+                (0.50, "#31425E"),  # storm-slate / deep teal mid-plate
+                (0.76, "#4D6D8C"),  # weathered steel-teal shoulder/rib muscle crown
+                (0.92, "#7DA3BF"),  # crisp honed dorsal ridge
+                (1.00, "#C7E0F2"),  # subtle top-edge catchlight
+            ],
+            belly_stops=[
+                (0.00, "#383032"),
+                (0.42, "#7C6E63"),
+                (0.78, "#BEB099"),
+                (1.00, "#ECE2CD"),
+            ],
+            muscle_groove_depth=0.44,
+            scale_relief=0.38,
+            roughness_base=0.42,
+            metallic_crown=0.16,
+        )
+        # Warm dark obsidian-horn & ivory-tipped claws/spines
+        horn_alb = g.multi_stop_gradient(flow_lit, stops=[(0.0, "#141118"), (0.45, "#3A3138"), (0.80, "#7A6A64"), (1.0, "#D8C8B4")], smooth_blend=0.72, quantize_steps=6, id="horn_alb")
+        horn_mat = g.material_make(horn_alb, height=f"{body_mat}.height", roughness=0.28, metallic=0.20, ao=baked_ao, id="horn_mat")
+        scute_mat = g.use_subgraph(
+            "pearl_scutes_pbr",
+            prefix="ventral_scutes",
+            inputs={"ao": baked_ao},
+            seed=seed + 23,
+            stops=[(0.0, "#3D3537"), (0.38, "#7D7066"), (0.76, "#C4B69D"), (1.0, "#EFE6D2")],
+            roughness=0.48,
+            sss=0.18,
+        )
+        oral_mat = g.material_make(g.multi_stop_gradient(flow_lit, stops=[(0.0, "#2B0C18"), (1.0, "#7C223B")], smooth_blend=0.8, id="oral_alb"), roughness=0.38, ao=baked_ao, sss=0.30, id="oral_mat")
+        fang_mat = g.material_make(g.multi_stop_gradient(flow_lit, stops=[(0.0, "#AEA390"), (1.0, "#FFFDF5")], smooth_blend=0.8, id="fang_alb"), roughness=0.22, ao=baked_ao, id="fang_mat")
+
+        b1 = g.material_height_blend(body_mat, horn_mat, mask=horn_talon_m, height_offset=0.10, contrast=7.0, seam_ao_strength=0.24, id="comp_horns")
+        b2 = g.material_blend(b1, scute_mat, mask=scute_m, id="comp_scutes")
+        b3 = g.material_blend(b2, oral_mat, mask=oral_m, id="comp_oral")
+        body_full = g.material_blend(b3, fang_mat, mask=fang_m, id="body_full_mat")
+        p2.preview_ref = f"{body_full}.albedo"
+
+    with g.pass_("pass_3_colossal_wings", title="Colossal Membranes", description="Special arched-tendon, diagonal-pleated, backlit translucent dragon wing membranes.", color="#451A03") as p3:
+        # Special Monumental Bat-Dragon Wing Membrane (Image 2 plum-crimson shadow + Image 3 diagonal pleats + Image 4 curved tendon ribs + Image 1 warm amber backlit SSS!)
+        wing_mat = g.use_subgraph(
+            "colossal_dragon_membrane_pbr",
+            prefix="colossal_mem",
+            inputs={"span_u": span_u, "trail_v": trail_v, "face_is_down": face_dn},
+            seed=seed + 71,
+            palette_stops=[
+                (0.00, "#1A121D"),  # deep obsidian-plum bone-contact shadow
+                (0.24, "#3B232B"),  # rich dark gothic burgundy-umber
+                (0.50, "#6E3A36"),  # warm leathery bronze-crimson membrane
+                (0.76, "#B36345"),  # glowing backlit amber-sienna cushion
+                (0.92, "#E3A36D"),  # sunlit thin-skin subsurface warmth
+                (1.00, "#FCE2B6"),  # translucent core glow
+            ],
+            rim_color="#1E1420",
+            tendon_color="#231622",
+            arch_depth=0.25,
+            arches=1,
+            tatter_strength=0.095,
+            tendon_ribs=3,
+            pleat_count=10.0,
+            pleat_strength=0.20,
+            backlit_sss=0.88,
+            smooth_blend=0.72,
+            quantize_steps=8,
+        )
+        with_wings = g.material_blend(body_full, wing_mat, mask=wing_mem_m, id="dragon_with_wings_mat")
+        p3.preview_ref = f"{with_wings}.albedo"
+
+    with g.pass_("pass_4_grade", title="Lighting & Grade", description="Cool shadow depth, atmospheric balance & clean despeckle.", color="#0F172A") as p4:
+        graded = g.material_grade(
+            with_wings,
+            ao_bake=baked_ao,
+            ao_darken=0.18,
+            shadows=(-0.01, -0.005, 0.022),
+            midtones=(0.004, 0.002, 0.004),
+            highlights=(0.022, 0.015, 0.005),
+            vibrance=0.14,
+            contrast=1.05,
+            lift=0.01,
+            shadow_cool=0.04,
+            despeckle_threshold=0.22,
+            id="dragon_graded_mat",
+        )
+        p4.preview_ref = f"{graded}.albedo"
+
+    with g.pass_("pass_5_ember_eyes_pbr", title="Ember Core & PBR Final", description="Fluid-sim molten chest core, volcanic gradient eyes, aligned wing cutouts & island pad.", color="#7C2D12") as p5:
+        eye_sock = g.material_make(g.constant("#120A14", id="eye_sock_dark"), roughness=0.45, ao=baked_ao, id="eye_sock_mat")
+        with_sock = g.material_blend(graded, eye_sock, mask=eye_all_m, id="comp_eye_sock")
+        eye_m = g.gradient_eye_multi(
+            lu, lv, side_sign=side_s,
+            stops=[(0.0, "#7F1D1D"), (0.28, "#EA580C"), (0.62, "#FACC15"), (0.88, "#FEF9C3"), (1.0, "#FFFFFF")],
+            brow_shadow=0.38, angle_deg=-20.0, style="ember_slit", rim_color="#120912",
+            id="volcanic_eye",
+        )
+        eye_em_m = g.math(eye_out_m, f"{eye_m}.emissive_mask", op="mul", id="eye_em_masked")
+        eye_pbr = g.material_make(f"{eye_m}.albedo", height=g.constant(0.65, id="eye_hc"), roughness=0.08, ao=g.constant(1.0, id="eye_aoc"), id="eye_pbr_mat")
+        with_eyes = g.material_blend(with_sock, eye_pbr, mask=eye_out_m, id="comp_eyes")
+
+        # Animated Fluid-Sim Molten Chest Core (inspired directly by Reference Image 4!)
+        ember_fluid = g.fluid_smoke_sim(
+            steps=10, buoyancy=1.4, curl_strength=1.6, dissipation=0.92, seed=seed + 91,
+            color_stops=[(0.0, "#991B1B"), (0.30, "#F97316"), (0.68, "#FDE047"), (1.0, "#FFFFFF")],
+            id="chest_ember_fluid",
+        )
+        ember_core_pbr = g.material_make(
+            f"{ember_fluid}.rgba",
+            height=g.constant(0.85, id="ember_hc"),
+            roughness=0.12,
+            ao=g.constant(1.0, id="ember_aoc"),
+            id="ember_core_pbr_mat",
+        )
+        with_ember_core = g.material_blend(with_eyes, ember_core_pbr, mask=chest_core_m, id="comp_ember_core")
+        core_pulsed = g.pulse(chest_core_m, min_val=0.88, max_val=1.0, freq=1.0, id="core_pulsed")
+        all_em_m = g.math(core_pulsed, eye_em_m, op="max", id="all_em_mask")
+        all_em_c = g.blend(f"{ember_fluid}.rgba", f"{eye_m}.albedo", mask=eye_out_m, id="all_em_col")
+        em_comp = g.emissive_composite(f"{with_ember_core}.albedo", all_em_m, color=all_em_c, glow_bleed_px=3, glow_strength=0.78, id="dragon_ember_glow")
+
+        lit_mat = g.material_make(
+            f"{em_comp}.albedo",
+            height=f"{with_ember_core}.height", normal=f"{with_ember_core}.normal",
+            roughness=f"{with_ember_core}.roughness", metallic=f"{with_ember_core}.metallic",
+            ao=f"{with_ember_core}.ao", emissive=f"{em_comp}.emissive",
+            sss=f"{with_ember_core}.sss", porosity=f"{with_ember_core}.porosity",
+            id="dragon_lit_mat",
+        )
+        bay_alpha = g.math(f"{wing_mat}.alpha", bay_sector_m, op="mul", id="dragon_bay_sector_alpha")
+        cut_1 = g.material_set_alpha(lit_mat, bay_alpha, mask=mem_updown_m, id="dragon_cut_wings")
+        cut_2 = g.material_set_alpha(cut_1, g.constant(0.0, id="zero_a"), mask=mem_side_m, id="dragon_clean_wing_edges")
+        final_mat = g.material_pad_islands(cut_2, id="final_colossal_dragon_mat")
+        p5.preview_ref = f"{final_mat}.albedo"
+
+    g.bind_driver(em_comp, "glow_strength", kind="wiggler", min_val=0.48, max_val=0.72, freq=1.0, octaves=3, seed=seed + 5)
+    g.set_output_material(final_mat, normal_strength=2.6)
+    return g
+
+
 PRESET_REGISTRY: dict[str, Any] = {
     "neon_hex_conduit": build_neon_hex_block,
     "neon_hex_block": build_neon_hex_block,
@@ -846,6 +1124,7 @@ PRESET_REGISTRY: dict[str, Any] = {
     "molten_dragon_scales": build_molten_scales_block,
     "stylized_wood_and_foliage": build_stylized_wood_and_foliage,
     "dragon_wing_membrane": build_dragon_wing_membrane_tile,
+    "arcane_ember_vfx": build_arcane_ember_vfx_block,
     "aethelion_prism_blade": build_prism_blade_item,
     "prism_blade_item": build_prism_blade_item,
 }
