@@ -142,6 +142,7 @@ def main(argv=None):
     tg_repack.add_argument("--zone-map", type=Path, help="optional PNG path for visual UV Zone Diagnostic Map")
 
     tg_subs.add_parser("presets", help="list available built-in TexGraph presets")
+    tg_subs.add_parser("schema", help="emit UI-ready typed JSON schema for all TexGraph nodes")
 
     args = parser.parse_args(argv)
     try:
@@ -186,6 +187,10 @@ def main(argv=None):
 
             if args.tg_cmd == "presets":
                 print(_json({"presets": sorted(PRESET_REGISTRY.keys())}))
+                return 0
+            if args.tg_cmd == "schema":
+                from synccraft.texgraph.registry import export_node_schema_json
+                print(_json(export_node_schema_json()))
                 return 0
             if args.tg_cmd == "repack-uv":
                 doc = json.loads(args.input.read_text(encoding="utf-8"))

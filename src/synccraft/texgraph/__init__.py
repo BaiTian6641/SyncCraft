@@ -14,6 +14,15 @@ Pure vectorized NumPy/Pillow DAG node engine for expert pixel-art textures:
 from __future__ import annotations
 
 from .core import EvalResult, NodeSpec, TexGraph
+from .generators_gradients import (
+    body_flow_gradient,
+    cosine_gradient,
+    gradient_field,
+    multi_stop_gradient,
+    oklab_to_srgb,
+    per_island_gradient,
+    spline_path_gradient,
+)
 from .generators_noise import (
     bayer_matrix,
     domain_warp,
@@ -23,6 +32,15 @@ from .generators_noise import (
     perlin_noise,
     value_noise,
     voronoi_noise,
+)
+from .generators_painterly import (
+    directional_brushstrokes,
+    gradient_eye_paint,
+    layered_scale_plates,
+    smooth_wing_membrane,
+    stylized_foliage_clusters,
+    stylized_wood_planks,
+    temple_carved_stone,
 )
 from .generators_patterns import (
     brick_pattern,
@@ -40,6 +58,25 @@ from .generators_patterns import (
 )
 from .inspector import export_html_inspector
 from .mesh_baker import MeshBakeContext, bake_bbmodel_maps
+from .ops_fx_color import (
+    ao_from_height,
+    bloom_glow,
+    color_balance,
+    curves_remap,
+    directional_blur,
+    gaussian_blur,
+    morph_op,
+    normal_blend_rnm,
+    oklch_adjust,
+    polar_warp,
+    posterize_soft,
+    sdf_from_mask,
+    sobel_edges,
+    tile_transform,
+    twirl_distort,
+    unsharp_mask,
+    wave_distort,
+)
 from .pbr import (
     LABPBR_METAL_CODES,
     export_pbr_bundle,
@@ -68,12 +105,16 @@ from .pixel_art_ops import (
 from .presets import (
     PRESET_REGISTRY,
     build_aethelion_texgraph,
+    build_dragon_wing_membrane_tile,
     build_molten_scales_block,
     build_mossy_carved_brick,
     build_neon_hex_block,
     build_prism_blade_item,
     build_rhenoplos_texgraph,
+    build_stylized_wood_and_foliage,
+    build_temple_carved_stone,
 )
+from .registry import NODE_CATALOG, NodeMeta, ParamSchema, PortSchema, export_node_schema_json, save_node_schema_json
 from .simulation_filters import (
     GRAY_SCOTT_PRESETS,
     anisotropic_kuwahara,

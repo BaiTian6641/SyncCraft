@@ -18,6 +18,14 @@ from typing import Any
 
 import numpy as np
 
+from .generators_gradients import (
+    body_flow_gradient,
+    cosine_gradient,
+    gradient_field,
+    multi_stop_gradient,
+    per_island_gradient,
+    spline_path_gradient,
+)
 from .generators_noise import (
     bayer_matrix,
     domain_warp,
@@ -28,6 +36,15 @@ from .generators_noise import (
     uv_grid,
     value_noise,
     voronoi_noise,
+)
+from .generators_painterly import (
+    directional_brushstrokes,
+    gradient_eye_paint,
+    layered_scale_plates,
+    smooth_wing_membrane,
+    stylized_foliage_clusters,
+    stylized_wood_planks,
+    temple_carved_stone,
 )
 from .generators_patterns import (
     brick_pattern,
@@ -44,6 +61,25 @@ from .generators_patterns import (
     truchet_pattern,
 )
 from .mesh_baker import MeshBakeContext, bake_bbmodel_maps
+from .ops_fx_color import (
+    ao_from_height,
+    bloom_glow,
+    color_balance,
+    curves_remap,
+    directional_blur,
+    gaussian_blur,
+    morph_op,
+    normal_blend_rnm,
+    oklch_adjust,
+    polar_warp,
+    posterize_soft,
+    sdf_from_mask,
+    sobel_edges,
+    tile_transform,
+    twirl_distort,
+    unsharp_mask,
+    wave_distort,
+)
 from .pbr import (
     export_pbr_bundle,
     height_to_normal_map,
@@ -86,6 +122,7 @@ _TIME_AWARE_OPS: frozenset[str] = frozenset(
     {
         "perlin", "fbm", "voronoi", "domain_warp", "noise_3d",
         "radial_rings", "energy_veins", "scroll", "pulse", "sprite_mask",
+        "cosine_gradient", "wave_distort",
     }
 )
 
@@ -143,9 +180,48 @@ class TexGraph:
         # First-class PBR channel outputs (height, normal, roughness, metallic, ao, sss, porosity)
         self.pbr_nodes: dict[str, str] = {}
         self.pbr_config: dict[str, Any] = {"normal_strength": 2.4, "dielectric_f0": 0.04}
+        # Future-UI-ready graph metadata: exposed parameters & visual node groups/frames
+        self.exposed_params: dict[str, dict[str, Any]] = {}
+        self.groups: list[dict[str, Any]] = []
         self._counter = 0
         self._static_cache: dict[str, np.ndarray] = {}
         self._dynamic_ids: set[str] = set()
+
+    def expose_param(
+        self,
+        public_name: str,
+        node_id: str,
+        param_key: str,
+        *,
+        label: str | None = None,
+        min_val: float | None = None,
+        max_val: float | None = None,
+        step: float | None = None,
+    ) -> "TexGraph":
+        """Promote a node parameter to the top-level graph API (Pixel Composer Exposed Parameter parity)."""
+        if node_id not in self.nodes:
+            raise KeyError(f"Unknown node for exposed param: {node_id!r}")
+        self.exposed_params[public_name] = {
+            "node_id": node_id,
+            "param_key": param_key,
+            "label": label or public_name,
+            "min": min_val,
+            "max": max_val,
+            "step": step,
+        }
+        return self
+
+    def set_exposed(self, public_name: str, value: Any) -> "TexGraph":
+        """Override an exposed graph parameter cleanly without editing internal node wiring."""
+        info = self.exposed_params[public_name]
+        self.nodes[info["node_id"]].params[info["param_key"]] = value
+        self._static_cache.clear()
+        return self
+
+    def add_group(self, name: str, node_ids: list[str], *, color: str = "#1E293B") -> "TexGraph":
+        """Tag a set of nodes into a named visual frame/group for future UI layout."""
+        self.groups.append({"name": str(name), "nodes": list(node_ids), "color": str(color)})
+        return self
 
     def _next_id(self, op: str, node_id: str | None) -> str:
         if node_id:
@@ -407,12 +483,124 @@ class TexGraph:
         """Procedural pixel-art sprite silhouette generator (for items/icons/weapons)."""
         return self.add("sprite_mask", id=id, shape=shape_expr, **kw)
 
+    # --- Smooth Gradient Path, Painterly Studio, Transform, Filter & Color Builders (v3) ---
+    def gradient_field(self, kind: str = "linear", *, id: str | None = None, **kw: Any) -> str:
+        return self.add("gradient_field", id=id, kind=kind, **kw)
+
+    def multi_stop_gradient(self, src: str, stops: list[Any], *, alpha_mask: str | None = None, id: str | None = None, **kw: Any) -> str:
+        ins = {"src": src}
+        if alpha_mask:
+            ins["alpha_mask"] = alpha_mask
+        return self.add("multi_stop_gradient", id=id, inputs=ins, stops=stops, **kw)
+
+    def cosine_gradient(self, src: str, *, alpha_mask: str | None = None, id: str | None = None, **kw: Any) -> str:
+        ins = {"src": src}
+        if alpha_mask:
+            ins["alpha_mask"] = alpha_mask
+        return self.add("cosine_gradient", id=id, inputs=ins, **kw)
+
+    def spline_path(self, points: list[Any], *, output: str = "ribbon", id: str | None = None, **kw: Any) -> str:
+        return self.add("spline_path", id=id, points=points, output=output, **kw)
+
+    def per_island_gradient(self, direction: str = "top_to_bottom", *, curve: float = 1.0, id: str | None = None) -> str:
+        return self.add("per_island_gradient", id=id, direction=direction, curve=curve)
+
+    def body_flow_gradient(self, axis: str = "dorsal_ventral", *, bias: float = 0.0, gamma: float = 1.0, id: str | None = None) -> str:
+        return self.add("body_flow_gradient", id=id, axis=axis, bias=bias, gamma=gamma)
+
+    def brushstrokes(self, angle_deg: float = 0.0, *, id: str | None = None, **kw: Any) -> str:
+        return self.add("brushstrokes", id=id, angle_deg=angle_deg, **kw)
+
+    def layered_plates(self, cols: int = 8, rows: int = 12, *, output: str = "height", id: str | None = None, **kw: Any) -> str:
+        return self.add("layered_plates", id=id, cols=cols, rows=rows, output=output, **kw)
+
+    def smooth_wing(self, local_u: str, local_v: str, *, id: str | None = None, **kw: Any) -> dict[str, str]:
+        """Adds Master Dragon Wing Membrane nodes returning dict of IDs: rgba, alpha, rim, glow, height."""
+        ins = {"local_u": local_u, "local_v": local_v}
+        base = id or f"smooth_wing_{self._counter + 1:02d}"
+        return {
+            "rgba": self.add("smooth_wing_rgba", id=base, inputs=ins, **kw),
+            "alpha": self.add("smooth_wing_alpha", id=f"{base}_alpha", inputs=ins, **kw),
+            "rim": self.add("smooth_wing_rim", id=f"{base}_rim", inputs=ins, **kw),
+            "glow": self.add("smooth_wing_glow", id=f"{base}_glow", inputs=ins, **kw),
+            "height": self.add("smooth_wing_height", id=f"{base}_height", inputs=ins, **kw),
+        }
+
+    def gradient_eye(self, local_u: str, local_v: str, *, side_sign: str | None = None, id: str | None = None, **kw: Any) -> tuple[str, str]:
+        """Adds Non-Standard Luminous Gradient Eye RGBA + emissive mask nodes (mirror-symmetric L/R)."""
+        ins = {"local_u": local_u, "local_v": local_v}
+        if side_sign:
+            ins["side_sign"] = side_sign
+        rgb_id = self.add("gradient_eye_rgba", id=id, inputs=ins, **kw)
+        em_id = self.add("gradient_eye_emissive", id=f"{rgb_id}_em", inputs=ins, **kw)
+        return rgb_id, em_id
+
+    def temple_stone(self, cols: int = 2, rows: int = 4, *, output: str = "height", id: str | None = None, **kw: Any) -> str:
+        return self.add("temple_stone", id=id, cols=cols, rows=rows, output=output, **kw)
+
+    def wood_planks(self, planks: int = 4, *, output: str = "height", id: str | None = None, **kw: Any) -> str:
+        return self.add("wood_planks", id=id, planks=planks, output=output, **kw)
+
+    def foliage_clusters(self, cols: int = 5, rows: int = 5, *, output: str = "height", id: str | None = None, **kw: Any) -> str:
+        return self.add("foliage_clusters", id=id, cols=cols, rows=rows, output=output, **kw)
+
+    def curves(self, src: str, points: list[Any], *, id: str | None = None) -> str:
+        return self.add("curves", id=id, inputs={"src": src}, points=points)
+
+    def color_balance(self, src: str, *, shadows=(0.0, 0.0, 0.0), midtones=(0.0, 0.0, 0.0), highlights=(0.0, 0.0, 0.0), id: str | None = None) -> str:
+        return self.add("color_balance", id=id, inputs={"src": src}, shadows=list(shadows), midtones=list(midtones), highlights=list(highlights))
+
+    def oklch_adjust(self, src: str, *, hue_shift_deg: float = 0.0, chroma_scale: float = 1.0, lightness_offset: float = 0.0, id: str | None = None) -> str:
+        return self.add("oklch_adjust", id=id, inputs={"src": src}, hue_shift_deg=hue_shift_deg, chroma_scale=chroma_scale, lightness_offset=lightness_offset)
+
+    def posterize_soft(self, src: str, *, steps: int = 6, blend: float = 0.5, id: str | None = None) -> str:
+        return self.add("posterize_soft", id=id, inputs={"src": src}, steps=steps, blend=blend)
+
+    def tile_transform(self, src: str, *, id: str | None = None, **kw: Any) -> str:
+        return self.add("tile_transform", id=id, inputs={"src": src}, **kw)
+
+    def polar_warp(self, src: str, *, to_polar: bool = True, id: str | None = None) -> str:
+        return self.add("polar_warp", id=id, inputs={"src": src}, to_polar=to_polar)
+
+    def twirl(self, src: str, *, strength_deg: float = 90.0, radius: float = 0.5, id: str | None = None, **kw: Any) -> str:
+        return self.add("twirl_distort", id=id, inputs={"src": src}, strength_deg=strength_deg, radius=radius, **kw)
+
+    def wave(self, src: str, *, id: str | None = None, **kw: Any) -> str:
+        return self.add("wave_distort", id=id, inputs={"src": src}, **kw)
+
+    def blur(self, src: str, *, radius: int = 2, sigma: float = 0.0, id: str | None = None) -> str:
+        return self.add("gaussian_blur", id=id, inputs={"src": src}, radius=radius, sigma=sigma)
+
+    def directional_blur(self, src: str, *, angle_deg: float = 0.0, length: int = 4, id: str | None = None) -> str:
+        return self.add("directional_blur", id=id, inputs={"src": src}, angle_deg=angle_deg, length=length)
+
+    def sharpen(self, src: str, *, radius: int = 1, amount: float = 0.65, id: str | None = None) -> str:
+        return self.add("unsharp_mask", id=id, inputs={"src": src}, radius=radius, amount=amount)
+
+    def sobel_edges(self, src: str, *, strength: float = 1.5, id: str | None = None) -> str:
+        return self.add("sobel_edges", id=id, inputs={"src": src}, strength=strength)
+
+    def sdf(self, mask: str, *, max_dist_px: float = 12.0, invert: bool = False, id: str | None = None) -> str:
+        return self.add("sdf_from_mask", id=id, inputs={"mask": mask}, max_dist_px=max_dist_px, invert=invert)
+
+    def morph(self, src: str, *, op: str = "dilate", radius: int = 1, id: str | None = None) -> str:
+        return self.add("morph_op", id=id, inputs={"src": src}, morph_op=op, radius=radius)
+
+    def normal_blend(self, base: str, detail: str, *, strength: float = 1.0, id: str | None = None) -> str:
+        return self.add("normal_blend", id=id, inputs={"base": base, "detail": detail}, strength=strength)
+
+    def ao_from_height(self, height: str, *, radius: int = 3, strength: float = 1.0, id: str | None = None) -> str:
+        return self.add("ao_from_height", id=id, inputs={"height": height}, radius=radius, strength=strength)
+
+    def bloom(self, src: str, *, threshold: float = 0.72, radius: int = 3, intensity: float = 0.55, id: str | None = None) -> str:
+        return self.add("bloom_glow", id=id, inputs={"src": src}, threshold=threshold, radius=radius, intensity=intensity)
+
     # ------------------------------------------------------------------
     # Declarative JSON Recipe Import / Export
     # ------------------------------------------------------------------
     def to_recipe(self) -> dict[str, Any]:
         rec: dict[str, Any] = {
-            "version": "2.0",
+            "version": "2.1",
             "name": self.name,
             "width": self.width,
             "height": self.height,
@@ -425,6 +613,10 @@ class TexGraph:
         if self.pbr_nodes:
             rec["pbr"] = dict(self.pbr_nodes)
             rec["pbr_config"] = dict(self.pbr_config)
+        if self.exposed_params:
+            rec["exposed_params"] = copy.deepcopy(self.exposed_params)
+        if self.groups:
+            rec["groups"] = copy.deepcopy(self.groups)
         return rec
 
     def save_recipe(self, path: Path | str) -> None:
@@ -464,6 +656,10 @@ class TexGraph:
                 normal_strength=pbr_cfg.get("normal_strength"),
                 dielectric_f0=pbr_cfg.get("dielectric_f0"),
             )
+        if data.get("exposed_params"):
+            g.exposed_params = copy.deepcopy(data["exposed_params"])
+        if data.get("groups"):
+            g.groups = copy.deepcopy(data["groups"])
         return g
 
     # ------------------------------------------------------------------
@@ -767,6 +963,111 @@ class TexGraph:
 
         if op == "sprite_mask":
             return _eval_sprite_shape(H, W, str(p.get("shape", "crystal_blade")), phase=phase)
+
+        # --- v3 Smooth Gradient Path, Painterly Studio, Transform, Filter & Color Ops ---
+        if op == "gradient_field":
+            return gradient_field(H, W, kind=p.get("kind", "linear"), angle_deg=p.get("angle_deg", 90.0), cx=p.get("cx", 0.5), cy=p.get("cy", 0.5), radius=p.get("radius", 0.55), aspect=p.get("aspect", 1.0), repeat=p.get("repeat", 1.0), ping_pong=p.get("ping_pong", False), ease=p.get("ease", "linear"))
+        if op == "multi_stop_gradient":
+            return multi_stop_gradient(ins["src"], p.get("stops", [(0.0, "#101626"), (1.0, "#F0F6FF")]), space=p.get("space", "oklab"), smooth_blend=p.get("smooth_blend", 1.0), quantize_steps=p.get("quantize_steps", 0), dither=p.get("dither", "none"), dither_strength=p.get("dither_strength", 0.12), alpha_mask=ins.get("alpha_mask"))
+        if op == "cosine_gradient":
+            return cosine_gradient(ins["src"], a=tuple(p.get("a", (0.5, 0.5, 0.5))), b=tuple(p.get("b", (0.5, 0.5, 0.5))), c=tuple(p.get("c", (1.0, 1.0, 1.0))), d=tuple(p.get("d", (0.0, 0.33, 0.67))), phase=float(p.get("phase_offset", 0.0)) + float(p.get("loop_speed", 0.0)) * phase, alpha_mask=ins.get("alpha_mask"))
+        if op == "spline_path":
+            return spline_path_gradient(H, W, p.get("points", [(0.1, 0.5), (0.9, 0.5)]), stroke_width=p.get("stroke_width", 0.12), samples_per_seg=p.get("samples_per_seg", 24), closed=p.get("closed", False), output=p.get("output", "ribbon"), falloff=p.get("falloff", "smoothstep"))
+        if op == "per_island_gradient":
+            if self.mesh_context is None:
+                u, v = uv_grid(H, W)
+                return per_island_gradient(u, v, direction=p.get("direction", "top_to_bottom"), curve=p.get("curve", 1.0))
+            return per_island_gradient(self.mesh_context.local_uv[..., 0], self.mesh_context.local_uv[..., 1], direction=p.get("direction", "top_to_bottom"), curve=p.get("curve", 1.0))
+        if op == "body_flow_gradient":
+            if self.mesh_context is None:
+                return gradient_field(H, W, kind="linear", angle_deg=-90.0)
+            return body_flow_gradient(self.mesh_context.world_pos_norm, self.mesh_context.world_normal, axis=p.get("axis", "dorsal_ventral"), bias=p.get("bias", 0.0), gamma=p.get("gamma", 1.0))
+
+        if op == "brushstrokes":
+            return directional_brushstrokes(H, W, angle_deg=p.get("angle_deg", 0.0), scale_along=p.get("scale_along", 3.5), scale_across=p.get("scale_across", 16.0), contrast=p.get("contrast", 0.35), seed=seed, tileable=p.get("tileable", tile))
+        if op == "layered_plates":
+            d = layered_scale_plates(H, W, cols=p.get("cols", 8), rows=p.get("rows", 12), stagger=p.get("stagger", 0.5), gap=p.get("gap", 0.08), top_rim=p.get("top_rim", 0.22), variance=p.get("variance", 0.20), seed=seed)
+            return d.get(str(p.get("output", "height")), d["height"])
+        if op.startswith("smooth_wing_"):
+            wd = smooth_wing_membrane(
+                ins["local_u"],
+                ins["local_v"],
+                palette_stops=p.get("palette_stops", [(0.0, "#190E33"), (0.28, "#3B1D6E"), (0.58, "#7C3AED"), (0.84, "#C084FC"), (1.0, "#A5F3FC")]),
+                rim_color=p.get("rim_color", "#67E8F9"),
+                arch_depth=p.get("arch_depth", 0.24),
+                arches=p.get("arches", 1),
+                tatter_strength=p.get("tatter_strength", 0.06),
+                fold_count=p.get("fold_count", 5.0),
+                fold_strength=p.get("fold_strength", 0.14),
+                glow_center_strength=p.get("glow_center_strength", 0.85),
+                bone_shadow_width=p.get("bone_shadow_width", 0.24),
+                rim_width=p.get("rim_width", 0.055),
+                smooth_blend=p.get("smooth_blend", 0.72),
+                quantize_steps=p.get("quantize_steps", 8),
+                seed=seed,
+            )
+            sub_k = op.replace("smooth_wing_", "")
+            if sub_k == "rim":
+                return wd["rim_mask"]
+            if sub_k == "glow":
+                return wd["glow_mask"]
+            return wd[sub_k]
+        if op in ("gradient_eye_rgba", "gradient_eye_emissive"):
+            ergba, eem = gradient_eye_paint(
+                ins["local_u"],
+                ins["local_v"],
+                side_sign=ins.get("side_sign"),
+                stops=p.get("stops", [(0.0, "#0E4C92"), (0.28, "#06B6D4"), (0.58, "#67E8F9"), (0.82, "#FEF08A"), (1.0, "#FFFFFF")]),
+                brow_shadow=p.get("brow_shadow", 0.42),
+                angle_deg=p.get("angle_deg", -22.0),
+                style=p.get("style", "gradient_glow"),
+                rim_color=p.get("rim_color", "#0B1026"),
+            )
+            return ergba if op == "gradient_eye_rgba" else eem
+        if op == "temple_stone":
+            d = temple_carved_stone(H, W, cols=p.get("cols", 2), rows=p.get("rows", 4), carve_motif=p.get("carve_motif", True), seed=seed)
+            return d.get(str(p.get("output", "height")), d["height"])
+        if op == "wood_planks":
+            d = stylized_wood_planks(H, W, planks=p.get("planks", 4), seed=seed)
+            return d.get(str(p.get("output", "height")), d["height"])
+        if op == "foliage_clusters":
+            d = stylized_foliage_clusters(H, W, cols=p.get("cols", 5), rows=p.get("rows", 5), seed=seed)
+            return d.get(str(p.get("output", "height")), d["height"])
+
+        if op == "curves":
+            return curves_remap(ins["src"], p.get("points", [(0.0, 0.0), (1.0, 1.0)]))
+        if op == "color_balance":
+            return color_balance(ins["src"], shadows=tuple(p.get("shadows", (0.0, 0.0, 0.0))), midtones=tuple(p.get("midtones", (0.0, 0.0, 0.0))), highlights=tuple(p.get("highlights", (0.0, 0.0, 0.0))))
+        if op == "oklch_adjust":
+            return oklch_adjust(ins["src"], hue_shift_deg=p.get("hue_shift_deg", 0.0), chroma_scale=p.get("chroma_scale", 1.0), lightness_offset=p.get("lightness_offset", 0.0))
+        if op == "posterize_soft":
+            return posterize_soft(ins["src"], steps=p.get("steps", 6), blend=p.get("blend", 0.5))
+        if op == "tile_transform":
+            return tile_transform(ins["src"], scale_x=p.get("scale_x", 1.0), scale_y=p.get("scale_y", 1.0), offset_x=p.get("offset_x", 0.0), offset_y=p.get("offset_y", 0.0), rotate_deg=p.get("rotate_deg", 0.0), tileable=p.get("tileable", tile))
+        if op == "polar_warp":
+            return polar_warp(ins["src"], to_polar=p.get("to_polar", True), tileable=p.get("tileable", tile))
+        if op == "twirl_distort":
+            return twirl_distort(ins["src"], strength_deg=p.get("strength_deg", 90.0), radius=p.get("radius", 0.5), cx=p.get("cx", 0.5), cy=p.get("cy", 0.5), tileable=p.get("tileable", tile))
+        if op == "wave_distort":
+            return wave_distort(ins["src"], amp_x=p.get("amp_x", 0.04), amp_y=p.get("amp_y", 0.0), freq_x=p.get("freq_x", 3.0), freq_y=p.get("freq_y", 3.0), phase=phase * float(p.get("loop_speed", 1.0)), tileable=p.get("tileable", tile))
+        if op == "gaussian_blur":
+            return gaussian_blur(ins["src"], radius=p.get("radius", 2), sigma=p.get("sigma", 0.0), tileable=p.get("tileable", tile))
+        if op == "directional_blur":
+            return directional_blur(ins["src"], angle_deg=p.get("angle_deg", 0.0), length=p.get("length", 4), tileable=p.get("tileable", tile))
+        if op == "unsharp_mask":
+            return unsharp_mask(ins["src"], radius=p.get("radius", 1), amount=p.get("amount", 0.65), tileable=p.get("tileable", tile))
+        if op == "sobel_edges":
+            return sobel_edges(ins["src"], strength=p.get("strength", 1.5), tileable=p.get("tileable", tile))
+        if op == "sdf_from_mask":
+            return sdf_from_mask(ins["mask"], max_dist_px=p.get("max_dist_px", 12.0), invert=p.get("invert", False))
+        if op == "morph_op":
+            return morph_op(ins["src"], op=p.get("morph_op", "dilate"), radius=p.get("radius", 1), tileable=p.get("tileable", tile))
+        if op == "normal_blend":
+            return normal_blend_rnm(ins["base"], ins["detail"], strength=p.get("strength", 1.0))
+        if op == "ao_from_height":
+            return ao_from_height(ins["height"], radius=p.get("radius", 3), strength=p.get("strength", 1.0), tileable=p.get("tileable", tile))
+        if op == "bloom_glow":
+            return bloom_glow(ins["src"], threshold=p.get("threshold", 0.72), radius=p.get("radius", 3), intensity=p.get("intensity", 0.55), tileable=p.get("tileable", tile))
 
         raise ValueError(f"Unsupported TexGraph op: {op!r}")
 

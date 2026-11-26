@@ -304,6 +304,90 @@ class TestTexGraphEngine(unittest.TestCase):
         self.assertGreater(float((sc_a > 0.5).mean()), 0.55)
         self.assertGreater(float((sc_r > 0.5).sum()), 10.0)
 
+    def test_v3_smooth_gradient_path_painterly_fx_and_ui_node_schema(self) -> None:
+        from synccraft.texgraph import (
+            NODE_CATALOG,
+            build_dragon_wing_membrane_tile,
+            build_stylized_wood_and_foliage,
+            build_temple_carved_stone,
+            export_node_schema_json,
+            gradient_eye_paint,
+        )
+
+        # 1. Verify UI-ready typed node registry & CLI schema export
+        schema = export_node_schema_json()
+        self.assertGreaterEqual(schema["node_count"], 65)
+        self.assertIn("Gradients & Paths", schema["categories"])
+        self.assertIn("Painterly & Bio", schema["categories"])
+        self.assertIn("PBR & Normal", schema["categories"])
+        self.assertEqual(cli_main(["texgraph", "schema"]), 0)
+
+        # 2. Exercise smooth gradient paths, painterly nodes, FX, normal blend, SDF, HBAO, exposed params & groups
+        g = TexGraph(32, 32, tileable=True, seed=99, name="v3_full_pipeline")
+        gf = g.gradient_field("radial", radius=0.65, ease="smoothstep", id="rad_g")
+        sp = g.spline_path([(0.1, 0.2), (0.5, 0.8), (0.9, 0.2)], stroke_width=0.14, output="ribbon", id="spl_rib")
+        br = g.brushstrokes(angle_deg=20.0, id="br_1")
+        pl = g.layered_plates(cols=4, rows=4, id="pl_1")
+        ts = g.temple_stone(cols=2, rows=4, id="ts_1")
+        wp = g.wood_planks(planks=4, id="wp_1")
+        fc = g.foliage_clusters(cols=4, rows=4, id="fc_1")
+        pi = g.per_island_gradient("top_to_bottom", id="pi_1")
+        bf = g.body_flow_gradient("top_light_wrap", id="bf_1")
+
+        # Transform, SDF, morphology, blur, sharpen, edge, HBAO, normal blend
+        w_tr = g.tile_transform(pl, scale_x=1.0, rotate_deg=0.0, id="tr_1")
+        w_tw = g.twirl(gf, strength_deg=30.0, id="tw_1")
+        w_wv = g.wave(br, amp_x=0.03, id="wv_1")
+        w_pl = g.polar_warp(gf, to_polar=True, id="pol_1")
+        m_sdf = g.sdf(sp, max_dist_px=6.0, id="sdf_1")
+        m_mo = g.morph(sp, op="dilate", radius=1, id="mo_1")
+        m_ed = g.sobel_edges(pl, id="ed_1")
+        m_ao = g.ao_from_height(pl, radius=2, id="hbao_1")
+        n_base = g.height_to_normal(pl, strength=2.0, id="n_base")
+        n_det = g.height_to_normal(ts, strength=1.2, id="n_det")
+        n_mix = g.normal_blend(n_base, n_det, strength=0.7, id="n_mix")
+
+        h_comb = g.blend(g.blend(w_tr, g.blend(w_tw, g.blend(w_wv, g.blend(w_pl, g.blend(m_sdf, g.blend(m_mo, g.blend(m_ed, g.blend(wp, g.blend(fc, g.blend(pi, bf, opacity=0.3), opacity=0.3), opacity=0.3), opacity=0.3), opacity=0.3), opacity=0.3), opacity=0.3), opacity=0.3), opacity=0.3), opacity=0.25), sp, mode="screen", opacity=0.35, id="h_comb")
+        h_crv = g.curves(g.blur(h_comb, radius=1, id="bl_1"), [(0.0, 0.05), (0.5, 0.55), (1.0, 0.98)], id="crv_1")
+        h_db = g.directional_blur(h_crv, angle_deg=30.0, length=3, id="db_1")
+        c_ms = g.multi_stop_gradient(h_db, stops=[(0.0, "#190E33"), (0.5, "#6D28D9"), (1.0, "#67E8F9")], smooth_blend=0.7, quantize_steps=6, id="ms_col")
+        c_cos = g.cosine_gradient(gf, id="cos_col")
+        c_mix = g.blend(c_ms, c_cos, opacity=0.2, id="c_mix")
+        c_cb = g.color_balance(c_mix, shadows=(-0.02, 0.0, 0.04), highlights=(0.03, 0.02, 0.0), id="cb_1")
+        c_ok = g.oklch_adjust(c_cb, hue_shift_deg=6.0, chroma_scale=1.1, id="ok_1")
+        c_po = g.posterize_soft(c_ok, steps=8, blend=0.4, id="po_1")
+        c_sh = g.sharpen(c_po, amount=0.3, id="sh_1")
+        c_bl = g.bloom(c_sh, threshold=0.7, radius=2, intensity=0.4, id="blm_1")
+
+        g.set_output(c_bl, height_node=h_comb, normal_node=n_mix, ao_node=m_ao)
+        g.expose_param("smoothness", "ms_col", "smooth_blend", min_val=0.0, max_val=1.0)
+        g.add_group("Color Grading", ["ms_col", "cb_1", "ok_1", "blm_1"], color="#1E293B")
+
+        ev0 = g.evaluate(phase=0.0, build_pbr=True)
+        self.assertEqual(ev0.output.shape, (32, 32, 4))
+        self.assertTrue(np.isfinite(ev0.output).all())
+        self.assertIsNotNone(ev0.pbr_maps)
+
+        # Round-trip v2.1 recipe with exposed_params & groups + set_exposed override
+        g_rt = TexGraph.from_recipe(g.to_recipe())
+        self.assertIn("smoothness", g_rt.exposed_params)
+        self.assertEqual(len(g_rt.groups), 1)
+        g_rt.set_exposed("smoothness", 0.2)
+        ev_mod = g_rt.evaluate(phase=0.0)
+        self.assertEqual(ev_mod.output.shape, (32, 32, 4))
+
+        # 3. Verify non-standard luminous gradient eye L/R mirror symmetry & new studio presets
+        yy, xx = np.meshgrid(np.linspace(0.0, 1.0, 16, dtype=np.float32), np.linspace(0.0, 1.0, 24, dtype=np.float32), indexing="ij")
+        ge_l, gem_l = gradient_eye_paint(xx, yy, side_sign=np.full_like(xx, -1.0))
+        ge_r, gem_r = gradient_eye_paint(1.0 - xx, yy, side_sign=np.full_like(xx, 1.0))
+        np.testing.assert_allclose(ge_l, ge_r, atol=1e-5)
+        np.testing.assert_allclose(gem_l, gem_r, atol=1e-5)
+
+        for builder in (build_temple_carved_stone, build_stylized_wood_and_foliage, build_dragon_wing_membrane_tile):
+            ev_p = builder(size=32).evaluate(build_pbr=True)
+            self.assertEqual(ev_p.output.shape, (32, 32, 4))
+            self.assertIsNotNone(ev_p.pbr_maps)
+
 
 if __name__ == "__main__":
     unittest.main()
