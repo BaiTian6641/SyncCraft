@@ -128,15 +128,21 @@ def _aces_u8(rgb_lin: np.ndarray) -> np.ndarray:
     return np.clip(np.rint(srgb * 255.0), 0, 255).astype(np.uint8)
 
 
-def _unpack_atlas(atlas: dict[str, Any] | None) -> tuple[dict | None, np.ndarray | None, np.ndarray | None]:
+def _unpack_atlas(atlas: dict[str, Any] | None) -> tuple[dict | None, np.ndarray | None, np.ndarray | None, np.ndarray | None, np.ndarray | None]:
     if not atlas:
-        return None, None, None
+        return None, None, None, None, None
     faces = atlas.get("faces") or atlas.get("uv_faces")
     albedo = atlas.get("albedo_rgba")
     if albedo is None:
         albedo = atlas.get("rgba")
     emissive = atlas.get("emissive_rgba")
-    return faces, albedo, emissive
+    normal_n = atlas.get("normal_rgba")
+    if normal_n is None:
+        normal_n = atlas.get("labpbr_n")
+    specular_s = atlas.get("specular_rgba")
+    if specular_s is None:
+        specular_s = atlas.get("labpbr_s")
+    return faces, albedo, emissive, normal_n, specular_s
 
 
 def render_view(
@@ -145,6 +151,8 @@ def render_view(
     atlas_rgba: np.ndarray | None = None,
     *,
     emissive_rgba: np.ndarray | None = None,
+    normal_rgba: np.ndarray | None = None,
+    specular_rgba: np.ndarray | None = None,
     atlas: dict[str, Any] | None = None,
     az_deg: float = -36.0,
     el_deg: float = 16.0,
@@ -162,11 +170,15 @@ def render_view(
     bg_rgb: tuple[float, float, float] = (0.045, 0.055, 0.085),
     material_colors: dict[str, tuple[int, int, int]] | None = None,
 ) -> Image.Image:
-    """Render a crisp studio view of a SyncCraft Scene (textured, clay, unlit, or silhouette)."""
+    """Render a crisp studio view of a SyncCraft Scene (LabPBR GGX, textured, clay, unlit, or silhouette)."""
     if atlas is not None and atlas_rgba is None:
-        atlas_faces, atlas_rgba, em2 = _unpack_atlas(atlas)
+        atlas_faces, atlas_rgba, em2, nrm2, spc2 = _unpack_atlas(atlas)
         if emissive_rgba is None:
             emissive_rgba = em2
+        if normal_rgba is None:
+            normal_rgba = nrm2
+        if specular_rgba is None:
+            specular_rgba = spc2
 
     use_atlas = atlas_rgba is not None and atlas_faces is not None and not clay and not silhouette
     tex_h, tex_w = atlas_rgba.shape[:2] if use_atlas else (2, 2)
@@ -271,6 +283,12 @@ def render_view(
         if emissive_rgba is not None:
             ef = emissive_rgba[:, :, :3].astype(np.float64) / 255.0
             em_lin = np.where(ef <= 0.04045, ef / 12.92, np.power((ef + 0.055) / 1.055, 2.4))
+        use_pbr = (normal_rgba is not None or specular_rgba is not None) and not unlit and not silhouette
+        if use_pbr:
+            nrm_xy_ao = normal_rgba.astype(np.float64) / 255.0 if normal_rgba is not None else None
+            spc_f = specular_rgba.astype(np.float64) if specular_rgba is not None else None
+    else:
+        use_pbr = False
 
     for fverts, uv_px, bname, mat, box_name in quads:
         rel = fverts - cam_pos[None, :]
@@ -284,13 +302,25 @@ def render_view(
 
         e1 = fverts[1] - fverts[0]
         e2 = fverts[2] - fverts[0]
+        e3 = fverts[3] - fverts[0]
         n = np.cross(e1, e2)
         nlen = float(np.linalg.norm(n))
         if nlen < 1e-8:
             continue
         n /= nlen
-        if float(np.dot(n, cam_pos - fverts.mean(axis=0))) < 0.0:
+        face_ctr = fverts.mean(axis=0)
+        view_dir = cam_pos - face_ctr
+        vlen = float(np.linalg.norm(view_dir))
+        view_dir = view_dir / max(1e-8, vlen)
+        if float(np.dot(n, view_dir)) < 0.0:
             n = -n
+        # Per-quad orthonormal tangent basis (T along +u, B along -v/OpenGL +Y) for true LabPBR normal mapping!
+        t_vec = e1 / max(1e-8, float(np.linalg.norm(e1)))
+        b_vec = -e3 / max(1e-8, float(np.linalg.norm(e3)))
+        if float(uv_px[1, 0] - uv_px[0, 0]) < 0.0:
+            t_vec = -t_vec
+        half_k = key_dir + view_dir
+        half_k /= max(1e-8, float(np.linalg.norm(half_k)))
 
         if silhouette or unlit:
             shade = 1.0
@@ -352,9 +382,62 @@ def render_view(
                 if not np.any(vis):
                     continue
                 sub_z[vis] = z_pix[vis]
-                col = albedo_lin[vi[vis], ui[vis]] * shade
-                if em_lin is not None and not unlit:
-                    col = col + em_lin[vi[vis], ui[vis]] * 1.45
+                vy, ux = vi[vis], ui[vis]
+                base_c = albedo_lin[vy, ux]
+                if use_pbr:
+                    # True per-pixel Tangent-Space Normal Map + LabPBR 1.3 GGX Metallic/Roughness/AO/SSS!
+                    if nrm_xy_ao is not None:
+                        ns = nrm_xy_ao[vy, ux]
+                        tnx = ns[:, 0] * 2.0 - 1.0
+                        tny = ns[:, 1] * 2.0 - 1.0
+                        tnz = np.sqrt(np.clip(1.0 - tnx * tnx - tny * tny, 0.05, 1.0))
+                        wn = tnx[:, None] * t_vec[None, :] + tny[:, None] * b_vec[None, :] + tnz[:, None] * n[None, :]
+                        wn = wn / np.maximum(1e-8, np.linalg.norm(wn, axis=-1, keepdims=True))
+                        ao_p = np.clip(0.55 + 0.45 * ns[:, 2:3], 0.45, 1.0)
+                    else:
+                        wn = np.broadcast_to(n[None, :], (vy.shape[0], 3))
+                        ao_p = 1.0
+
+                    if spc_f is not None:
+                        ss = spc_f[vy, ux]
+                        rough = np.clip(1.0 - ss[:, 0:1] / 255.0, 0.08, 0.96)
+                        is_met = (ss[:, 1:2] >= 229.5).astype(np.float64)
+                        f0_d = np.clip(ss[:, 1:2] / 255.0, 0.03, 0.16)
+                        sss_v = np.where(ss[:, 2:3] >= 65.0, (ss[:, 2:3] - 65.0) / 190.0, 0.0)
+                        em_s = np.where(ss[:, 3:4] < 254.5, ss[:, 3:4] / 254.0, 0.0)
+                    else:
+                        rough, is_met, f0_d, sss_v, em_s = 0.50, 0.0, 0.04, 0.0, 0.0
+
+                    ndl_k = np.clip(wn @ key_dir, 0.0, 1.0)[:, None]
+                    ndl_f = np.clip(wn @ fill_dir, 0.0, 1.0)[:, None]
+                    ndh_k = np.clip(wn @ half_k, 0.0, 1.0)[:, None]
+                    ndv = np.clip(wn @ view_dir, 0.05, 1.0)[:, None]
+                    up_b = (0.5 + 0.5 * wn[:, 1:2])
+
+                    # GGX specular lobe + Schlick Fresnel
+                    a2 = (rough * rough) ** 2
+                    denom = (ndh_k * ndh_k * (a2 - 1.0) + 1.0)
+                    D_ggx = a2 / (math.pi * denom * denom + 1e-5)
+                    F0 = f0_d * (1.0 - is_met) + base_c * is_met
+                    F = F0 + (1.0 - F0) * ((1.0 - ndv) ** 5)
+                    spec_k = np.minimum(2.8, D_ggx * F * 0.42 * ndl_k / (ndv + 0.15))
+                    # Metallic sky/ground reflection sheen
+                    env_r = np.array([0.45, 0.52, 0.68]) * up_b + np.array([0.24, 0.20, 0.26]) * (1.0 - up_b)
+                    spec_env = F * env_r * (1.1 - 0.65 * rough) * (0.45 + 1.15 * is_met)
+                    # Subsurface scattering wrap for translucent wings/gems
+                    wrap_k = np.clip(((wn @ key_dir)[:, None] + 0.5) / 1.5, 0.0, 1.0)
+                    sss_glow = sss_v * (1.0 - is_met) * base_c * wrap_k * 0.45
+
+                    diff_l = (0.34 + 0.62 * ndl_k + 0.20 * ndl_f + 0.14 * up_b) * (1.0 - 0.55 * is_met)
+                    col = (base_c * diff_l + spec_k + spec_env + sss_glow) * ao_p
+                    if em_lin is not None:
+                        col = col + em_lin[vy, ux] * 1.45
+                    elif np.any(em_s > 0.01):
+                        col = col + base_c * em_s * 1.35
+                else:
+                    col = base_c * shade
+                    if em_lin is not None and not unlit:
+                        col = col + em_lin[vy, ux] * 1.45
                 img_lin[ymin : ymax + 1, xmin : xmax + 1][vis] = col
             elif silhouette:
                 sub_z[vis] = z_pix[vis]

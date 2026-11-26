@@ -75,6 +75,8 @@ def export_labpbr_1_3(
     for fk, patch in pixel_optics.patches.items():
         box_name, face = fk
         u0, v0, u1, v1 = layout["faces"][box_name][face]
+        if u1 <= u0 or v1 <= v0:
+            continue
         h_px, w_px = int(v1 - v0), int(u1 - u0)
 
         # 1. Intrinsic Albedo (atlas.png)

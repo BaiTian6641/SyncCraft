@@ -1,0 +1,157 @@
+"""SyncCraft TexGraph — Open-Source, AI-Workflow-Friendly Parametric Pixel Composer.
+
+Pure vectorized NumPy/Pillow DAG node engine for expert pixel-art textures:
+- Seamless tileable block textures, crisp item sprites, 3D-mesh-aware entity atlases,
+  and looping animated flipbooks (.mcmeta + GIF).
+- Noise (Value, Perlin, fBm/Ridged/Billow, Voronoi, Gabor, Domain/Curl Warp, 3D Rest-Space)
+- Geometric & Biological Patterns (Grid, Brick, Hex, Tri, Diamond/Chevron, Truchet, Mosaic,
+  Imbricated Scales, Feather Barbs, Fur Tufts, Radial Rings, Energy Veins)
+- Simulation & Algorithmic Denoisers (Gray-Scott Turing RD, Cellular Automata, Iterate,
+  Weathering Drip, Anisotropic Kuwahara, Bilateral, Chambolle TV-L2, Non-Local Means, Despeckle)
+- 3D Mesh Baker (World Pos, Normal, Multi-Box Baked AO, Edge Bevel, Joint Cavity, Zone Masks)
+- Pixel-Art Finishing (OKLCH Hue-Shifted Ramps, OKLab Quantization, Selout, Emissive Extract)
+"""
+from __future__ import annotations
+
+from .core import EvalResult, NodeSpec, TexGraph
+from .generators_noise import (
+    bayer_matrix,
+    domain_warp,
+    fbm_noise,
+    gabor_noise,
+    noise_3d_field,
+    perlin_noise,
+    value_noise,
+    voronoi_noise,
+)
+from .generators_patterns import (
+    brick_pattern,
+    diamond_chevron_pattern,
+    energy_veins_pattern,
+    feather_barbs_pattern,
+    fur_tufts_pattern,
+    grid_pattern,
+    hex_grid_pattern,
+    imbricated_scales_pattern,
+    mosaic_pattern,
+    radial_rings_pattern,
+    tri_grid_pattern,
+    truchet_pattern,
+)
+from .inspector import export_html_inspector
+from .mesh_baker import MeshBakeContext, bake_bbmodel_maps
+from .pbr import (
+    LABPBR_METAL_CODES,
+    export_pbr_bundle,
+    height_to_normal_map,
+    pack_labpbr_1_3,
+    render_pbr_material_sheet,
+    render_pbr_preview_2d,
+)
+from .pixel_art_ops import (
+    blend_layers,
+    build_hue_shifted_palette,
+    directional_shade,
+    emissive_extract,
+    encode_png,
+    export_flipbook,
+    hue_shifted_ramp,
+    levels_remap,
+    paint_creature_eye,
+    palette_quantize,
+    pixel_bevel_emboss,
+    rgba_float_to_u8,
+    selout_outline,
+    vibrance_grade,
+    wing_scallop_alpha,
+)
+from .presets import (
+    PRESET_REGISTRY,
+    build_aethelion_texgraph,
+    build_molten_scales_block,
+    build_mossy_carved_brick,
+    build_neon_hex_block,
+    build_prism_blade_item,
+    build_rhenoplos_texgraph,
+)
+from .simulation_filters import (
+    GRAY_SCOTT_PRESETS,
+    anisotropic_kuwahara,
+    bilateral_denoise,
+    cellular_automata,
+    gray_scott_turing,
+    iterate_process,
+    morphological_despeckle,
+    non_local_means_denoise,
+    pixel_cluster_mode,
+    total_variation_denoise,
+    weathering_drip,
+)
+
+__all__ = [
+    "EvalResult",
+    "GRAY_SCOTT_PRESETS",
+    "LABPBR_METAL_CODES",
+    "MeshBakeContext",
+    "NodeSpec",
+    "PRESET_REGISTRY",
+    "TexGraph",
+    "anisotropic_kuwahara",
+    "bake_bbmodel_maps",
+    "bayer_matrix",
+    "bilateral_denoise",
+    "blend_layers",
+    "brick_pattern",
+    "build_aethelion_texgraph",
+    "build_hue_shifted_palette",
+    "build_molten_scales_block",
+    "build_mossy_carved_brick",
+    "build_neon_hex_block",
+    "build_prism_blade_item",
+    "build_rhenoplos_texgraph",
+    "cellular_automata",
+    "diamond_chevron_pattern",
+    "directional_shade",
+    "domain_warp",
+    "emissive_extract",
+    "encode_png",
+    "energy_veins_pattern",
+    "export_flipbook",
+    "export_html_inspector",
+    "export_pbr_bundle",
+    "fbm_noise",
+    "feather_barbs_pattern",
+    "fur_tufts_pattern",
+    "gabor_noise",
+    "gray_scott_turing",
+    "grid_pattern",
+    "height_to_normal_map",
+    "hex_grid_pattern",
+    "hue_shifted_ramp",
+    "imbricated_scales_pattern",
+    "iterate_process",
+    "levels_remap",
+    "morphological_despeckle",
+    "pack_labpbr_1_3",
+    "paint_creature_eye",
+    "render_pbr_material_sheet",
+    "render_pbr_preview_2d",
+    "vibrance_grade",
+    "wing_scallop_alpha",
+    "mosaic_pattern",
+    "noise_3d_field",
+    "non_local_means_denoise",
+    "palette_quantize",
+    "perlin_noise",
+    "pixel_bevel_emboss",
+    "pixel_cluster_mode",
+    "radial_rings_pattern",
+    "rgba_float_to_u8",
+    "selout_outline",
+    "total_variation_denoise",
+    "tri_grid_pattern",
+    "truchet_pattern",
+    "value_noise",
+    "voronoi_noise",
+    "weathering_drip",
+]

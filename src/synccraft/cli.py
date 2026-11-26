@@ -114,6 +114,35 @@ def main(argv=None):
     )
     bb_srv.add_argument("--host", default="127.0.0.1")
     bb_srv.add_argument("--port", type=int, default=18765)
+
+    # Parametric Pixel Composer & Semantic UV v2 CLI
+    tg = subs.add_parser(
+        "texgraph",
+        help="Parametric Pixel Composer (render recipes/presets, animate flipbooks, repack .bbmodel UVs, HTML inspector)",
+    )
+    tg_subs = tg.add_subparsers(dest="tg_cmd", required=True)
+    tg_render = tg_subs.add_parser("render", help="render a .texgraph.json recipe or built-in preset")
+    tg_render.add_argument("source", help="path to .texgraph.json recipe or preset:<name>")
+    tg_render.add_argument("-o", "--out", type=Path, required=True, help="output PNG path")
+    tg_render.add_argument("--bbmodel", type=Path, help="optional .bbmodel to bake 3D maps from and embed texture into")
+    tg_render.add_argument("--out-bbmodel", type=Path, help="optional path to write updated .bbmodel")
+    tg_render.add_argument("--frames", type=int, default=1, help="number of flipbook frames (>1 writes .mcmeta strip)")
+    tg_render.add_argument("--frametime", type=int, default=2)
+    tg_render.add_argument("--gif", type=Path, help="optional animated GIF preview path")
+    tg_render.add_argument("--inspector", type=Path, help="optional interactive HTML node-graph inspector output")
+    tg_render.add_argument("--size", type=int, default=32, help="canvas size for built-in block/item presets")
+    tg_render.add_argument("--pbr", action="store_true", help="export full LabPBR 1.3 (_n, _s), Bedrock RTX (_mer) & standard PBR maps")
+
+    tg_repack = tg_subs.add_parser("repack-uv", help="repack an existing .bbmodel into semantic anatomical UV partitions")
+    tg_repack.add_argument("input", type=Path)
+    tg_repack.add_argument("-o", "--out", type=Path, required=True)
+    tg_repack.add_argument("--mirror", choices=["adaptive", "all", "none"], default="adaptive")
+    tg_repack.add_argument("--canvas", choices=["tight", "pot"], default="tight", help="atlas dimension mode: flexible 16px-aligned tight or power-of-two")
+    tg_repack.add_argument("--padding", type=int, default=1)
+    tg_repack.add_argument("--zone-map", type=Path, help="optional PNG path for visual UV Zone Diagnostic Map")
+
+    tg_subs.add_parser("presets", help="list available built-in TexGraph presets")
+
     args = parser.parse_args(argv)
     try:
         if args.command == "doctor":
@@ -145,6 +174,90 @@ def main(argv=None):
             from synccraft.backends.blockbench_plugin_bridge import serve_blockbench_bridge
             serve_blockbench_bridge(host=args.host, port=args.port)
             return 0
+        elif args.command == "texgraph":
+            from synccraft.shading.uv_packer import repack_bbmodel_uvs
+            from synccraft.texgraph import (
+                PRESET_REGISTRY,
+                TexGraph,
+                bake_bbmodel_maps,
+                encode_png,
+                export_html_inspector,
+            )
+
+            if args.tg_cmd == "presets":
+                print(_json({"presets": sorted(PRESET_REGISTRY.keys())}))
+                return 0
+            if args.tg_cmd == "repack-uv":
+                doc = json.loads(args.input.read_text(encoding="utf-8"))
+                new_doc, rep, zpng = repack_bbmodel_uvs(
+                    doc,
+                    padding=args.padding,
+                    mirror_lr_uv=args.mirror,
+                    canvas_mode=args.canvas,
+                )
+                args.out.parent.mkdir(parents=True, exist_ok=True)
+                args.out.write_text(json.dumps(new_doc, separators=(",", ":"), ensure_ascii=False), encoding="utf-8")
+                if args.zone_map:
+                    args.zone_map.parent.mkdir(parents=True, exist_ok=True)
+                    args.zone_map.write_bytes(zpng)
+                print(_json({"before": rep["before"], "after": rep["after"], "metrics": rep["metrics"]}))
+                return 0
+            if args.tg_cmd == "render":
+                mesh_ctx = None
+                bb_doc = None
+                if args.bbmodel:
+                    bb_doc = json.loads(args.bbmodel.read_text(encoding="utf-8"))
+                    mesh_ctx = bake_bbmodel_maps(bb_doc)
+                if args.source.startswith("preset:"):
+                    pname = args.source.split(":", 1)[1]
+                    if pname not in PRESET_REGISTRY:
+                        raise ValueError(f"Unknown preset {pname!r}; choices: {sorted(PRESET_REGISTRY)}")
+                    graph = PRESET_REGISTRY[pname](size=args.size)
+                else:
+                    graph = TexGraph.from_recipe(args.source, mesh_context=mesh_ctx)
+                if mesh_ctx is not None:
+                    graph.attach_mesh(mesh_ctx)
+                frames_list = None
+                if args.frames > 1:
+                    if args.pbr:
+                        fb = graph.render_pbr_flipbook(
+                            n_frames=args.frames,
+                            out_dir=args.out.parent,
+                            stem=args.out.stem,
+                            frametime=args.frametime,
+                        )
+                        frames_list = fb["pbr_lit_frames"]
+                        summary = {"mode": "pbr_flipbook", "frames": fb["num_frames"], "out_dir": str(args.out.parent), "pbr_lit_gif": fb["pbr_lit_gif"]}
+                    else:
+                        fb = graph.render_flipbook(
+                            n_frames=args.frames,
+                            frametime=args.frametime,
+                            out_png_path=args.out,
+                            out_gif_path=args.gif,
+                        )
+                        frames_list = [graph.evaluate(phase=k / float(args.frames)).output for k in range(args.frames)]
+                        summary = {"mode": "flipbook", "frames": fb["num_frames"], "out": str(args.out)}
+                else:
+                    ev = graph.evaluate(phase=0.0, capture_intermediates=bool(args.inspector), build_pbr=bool(args.pbr or args.inspector))
+                    args.out.parent.mkdir(parents=True, exist_ok=True)
+                    if args.pbr:
+                        bundle = graph.export_pbr_bundle(args.out.parent, stem=args.out.stem)
+                        summary = {"mode": "static_pbr", "width": graph.width, "height": graph.height, "files": bundle["files"], "nodes": len(graph.node_order)}
+                    else:
+                        args.out.write_bytes(encode_png(ev.output))
+                        if ev.emissive is not None:
+                            em_path = args.out.with_name(f"{args.out.stem}_emissive.png")
+                            em_path.write_bytes(encode_png(ev.emissive))
+                        summary = {"mode": "static", "width": graph.width, "height": graph.height, "out": str(args.out), "nodes": len(graph.node_order)}
+                    if bb_doc is not None and args.out_bbmodel:
+                        new_bb, _, _ = graph.apply_to_bbmodel(bb_doc)
+                        args.out_bbmodel.parent.mkdir(parents=True, exist_ok=True)
+                        args.out_bbmodel.write_text(json.dumps(new_bb, separators=(",", ":"), ensure_ascii=False), encoding="utf-8")
+                if args.inspector:
+                    export_html_inspector(graph, args.inspector, flipbook_frames=frames_list)
+                    summary["inspector"] = str(args.inspector)
+                print(_json(summary))
+                return 0
         return 0
     except (ValueError, OSError, NotImplementedError, RecursionError) as error:
         print(_json({"error": type(error).__name__, "message": str(error)}), file=sys.stderr)

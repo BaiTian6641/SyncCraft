@@ -223,8 +223,14 @@ def render_world_observation(
                     v_frac = np.clip((pts_f @ t_d) / max(1e-8, span_v) + 0.5, 0.0, 1.0 - 1e-9)
 
                     u0, v0, u1, v1 = atlas_desc["faces"][box.name][face_name]
-                    ax = (int(u0) + np.floor(u_frac * max(1, u1 - u0)).astype(np.intp))
-                    ay = (int(v0) + np.floor(v_frac * max(1, v1 - v0)).astype(np.intp))
+                    if u0 == u1 or v0 == v1:
+                        continue
+                    u_lo, u_hi = (u0, u1) if u1 >= u0 else (u1, u0)
+                    v_lo, v_hi = (v0, v1) if v1 >= v0 else (v1, v0)
+                    uf = u_frac if u1 >= u0 else (1.0 - 1e-9 - u_frac)
+                    vf = v_frac if v1 >= v0 else (1.0 - 1e-9 - v_frac)
+                    ax = np.clip(int(u_lo) + np.floor(uf * max(1, u_hi - u_lo)).astype(np.intp), 0, atlas_rgba.shape[1] - 1)
+                    ay = np.clip(int(v_lo) + np.floor(vf * max(1, v_hi - v_lo)).astype(np.intp), 0, atlas_rgba.shape[0] - 1)
                     sampled_rgba = atlas_rgba[ay, ax]
                     opaque_sub = sampled_rgba[:, 3] >= 128
                     if not np.any(opaque_sub):

@@ -84,7 +84,8 @@ def downsample_optical_fields(
     boxes_by_name = {b.name: b for b in domain.rest_scene.boxes}
     for fk, patch in optical_fields.patches.items():
         grid = domain.faces[fk]
-        b_obj = boxes_by_name.get(fk.box_name)
+        b_name = fk[0] if isinstance(fk, tuple) else fk.box_name
+        b_obj = boxes_by_name.get(b_name)
         eff_density = density * float(getattr(b_obj, "uv_scale", 1.0)) if b_obj is not None else density
         w_is_int = math.isclose(float(grid.width_units), round(float(grid.width_units)), abs_tol=1e-9) and float(grid.width_units) > 0.0
         h_is_int = math.isclose(float(grid.height_units), round(float(grid.height_units)), abs_tol=1e-9) and float(grid.height_units) > 0.0
@@ -776,6 +777,9 @@ def compile_vanilla_atlas(
     for fk, patch in pixel_optics.patches.items():
         box_name, face = fk
         u0, v0, u1, v1 = layout["faces"][box_name][face]
+        # Skip culled zero-area faces or horizontally mirrored slave faces (master already writes the island)
+        if u1 <= u0 or v1 <= v0:
+            continue
         h_px, w_px = int(v1 - v0), int(u1 - u0)
         grid = domain.faces[fk]
         pbox = posed_boxes[box_name]
