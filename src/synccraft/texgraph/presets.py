@@ -421,17 +421,17 @@ def build_aethelion_texgraph(mesh_ctx: MeshBakeContext, *, seed: int = 4205) -> 
         mesh_ctx.height,
         tileable=False,
         seed=seed,
-        name="aethelion_v5_multipass_pbr",
+        name="aethelion_v6_celestial_pbr",
         mesh_context=mesh_ctx,
     )
 
     # =========================================================================
-    # PASS 1: 3D Geometry Bake, Wing Orientation & Semantic Material Masks
+    # PASS 1: 3D Geometry Bake, Exact Bay-Sector Wing Coords & Material Masks
     # =========================================================================
     with g.pass_(
         "pass_1_bake",
         title="3D Bake & Masks",
-        description="3D light wrap, baked AO, top/bottom-aligned wing coords & anatomical masks.",
+        description="3D muscle cavities, exact 3D finger-to-finger bay coords & anatomical masks.",
         color="#1E293B",
     ) as p1:
         baked_ao = g.mesh_channel("baked_ao", id="mesh_baked_ao")
@@ -441,8 +441,9 @@ def build_aethelion_texgraph(mesh_ctx: MeshBakeContext, *, seed: int = 4205) -> 
         lu = g.mesh_channel("local_u", id="mesh_lu")
         lv = g.mesh_channel("local_v", id="mesh_lv")
         side_s = g.mesh_channel("side_sign", id="mesh_side_sign")
-        span_u = g.mesh_channel("wing_span_u", id="mesh_wing_span_u")
-        trail_v = g.mesh_channel("wing_trail_v", id="mesh_wing_trail_v")
+        bay_u = g.mesh_channel("wing_bay_u", id="mesh_wing_bay_u")
+        bay_v = g.mesh_channel("wing_bay_v", id="mesh_wing_bay_v")
+        bay_sector_m = g.mesh_channel("wing_bay_mask", id="mesh_wing_bay_mask")
         face_dn = g.mesh_channel("face_is_down", id="mesh_face_is_down")
         up_down_f = g.mesh_channel("face", faces="up,down", id="wing_updown_face")
         not_updown = g.levels(up_down_f, invert=True, id="not_updown")
@@ -464,45 +465,54 @@ def build_aethelion_texgraph(mesh_ctx: MeshBakeContext, *, seed: int = 4205) -> 
         eye_all_mask = g.mesh_channel("element", pattern=r"(^|/|__)eye_[lr]", id="eye_all_mask")
         eye_outward_mask = g.mesh_channel("outward_eye", pattern=r"(^|/|__)eye_[lr]", id="eye_outward_mask")
 
-        # Separate masks for Twin-Spectrum Wing Pinion Bays (Cyan outer vs Violet-Magenta inner!)
-        lobe_all_mask = g.mesh_channel("element", pattern=r"(wing_lobe|wing_hum_sail|wing_sail|membrane|patagium)", id="wing_lobe_all_mask")
-        lobe_cyan_prim_m = g.mesh_channel("element", pattern=r"wing_lobe_(1|2)$", id="wing_lobe_cyan_prim_mask")
-        lobe_cyan_tip_m = g.mesh_channel("element", pattern=r"wing_lobe_(1d|2d)$", id="wing_lobe_cyan_tip_mask")
-        lobe_mag_prim_m = g.mesh_channel("element", pattern=r"wing_lobe_3$", id="wing_lobe_mag_prim_mask")
-        lobe_mag_inner_m = g.mesh_channel("element", pattern=r"wing_lobe_(4|fore)$", id="wing_lobe_mag_inner_mask")
-        lobe_updown_m = g.math(lobe_all_mask, up_down_f, op="mul", id="lobe_updown_mask")
-        lobe_side_m = g.math(lobe_all_mask, not_updown, op="mul", id="lobe_side_mask")
+        # Separate masks for Twin-Spectrum Attached Wing Membrane Bays (Cyan outer 1-2 vs Horizon-Magenta inner 3-4+sail!)
+        wing_all_mask = g.mesh_channel(
+            "element",
+            pattern=r"(wing_bay_|wing_inner_sail|inner_sail|wing_lobe|wing_hum_sail|wing_sail|membrane|patagium)",
+            id="wing_lobe_all_mask",
+        )
+        wing_cyan_m = g.mesh_channel("element", pattern=r"(wing_bay_(1|2)|wing_lobe_(1|1d|2|2d))$", id="wing_bay_cyan_mask")
+        wing_mag_m = g.mesh_channel("element", pattern=r"(wing_bay_(3|4)|wing_inner_sail|wing_lobe_(3|4|fore))$", id="wing_bay_mag_mask")
+        wing_updown_m = g.math(wing_all_mask, up_down_f, op="mul", id="lobe_updown_mask")
+        wing_side_m = g.math(wing_all_mask, not_updown, op="mul", id="lobe_side_mask")
 
         p1.preview_ref = baked_ao
 
     # =========================================================================
-    # PASS 2: Macro Material Block-In (Reusable Studio PBR Subgraphs!)
+    # PASS 2: 3D Muscle-Fitted Obsidian Armor, Brushed Gold & Pearl Scutes
     # =========================================================================
     with g.pass_(
         "pass_2_macro_blockin",
-        title="Macro Material Buses",
-        description="Obsidian dragon plates, brushed champagne gold, opalescent scutes & detail materials.",
+        title="Muscle Armor & Gold",
+        description="3D-fitted midnight-obsidian muscle scales, brushed metallic gold & opalescent scutes.",
         color="#172554",
     ) as p2:
         obsidian_mat = g.use_subgraph(
-            "dragon_armor_plates_pbr",
-            prefix="obsidian",
-            inputs={"flow_lit": flow_lit, "isl_grad": isl_grad, "ao": baked_ao},
+            "anatomical_muscle_scales_pbr",
+            prefix="obsidian_muscle",
             seed=seed + 11,
-            cols=max(20, mesh_ctx.width // 18),
-            rows=max(24, mesh_ctx.height // 18),
-            stops=[
-                (0.00, "#07071A"),
-                (0.26, "#12153B"),
-                (0.54, "#1F2D66"),
-                (0.78, "#345496"),
-                (0.92, "#5E8ED1"),
-                (1.00, "#A8D5FA"),
+            plate_cols=max(64, mesh_ctx.width // 7),
+            plate_rows=max(64, mesh_ctx.height // 6),
+            scale_stops=[
+                (0.00, "#050612"),
+                (0.24, "#0E1433"),
+                (0.50, "#1D2C61"),
+                (0.76, "#345299"),
+                (0.92, "#6593D6"),
+                (1.00, "#B8DBFA"),
             ],
-            roughness=0.32,
-            metallic=0.18,
-            smooth_blend=0.66,
-            quantize_steps=8,
+            belly_stops=[
+                (0.00, "#475569"),
+                (0.45, "#94A3B8"),
+                (0.80, "#CBD5E1"),
+                (1.00, "#F1F5F9"),
+            ],
+            muscle_groove_depth=0.44,
+            scale_relief=0.52,
+            roughness_base=0.36,
+            metallic_crown=0.22,
+            smooth_blend=0.52,
+            quantize_steps=7,
         )
 
         # Subtle smooth dorsal cosmic-violet iridescence sweeping along crest & spine
@@ -516,7 +526,7 @@ def build_aethelion_texgraph(mesh_ctx: MeshBakeContext, *, seed: int = 4205) -> 
             id="dorsal_violet_rgba",
         )
         dorsal_violet_mat = g.material_make(dorsal_violet, height=f"{obsidian_mat}.height", roughness=0.26, metallic=0.22, ao=baked_ao, id="dorsal_violet_mat")
-        obs_irid_mat = g.material_blend(obsidian_mat, dorsal_violet_mat, mask=dorsal_sheen_m, opacity=0.38, albedo_mode="screen", id="obsidian_irid_mat")
+        obs_irid_mat = g.material_blend(obsidian_mat, dorsal_violet_mat, mask=dorsal_sheen_m, opacity=0.36, albedo_mode="screen", id="obsidian_irid_mat")
 
         # Brushed Champagne-Gold Astrolabe Armor Subgraph (LabPBR Gold Metal ID 231!)
         gold_mat = g.use_subgraph(
@@ -524,7 +534,7 @@ def build_aethelion_texgraph(mesh_ctx: MeshBakeContext, *, seed: int = 4205) -> 
             prefix="gold_astrolabe",
             inputs={"flow_lit": flow_lit, "isl_grad": isl_grad, "ao": baked_ao},
             seed=seed + 23,
-            roughness=0.17,
+            roughness=0.16,
             metallic=0.94,
         )
 
@@ -566,95 +576,85 @@ def build_aethelion_texgraph(mesh_ctx: MeshBakeContext, *, seed: int = 4205) -> 
         p2.preview_ref = f"{body_mat}.albedo"
 
     # =========================================================================
-    # PASS 3: Sculpted Aerodynamic Metallic Pinion-Feather Wings (Twin-Spectrum!)
+    # PASS 3: 100%-Attached Twin-Spectrum Celestial Astrolabe Wing Membranes!
     # =========================================================================
     with g.pass_(
-        "pass_3_pinion_wings",
-        title="Sculpted Pinion Wings",
-        description="Swept metallic obsidian pinion blades, gold astrolabe arc & Twin-Spectrum cyan/magenta quills.",
+        "pass_3_celestial_wings",
+        title="Attached Celestial Wings",
+        description="100% finger-anchored Twin-Spectrum Cyan/Magenta translucent membranes with gold astrolabe tendon ribs.",
         color="#3B0764",
     ) as p3:
-        # Animated traveling energy wave pulsing gently along pinion quills
         quill_wave = g.scroll(g.fbm(scale=3.0, octaves=2, tileable=True, seed=seed + 131, id="quill_wave_n"), speed_x=1.0, speed_y=1.0, id="quill_wave_scroll")
+        wing_in = {"span_u": bay_u, "trail_v": bay_v, "face_is_down": face_dn}
 
-        blade_pal = [
-            (0.00, "#060618"),
-            (0.26, "#101438"),
-            (0.54, "#1B295E"),
-            (0.78, "#325294"),
-            (0.92, "#6396D8"),
-            (1.00, "#B8E1FF"),
-        ]
-        cyan_neon_pal = [(0.0, "#0284C7"), (0.42, "#22D3EE"), (0.78, "#A5F3FC"), (1.0, "#FFFFFF")]
-        mag_neon_pal = [(0.0, "#7E22CE"), (0.42, "#D946EF"), (0.78, "#F5D0FE"), (1.0, "#FFFFFF")]
-
-        wing_in = {"span_u": span_u, "trail_v": trail_v, "face_is_down": face_dn, "wave": quill_wave}
-
-        # 4 Tailored Pinion Louver Archetypes (ALL sharing exact aligned wing_span_u & wing_trail_v!)
-        pinion_cyan_prim = g.use_subgraph(
-            "sculpted_pinion_wing_pbr",
-            prefix="pinion_cyan_prim",
+        # Outer Bays (wing_bay_1, wing_bay_2): Deep Void-Indigo -> Royal Cobalt -> Luminous Starlight-Cyan Backlit SSS + Gold Astrolabe Ribs!
+        mem_cyan = g.use_subgraph(
+            "colossal_dragon_membrane_pbr",
+            prefix="aeth_mem_cyan",
             inputs=wing_in,
             seed=seed + 71,
-            vanes=5,
-            sweep=0.84,
-            envelope_style="primary",
-            blade_stops=blade_pal,
-            neon_stops=cyan_neon_pal,
-            gold_arc=True,
-            quill_glow_strength=0.95,
+            palette_stops=[
+                (0.00, "#080B1E"),
+                (0.24, "#12214D"),
+                (0.50, "#194382"),
+                (0.76, "#228CC9"),
+                (0.92, "#67E8F9"),
+                (1.00, "#E0F9FF"),
+            ],
+            rim_color="#1E3A5F",
+            tendon_color="#C89B2B",
+            arch_depth=0.22,
+            arches=1,
+            tatter_strength=0.045,
+            tendon_ribs=3,
+            pleat_count=10.0,
+            pleat_strength=0.18,
+            backlit_sss=0.88,
+            smooth_blend=0.76,
+            quantize_steps=8,
         )
-        pinion_cyan_tip = g.use_subgraph(
-            "sculpted_pinion_wing_pbr",
-            prefix="pinion_cyan_tip",
-            inputs=wing_in,
-            seed=seed + 79,
-            vanes=4,
-            sweep=0.78,
-            envelope_style="distal_tip",
-            blade_stops=blade_pal,
-            neon_stops=cyan_neon_pal,
-            gold_arc=True,
-            quill_glow_strength=0.95,
-        )
-        pinion_mag_prim = g.use_subgraph(
-            "sculpted_pinion_wing_pbr",
-            prefix="pinion_mag_prim",
+
+        # Inner Bays (wing_bay_3, wing_bay_4, wing_inner_sail): Deep Void-Indigo -> Cosmic Plum -> Luminous Horizon-Magenta Backlit SSS + Gold Ribs!
+        mem_mag = g.use_subgraph(
+            "colossal_dragon_membrane_pbr",
+            prefix="aeth_mem_mag",
             inputs=wing_in,
             seed=seed + 83,
-            vanes=5,
-            sweep=0.84,
-            envelope_style="primary",
-            blade_stops=blade_pal,
-            neon_stops=mag_neon_pal,
-            gold_arc=True,
-            quill_glow_strength=0.95,
-        )
-        pinion_mag_inner = g.use_subgraph(
-            "sculpted_pinion_wing_pbr",
-            prefix="pinion_mag_inner",
-            inputs=wing_in,
-            seed=seed + 89,
-            vanes=4,
-            sweep=0.80,
-            envelope_style="inner_curtain",
-            blade_stops=blade_pal,
-            neon_stops=mag_neon_pal,
-            gold_arc=True,
-            quill_glow_strength=0.92,
+            palette_stops=[
+                (0.00, "#0C081E"),
+                (0.24, "#28134A"),
+                (0.50, "#5B1E8C"),
+                (0.76, "#A832C9"),
+                (0.92, "#E879F9"),
+                (1.00, "#FAE8FF"),
+            ],
+            rim_color="#3B125E",
+            tendon_color="#C89B2B",
+            arch_depth=0.22,
+            arches=1,
+            tatter_strength=0.045,
+            tendon_ribs=3,
+            pleat_count=10.0,
+            pleat_strength=0.18,
+            backlit_sss=0.88,
+            smooth_blend=0.76,
+            quantize_steps=8,
         )
 
-        # Layer all 4 sculpted pinion bays into the MaterialBus!
-        w_m1 = g.material_blend(body_mat, pinion_cyan_prim, mask=lobe_cyan_prim_m, id="comp_pinion_c1")
-        w_m2 = g.material_blend(w_m1, pinion_cyan_tip, mask=lobe_cyan_tip_m, id="comp_pinion_c2")
-        w_m3 = g.material_blend(w_m2, pinion_mag_prim, mask=lobe_mag_prim_m, id="comp_pinion_m1")
-        with_wings_mat = g.material_blend(w_m3, pinion_mag_inner, mask=lobe_mag_inner_m, id="body_and_wings_mat")
+        # Composite BOTH Twin-Spectrum attached membranes cleanly into the MaterialBus!
+        w_m1 = g.material_blend(body_mat, mem_cyan, mask=wing_cyan_m, id="comp_wing_cyan")
+        with_wings_mat = g.material_blend(w_m1, mem_mag, mask=wing_mag_m, id="body_and_wings_mat")
 
-        # Assemble exact combined hard-alpha mask & quill emissive mask across all 4 bay types!
-        a1 = g.blend(g.constant(1.0, id="solid_one"), f"{pinion_cyan_prim}.alpha", mask=lobe_cyan_prim_m, id="wing_alpha_1")
-        a2 = g.blend(a1, f"{pinion_cyan_tip}.alpha", mask=lobe_cyan_tip_m, id="wing_alpha_2")
-        a3 = g.blend(a2, f"{pinion_mag_prim}.alpha", mask=lobe_mag_prim_m, id="wing_alpha_3")
-        wing_alpha_all = g.blend(a3, f"{pinion_mag_inner}.alpha", mask=lobe_mag_inner_m, id="wing_alpha_all")
+        # Exact 100%-attached bay-sector hard-alpha mask (solid all the way to every bounding spar!)
+        a1 = g.blend(g.constant(1.0, id="solid_one"), f"{mem_cyan}.alpha", mask=wing_cyan_m, id="wing_alpha_1")
+        a2 = g.blend(a1, f"{mem_mag}.alpha", mask=wing_mag_m, id="wing_alpha_2")
+        wing_alpha_all = g.math(a2, bay_sector_m, op="mul", id="wing_alpha_all")
+
+        # Subtle luminous energy tracing strictly along curved astrolabe tendon ribs (focused accent!)
+        t_c = g.levels(f"{mem_cyan}.tendon_mask", in_min=0.74, in_max=0.98, out_max=0.45, id="tendon_glow_c")
+        t_m = g.levels(f"{mem_mag}.tendon_mask", in_min=0.74, in_max=0.98, out_max=0.45, id="tendon_glow_m")
+        q1 = g.blend(g.constant(0.0, id="zero_q"), t_c, mask=wing_cyan_m, id="quill_g1")
+        quill_glow_all = g.math(g.blend(q1, t_m, mask=wing_mag_m, id="quill_g2"), wing_updown_m, op="mul", id="quill_glow_masked")
 
         p3.preview_ref = f"{with_wings_mat}.albedo"
 
@@ -678,7 +678,7 @@ def build_aethelion_texgraph(mesh_ctx: MeshBakeContext, *, seed: int = 4205) -> 
             contrast=1.04,
             lift=0.01,
             shadow_cool=0.04,
-            despeckle_threshold=0.22,
+            despeckle_threshold=0.38,
             id="aethelion_graded_mat",
         )
         p4.preview_ref = f"{graded_mat}.albedo"
@@ -689,7 +689,7 @@ def build_aethelion_texgraph(mesh_ctx: MeshBakeContext, *, seed: int = 4205) -> 
     with g.pass_(
         "pass_5_emissive_pbr",
         title="Eyes, Neon & PBR Final",
-        description="Bilateral non-standard gradient eyes, Twin-Spectrum emissive slits, 100% aligned wing alpha & island padding.",
+        description="Bilateral non-standard gradient eyes, Twin-Spectrum emissive slits, 100% attached wing alpha & island padding.",
         color="#083344",
     ) as p5:
         # Bilateral Non-Standard Luminous Gradient Eyes (User's Favorite — 100% Mirror-Symmetric L & R!)
@@ -724,40 +724,31 @@ def build_aethelion_texgraph(mesh_ctx: MeshBakeContext, *, seed: int = 4205) -> 
         )
         with_eyes_mat = g.material_blend(with_sock_mat, eye_mat, mask=eye_outward_mask, id="comp_eyes_mat")
 
-        # Focused Twin-Spectrum Neon Energy Accents (Cyan slits/gems + Magenta f3/f4 slits + Pinion Quills + Eyes!)
-        cyan_slit_m = g.mesh_channel("element", pattern=r"(f1_.*slit|f2_.*slit|gravity_cyan|carpal_gem|gemini_star|chest_core_gem|halo_energy|thruster_core|neon_conduit)", id="cyan_slit_mask")
-        mag_slit_m = g.mesh_channel("element", pattern=r"(f3_.*slit|f4_.*slit|gravity_mag)", id="mag_slit_mask")
-        cyan_pulsed = g.pulse(cyan_slit_m, min_val=0.78, max_val=1.0, freq=1.0, id="cyan_pulsed")
-        mag_pulsed = g.pulse(mag_slit_m, min_val=0.78, max_val=1.0, freq=1.0, phase_offset=0.5, id="mag_pulsed")
-
-        # Also extract pinion quill glow mask cleanly from our wing subgraphs!
-        q1 = g.blend(g.constant(0.0, id="zero_q"), f"{pinion_cyan_prim}.glow_mask", mask=lobe_cyan_prim_m, id="quill_g1")
-        q2 = g.blend(q1, f"{pinion_cyan_tip}.glow_mask", mask=lobe_cyan_tip_m, id="quill_g2")
-        q3 = g.blend(q2, f"{pinion_mag_prim}.glow_mask", mask=lobe_mag_prim_m, id="quill_g3")
-        quill_glow_all = g.math(g.blend(q3, f"{pinion_mag_inner}.glow_mask", mask=lobe_mag_inner_m, id="quill_g4"), lobe_updown_m, op="mul", id="quill_glow_masked")
+        # Focused Twin-Spectrum Neon Energy Accents (Cyan slits/gems + Magenta f3/f4 slits + Curved Ribs + Eyes!)
+        cyan_slit_m = g.mesh_channel("element", pattern=r"(f1_.*slit|f2_.*slit|gravity_cyan|carpal_gem|gemini_star|chest_core_gem|halo_energy|thruster_core|neon_conduit|tail_prism_cyan|tail_vane_slit)", id="cyan_slit_mask")
+        mag_slit_m = g.mesh_channel("element", pattern=r"(f3_.*slit|f4_.*slit|gravity_mag|tail_prism_magenta)", id="mag_slit_mask")
+        cyan_pulsed = g.pulse(cyan_slit_m, min_val=0.80, max_val=1.0, freq=1.0, id="cyan_pulsed")
+        mag_pulsed = g.pulse(mag_slit_m, min_val=0.80, max_val=1.0, freq=1.0, phase_offset=0.5, id="mag_pulsed")
 
         cyan_col = g.multi_stop_gradient(quill_wave, stops=[(0.0, "#0284C7"), (0.45, "#22D3EE"), (0.82, "#A5F3FC"), (1.0, "#FFFFFF")], smooth_blend=1.0, id="cyan_neon_col")
         mag_col = g.multi_stop_gradient(quill_wave, stops=[(0.0, "#7E22CE"), (0.45, "#D946EF"), (0.82, "#F5D0FE"), (1.0, "#FFFFFF")], smooth_blend=1.0, id="mag_neon_col")
 
-        # Build unified focused emissive mask + Twin-Spectrum color map
         slit_em_mask = g.math(cyan_pulsed, mag_pulsed, op="max", id="slit_em_mask")
         neon_and_quill_mask = g.math(slit_em_mask, quill_glow_all, op="max", id="neon_quill_mask")
         all_em_mask = g.math(neon_and_quill_mask, eye_em_masked, op="max", id="all_emissive_mask")
 
-        em_col_1 = g.blend(cyan_col, mag_col, mask=g.math(mag_slit_m, g.math(lobe_mag_prim_m, lobe_mag_inner_m, op="max", id="mag_lobe_any"), op="max", id="mag_color_region"), id="twin_spec_col")
+        em_col_1 = g.blend(cyan_col, mag_col, mask=g.math(mag_slit_m, wing_mag_m, op="max", id="mag_color_region"), id="twin_spec_col")
         all_em_col = g.blend(em_col_1, f"{eye_multi}.albedo", mask=eye_outward_mask, id="all_emissive_col")
 
-        # Single-evaluation multi-port emissive composite!
         em_comp = g.emissive_composite(
             f"{with_eyes_mat}.albedo",
             all_em_mask,
             color=all_em_col,
             glow_bleed_px=2,
-            glow_strength=0.42,
+            glow_strength=0.45,
             id="aethelion_glow",
         )
 
-        # Pack final emissive & albedo back into the unified MATERIAL bus!
         lit_mat = g.material_make(
             f"{em_comp}.albedo",
             height=f"{with_eyes_mat}.height",
@@ -771,12 +762,13 @@ def build_aethelion_texgraph(mesh_ctx: MeshBakeContext, *, seed: int = 4205) -> 
             id="aethelion_lit_mat",
         )
 
-        # Apply crisp 100% aligned top/bottom hard-alpha wing pinion cutouts & clear 0.5u thin edge faces!
-        cut_mat_1 = g.material_set_alpha(lit_mat, wing_alpha_all, mask=lobe_updown_m, id="aethelion_cut_pinions")
-        cut_mat_2 = g.material_set_alpha(cut_mat_1, g.constant(0.0, id="zero_a"), mask=lobe_side_m, id="aethelion_clean_lobe_edges")
+        # Apply crisp 100% attached top/bottom hard-alpha wing membrane cutouts & clear edge faces!
+        cut_mat_1 = g.material_set_alpha(lit_mat, wing_alpha_all, mask=wing_updown_m, id="aethelion_cut_pinions")
+        cut_mat_2 = g.material_set_alpha(cut_mat_1, g.constant(0.0, id="zero_a"), mask=wing_side_m, id="aethelion_clean_lobe_edges")
         final_mat = g.material_pad_islands(cut_mat_2, id="final_aethelion_material")
         p5.preview_ref = f"{final_mat}.albedo"
 
+    g.bind_driver(em_comp, "glow_strength", kind="wiggler", min_val=0.38, max_val=0.56, freq=1.0, octaves=3, seed=seed + 7)
     g.set_output_material(final_mat, normal_strength=2.5)
     g.expose_param("eye_brow_shadow", eye_multi, "brow_shadow", min_val=0.0, max_val=0.8, step=0.05)
     g.expose_param("glow_strength", em_comp, "glow_strength", min_val=0.0, max_val=1.0, step=0.05)
@@ -976,15 +968,15 @@ def build_colossal_dragon_texgraph(mesh_ctx: MeshBakeContext, *, seed: int = 530
             "anatomical_muscle_scales_pbr",
             prefix="dragon_muscle_scales",
             seed=seed + 11,
-            plate_cols=max(20, mesh_ctx.width // 20),
-            plate_rows=max(22, mesh_ctx.height // 20),
+            plate_cols=max(64, mesh_ctx.width // 7),
+            plate_rows=max(64, mesh_ctx.height // 6),
             scale_stops=[
-                (0.00, "#0F101E"),  # deep plum-slate muscle trough
-                (0.24, "#1F233A"),  # dark volcanic basalt scale
-                (0.50, "#31425E"),  # storm-slate / deep teal mid-plate
-                (0.76, "#4D6D8C"),  # weathered steel-teal shoulder/rib muscle crown
-                (0.92, "#7DA3BF"),  # crisp honed dorsal ridge
-                (1.00, "#C7E0F2"),  # subtle top-edge catchlight
+                (0.00, "#090B17"),  # deep obsidian-plum inter-scale shadow pocket
+                (0.24, "#172038"),  # dark volcanic basalt scale base
+                (0.50, "#2A4261"),  # storm-slate / deep ocean-teal scale body
+                (0.76, "#466E8E"),  # weathered steel-teal sculpted dome
+                (0.92, "#76A8C4"),  # crisp honed dorsal scale rim & keel
+                (1.00, "#C4E4F5"),  # subtle sunlit edge catchlight
             ],
             belly_stops=[
                 (0.00, "#383032"),
@@ -993,9 +985,11 @@ def build_colossal_dragon_texgraph(mesh_ctx: MeshBakeContext, *, seed: int = 530
                 (1.00, "#ECE2CD"),
             ],
             muscle_groove_depth=0.44,
-            scale_relief=0.38,
-            roughness_base=0.42,
-            metallic_crown=0.16,
+            scale_relief=0.52,
+            roughness_base=0.40,
+            metallic_crown=0.18,
+            smooth_blend=0.52,
+            quantize_steps=7,
         )
         # Warm dark obsidian-horn & ivory-tipped claws/spines
         horn_alb = g.multi_stop_gradient(flow_lit, stops=[(0.0, "#141118"), (0.45, "#3A3138"), (0.80, "#7A6A64"), (1.0, "#D8C8B4")], smooth_blend=0.72, quantize_steps=6, id="horn_alb")
@@ -1060,7 +1054,7 @@ def build_colossal_dragon_texgraph(mesh_ctx: MeshBakeContext, *, seed: int = 530
             contrast=1.05,
             lift=0.01,
             shadow_cool=0.04,
-            despeckle_threshold=0.22,
+            despeckle_threshold=0.38,
             id="dragon_graded_mat",
         )
         p4.preview_ref = f"{graded}.albedo"

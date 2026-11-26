@@ -565,12 +565,12 @@ def anatomical_muscle_scales(
     local_uv: np.ndarray,
     *,
     scale_stops: Sequence[tuple[float, str]] = (
-        (0.00, "#11101C"),
-        (0.24, "#24253B"),
-        (0.52, "#3E4766"),
-        (0.78, "#647496"),
-        (0.94, "#9BB0CF"),
-        (1.00, "#DCE8FA"),
+        (0.00, "#0A0C1B"),
+        (0.24, "#1C2442"),
+        (0.50, "#354A78"),
+        (0.76, "#5C7FB0"),
+        (0.92, "#97BFE6"),
+        (1.00, "#E0F2FF"),
     ),
     belly_stops: Sequence[tuple[float, str]] = (
         (0.00, "#2E2733"),
@@ -578,27 +578,30 @@ def anatomical_muscle_scales(
         (0.80, "#B8AE9E"),
         (1.00, "#ECE4D3"),
     ),
-    plate_cols: int = 24,
-    plate_rows: int = 28,
+    plate_cols: int = 96,
+    plate_rows: int = 96,
     muscle_groove_depth: float = 0.42,
-    scale_relief: float = 0.36,
-    roughness_base: float = 0.40,
-    metallic_crown: float = 0.14,
-    smooth_blend: float = 0.62,
+    scale_relief: float = 0.58,
+    roughness_base: float = 0.38,
+    metallic_crown: float = 0.22,
+    smooth_blend: float = 0.32,
     quantize_steps: int = 7,
     seed: int = 42,
 ) -> dict[str, np.ndarray]:
-    """3D-Anatomical Scale-to-Muscle Texture Fitting Generator (Distilled from Reference Images 2, 3, 4).
+    """3D-Anatomical Interlocking Dragon Scale & Muscle Fitting Generator (Distilled from Reference Images 1-4).
 
-    Fits chunky Blockbench dragon plates, limb tendon-bars, dorsal chevrons, and ventral rib-scutes
-    directly to the creature's baked 3D geometry & muscle volumes:
-    - **Muscle-Flow Alignment**: Uses 3D surface normal & local face coordinates to orient chunky
-      interlocking armor plates lengthwise along limbs/neck/tail and wrap ribcage plates cleanly!
-    - **Deep Muscle-Belly Separation**: Darkens & recesses inter-muscle contact valleys (``joint_cavity``
-      + ``baked_ao``) while crowning raised dorsal muscle crests (``world_normal.y > 0.35`` + ``edge_bevel``)
-      with crisp 1px honed highlights!
-    - **Countershaded Belly Scutes**: Automatically transitions undersides (``world_normal.y < -0.25``)
-      into smooth transverse ribbed belly armor with clean tonal hierarchy!
+    Builds unmistakable, razor-crisp pixel-art shingled dragon scales directly over 3D muscle volumes:
+    - **True Overlapping Shingled Dragon Scales (`4-6 px` pitch)**: Evaluates BOTH the current scale
+      and the overhanging upper-row curved U-shield / pointed-diamond scale so every scale has:
+        * A guaranteed ``>= 1.0 px`` deep dark cast-shadow overlap pocket tucked beneath each curved tip,
+        * A convex sculpted 3D pillow dome with a raised longitudinal central keel ridge,
+        * A crisp ``1.0 px`` bright honed leading/lower bevel catchlight rim,
+        * Bold per-scale discrete cellular value diversity (hand-painted Blockbench scale clusters
+          like Reference Images 2, 3, and 4 — never flat wallpaper!).
+    - **Deep Muscle-Belly Sculpting Underneath**: Cylindrical cuboid roundness, ``joint_cavity`` dark
+      muscle valleys, ``baked_ao`` contact shading, and sharp ``edge_bevel`` armor corner crowns!
+    - **Transverse Ribbed Ventral Belly Scutes**: Automatically transitions undersides
+      (``world_normal.y < -0.25``) into overlapping horizontal belly plates with crisp dark overlap seams!
 
     Returns a full multi-port ``MATERIAL`` bus dict plus ``"muscle_crevice"`` & ``"crown_highlight"`` ports.
     """
@@ -615,54 +618,129 @@ def anatomical_muscle_scales(
 
     # 1. Anatomical Orientation Masks (dorsal crown vs lateral muscle walls vs ventral belly)
     ny = wn[..., 1]
-    dorsal_w = np.clip((ny - 0.15) / 0.65, 0.0, 1.0)
-    ventral_w = np.clip((-ny - 0.22) / 0.55, 0.0, 1.0)
-    lateral_w = np.clip(1.0 - dorsal_w * 0.75 - ventral_w * 0.85, 0.0, 1.0)
+    dorsal_w = np.clip((ny - 0.14) / 0.62, 0.0, 1.0)
+    ventral_w = np.clip((-ny - 0.24) / 0.52, 0.0, 1.0)
+    lateral_w = np.clip(1.0 - dorsal_w * 0.72 - ventral_w * 0.85, 0.0, 1.0)
 
-    # 2. Chunky Overlapping Armor / Muscle Plates (Atlas-coherent + local face-aligned tendon bars!)
-    body_plates = layered_scale_plates(
-        H, W,
-        cols=max(8, int(plate_cols)),
-        rows=max(8, int(plate_rows)),
-        stagger=0.5,
-        gap=0.08,
-        top_rim=0.22,
-        variance=0.18,
-        seed=seed + 7,
-    )
-    # Local muscle tendon bands following each cuboid's long face axis (like Reference Image 3!)
-    u_bars = np.abs(np.sin(lu * math.pi * 3.0))
-    v_rungs = np.abs(np.sin(lv * math.pi * 4.0 + 0.45 * np.abs(lu - 0.5) * math.pi))
-    muscle_striation = (0.58 * u_bars + 0.42 * v_rungs).astype(np.float32)
-    # Per-face cylindrical muscle roundness (softly swells center of each cuboid, darkens flank seams!)
-    cyl_swell = np.clip(1.0 - 1.35 * ((lu - 0.5) ** 2 + 0.55 * (lv - 0.5) ** 2), 0.25, 1.0).astype(np.float32)
-    brush = directional_brushstrokes(H, W, angle_deg=-14.0, scale_along=3.5, scale_across=15.0, contrast=0.22, seed=seed + 31)
+    # 2. TRUE OVERLAPPING SHINGLED PIXEL-ART DRAGON SCALES (Clean hand-painted Blockbench scale craft!)
+    # Broader, cleaner 6-7.5 px dragon scales so every scale shows a sculpted dome + curved shadow pocket without busy noise
+    cell_w = float(np.clip(W / max(8.0, float(plate_cols)), 5.8, 9.5))
+    cell_h = float(np.clip(H / max(8.0, float(plate_rows)), 5.4, 9.0))
 
-    # 3. Combine Anatomical Muscle Volume + Fitted Scale Relief!
-    muscle_crevice = np.clip(cav * 0.75 + (1.0 - ao) * 0.55 + body_plates["seam"] * 0.42, 0.0, 1.0).astype(np.float32)
-    crown_hi = np.clip(dorsal_w * 0.55 + bev * 0.45 * (1.0 - cav) + cyl_swell * 0.22, 0.0, 1.0).astype(np.float32)
+    yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
+    # Subtle organic muscle-contour flow (<= 0.35 px) so scale rows follow anatomy cleanly
+    warp_y = 0.32 * np.sin((xx / max(1.0, cell_w)) * 0.55 + (lu - 0.5) * 1.2)
+    gy = (yy + warp_y) / cell_h
+    row0 = np.floor(gy).astype(np.int32)
+    fy0 = gy - row0.astype(np.float32)
+
+    # Row-0 (current row) staggered X coords
+    stagger0 = (row0 & 1).astype(np.float32) * 0.5
+    gx0 = (xx / cell_w) + stagger0
+    col0 = np.floor(gx0).astype(np.int32)
+    fx0 = gx0 - col0.astype(np.float32)  # [0, 1)
+
+    # Row-1 (overhanging upper row) staggered X coords
+    row_up = row0 - 1
+    stagger_up = (row_up & 1).astype(np.float32) * 0.5
+    gx_up = (xx / cell_w) + stagger_up
+    col_up = np.floor(gx_up).astype(np.int32)
+    fx_up = gx_up - col_up.astype(np.float32)
+
+    # Curved pointed-U / dragon-shield lower edge of the overhanging upper scale
+    dx_up = 2.0 * np.abs(fx_up - 0.5)  # 0 at pointed tip center, 1 at side notch
+    arch_y = (0.42 * (1.0 - 0.85 * (dx_up ** 1.8))).astype(np.float32)
+
+    # Exact ownership: does this pixel belong to the overhanging upper scale or the lower scale?
+    in_upper = fy0 < arch_y
+    sid_x = np.where(in_upper, col_up, col0)
+    sid_y = np.where(in_upper, row_up, row0)
+
+    # True local coords (sx in [-1, 1], sy in [0, 1] from tucked root to curved overhanging tip!)
+    sx = np.where(in_upper, (fx_up - 0.5) * 2.0, (fx0 - 0.5) * 2.0).astype(np.float32)
+    dist_below_arch_px = (fy0 - arch_y) * cell_h
+    dx_self = np.abs(sx)
+    self_tip_y = (1.0 + 0.42 * (1.0 - 0.85 * (dx_self ** 1.8))).astype(np.float32)
+    sy = np.where(
+        in_upper,
+        np.clip((1.0 + fy0) / np.maximum(0.25, 1.0 + arch_y), 0.0, 1.0),
+        np.clip((fy0 - arch_y) / np.maximum(0.25, self_tip_y - arch_y), 0.0, 1.0),
+    ).astype(np.float32)
+
+    # Crisp 1.15 px curved cast-shadow pocket tucked RIGHT under each overhanging scale arch
+    arch_shadow_px = np.where(
+        (~in_upper) & (dist_below_arch_px >= 0.0) & (dist_below_arch_px < 1.22),
+        1.0 - (dist_below_arch_px / 1.22) * 0.52,
+        0.0,
+    ).astype(np.float32)
+    # Soft dark side tuck seam (~0.85 px) between neighboring scales
+    edge_px = (0.5 - np.abs(np.where(in_upper, fx_up, fx0) - 0.5)) * cell_w
+    side_seam = np.clip(1.0 - edge_px / 0.85, 0.0, 1.0).astype(np.float32) * np.clip(0.28 + 0.72 * (1.0 - sy * 0.45), 0.0, 1.0)
+    scale_seam = np.clip(np.maximum(arch_shadow_px, side_seam * 0.72), 0.0, 1.0).astype(np.float32)
+
+    # Refined 1.05 px honed bevel rim along the overhanging scale lip + smooth sculpted dorsal keel
+    tip_dist_px = np.where(in_upper, -dist_below_arch_px, (self_tip_y - fy0) * cell_h)
+    lip_rim = np.where(
+        (tip_dist_px >= 0.0) & (tip_dist_px < 1.12) & (scale_seam < 0.35),
+        1.0 - (tip_dist_px / 1.12) * 0.45,
+        0.0,
+    ).astype(np.float32)
+    pillow_dome = np.clip(1.0 - 0.52 * (sx ** 2) - 0.36 * ((sy - 0.62) ** 2), 0.0, 1.0).astype(np.float32)
+    keel_ridge = (np.exp(-((sx / 0.30) ** 2)) * np.clip((sy - 0.18) / 0.65, 0.0, 1.0) * (1.0 - scale_seam)).astype(np.float32)
+
+    # Restrained per-scale hand-painted tonal diversity (rich cohesion like Reference Images 2, 3 & 4 — ZERO confetti!)
+    h_int = (sid_x.astype(np.uint32) * np.uint32(73856093)) ^ (sid_y.astype(np.uint32) * np.uint32(19349663)) ^ np.uint32(seed * 2654435761 & 0xFFFFFFFF)
+    h_int = (h_int ^ (h_int >> np.uint32(13))) * np.uint32(1274126177)
+    h_int = h_int ^ (h_int >> np.uint32(16))
+    h_unit = (h_int & np.uint32(0xFFFF)).astype(np.float32) / 65535.0
+    # 4 subtle cohesive painterly scale tiers (-0.075, -0.025, +0.025, +0.075)
+    scale_tier = (np.floor(h_unit * 4.0) / 3.0 - 0.5) * 0.15
+
+    # Sculpted dragon scale heightfield (strong clean normals in LabPBR _n.png!)
+    raw_scale_h = np.clip(
+        0.22
+        + 0.46 * pillow_dome
+        + 0.18 * keel_ridge
+        + 0.14 * lip_rim
+        + 0.08 * scale_tier
+        - 0.52 * scale_seam,
+        0.04,
+        1.0,
+    ).astype(np.float32)
+
+    # 3. Strong 3D Anatomical Muscle Volume Sculpting Underneath (Macro Form Reads FIRST!)
+    cyl_swell = np.clip(1.0 - 1.18 * ((lu - 0.5) ** 2 + 0.48 * (lv - 0.5) ** 2), 0.28, 1.0).astype(np.float32)
+    # Subtle painterly macro wash breaks up uniformity across torso & limbs (zero wallpaper!)
+    macro_wash = value_noise(H, W, scale=max(6.0, W / 42.0), tileable=False, seed=seed + 53).astype(np.float32)
+    muscle_crevice = np.clip(cav * 0.74 + (1.0 - ao) * 0.50 + scale_seam * 0.52, 0.0, 1.0).astype(np.float32)
+    scale_spec_rim = np.clip(lip_rim * 0.68 + keel_ridge * 0.55, 0.0, 1.0).astype(np.float32)
+    crown_hi = np.clip(dorsal_w * 0.46 + bev * 0.40 * (1.0 - cav) + scale_spec_rim * dorsal_w * 0.42, 0.0, 1.0).astype(np.float32)
 
     scale_h = np.clip(
-        0.48 * body_plates["height"]
-        + 0.26 * (lateral_w * muscle_striation + (1.0 - lateral_w) * cyl_swell)
-        + 0.16 * cyl_swell
-        + 0.10 * brush
-        - float(muscle_groove_depth) * 0.48 * cav,
+        0.74 * raw_scale_h
+        + 0.26 * cyl_swell
+        - float(muscle_groove_depth) * 0.36 * cav,
         0.0,
         1.0,
     ).astype(np.float32)
 
-    # Half-Lambert 3D macro wrap + fitted scale relief + razor dorsal/edge crowns!
-    key_l = np.array([0.36, 0.86, 0.36], dtype=np.float32)
+    # 4. Sleek Cohesive Painterly Dragon Scale Tone Mapping (Dark obsidian/basalt flanks + light-gated dorsal catchlights!)
+    key_l = np.array([0.34, 0.86, 0.38], dtype=np.float32)
     key_l /= np.linalg.norm(key_l)
     ndotl = np.clip(np.sum(wn * key_l[None, None, :], axis=-1) * 0.5 + 0.5, 0.0, 1.0)
+    # Directional light gate: ONLY sunlit & dorsal scales catch bright specular rim highlights!
+    spec_gate = np.clip((ndotl ** 1.65) * (0.28 + 0.72 * dorsal_w), 0.08, 1.0).astype(np.float32)
+
+    macro_lit = 0.17 + 0.38 * ndotl + 0.14 * cyl_swell + 0.07 * (macro_wash - 0.5) + 0.06 * wpn[..., 1]
     tone = np.clip(
-        0.16
-        + 0.42 * ndotl
-        + float(scale_relief) * (scale_h - 0.42)
-        + 0.18 * bev * (0.4 + 0.6 * dorsal_w) * (1.0 - cav)
-        - float(muscle_groove_depth) * (0.55 * cav + 0.45 * (1.0 - ao))
-        + 0.08 * wpn[..., 1],
+        macro_lit
+        + float(scale_relief) * 0.58 * (raw_scale_h - 0.48)
+        + 0.14 * scale_tier * (1.0 - scale_seam)
+        + 0.15 * lip_rim * spec_gate
+        + 0.11 * keel_ridge * spec_gate
+        + 0.18 * bev * (0.35 + 0.65 * dorsal_w) * (1.0 - cav)
+        - 0.24 * scale_seam
+        - float(muscle_groove_depth) * (0.44 * cav + 0.32 * (1.0 - ao)),
         0.0,
         1.0,
     ).astype(np.float32)
@@ -673,27 +751,35 @@ def anatomical_muscle_scales(
         space="oklab",
         smooth_blend=smooth_blend,
         quantize_steps=quantize_steps,
-        dither="clustered",
-        dither_strength=0.05,
+        dither="none",
+        dither_strength=0.0,
     )
 
-    # Smooth transverse ribbed belly scutes along ventral underside
-    belly_rungs = 0.5 + 0.5 * np.sin(lv * math.pi * 7.0)
-    belly_tone = np.clip(0.32 + 0.46 * (0.65 * ndotl + 0.35 * belly_rungs) - 0.30 * cav, 0.0, 1.0).astype(np.float32)
-    belly_rgba = multi_stop_gradient(belly_tone, belly_stops, space="oklab", smooth_blend=0.72, quantize_steps=6)
+    # 5. Bold Transverse Ribbed Ventral Belly Scutes along undersides (with crisp 1px overlap shadow!)
+    scute_pitch_px = max(4.0, cell_h * 1.15)
+    scute_phase = (yy / scute_pitch_px) % 1.0
+    scute_seam = (scute_phase < (1.15 / scute_pitch_px)).astype(np.float32)
+    scute_rim = ((scute_phase > (1.0 - 1.15 / scute_pitch_px)) & (scute_seam < 0.5)).astype(np.float32)
+    scute_dome = np.clip(0.35 + 0.65 * np.sin(scute_phase * math.pi), 0.0, 1.0).astype(np.float32)
+    belly_tone = np.clip(
+        0.34 + 0.40 * (0.58 * ndotl + 0.42 * scute_dome) + 0.14 * scute_rim - 0.36 * scute_seam - 0.26 * cav,
+        0.0,
+        1.0,
+    ).astype(np.float32)
+    belly_rgba = multi_stop_gradient(belly_tone, belly_stops, space="oklab", smooth_blend=0.45, quantize_steps=6)
 
-    bw = (ventral_w * 0.86)[..., None]
+    bw = (ventral_w * 0.88)[..., None]
     albedo = np.concatenate((
         np.clip(body_rgba[..., :3] * (1.0 - bw) + belly_rgba[..., :3] * bw, 0.0, 1.0),
         np.ones((H, W, 1), dtype=np.float32),
     ), axis=-1).astype(np.float32)
 
-    normal_rgb = height_to_normal_map(scale_h, strength=2.6, tileable=False)
-    roughness = np.clip(float(roughness_base) + 0.20 * muscle_crevice - 0.12 * crown_hi, 0.14, 0.92).astype(np.float32)
-    metallic = np.clip(float(metallic_crown) * crown_hi * (1.0 - ventral_w), 0.0, 1.0).astype(np.float32)
-    ao_out = np.clip(ao * (1.0 - 0.30 * body_plates["seam"]), 0.14, 1.0).astype(np.float32)
+    normal_rgb = height_to_normal_map(scale_h, strength=3.4, tileable=False)
+    roughness = np.clip(float(roughness_base) + 0.26 * scale_seam + 0.14 * cav - 0.16 * scale_spec_rim - 0.08 * dorsal_w, 0.12, 0.94).astype(np.float32)
+    metallic = np.clip(float(metallic_crown) * (0.45 + 0.55 * crown_hi) * (1.0 - scale_seam * 0.85) * (1.0 - ventral_w), 0.0, 1.0).astype(np.float32)
+    ao_out = np.clip(ao * (1.0 - 0.46 * scale_seam), 0.12, 1.0).astype(np.float32)
     sss = np.clip(0.16 * ventral_w, 0.0, 1.0).astype(np.float32)
-    porosity = np.full((H, W), 0.12, dtype=np.float32)
+    porosity = np.full((H, W), 0.10, dtype=np.float32)
     emissive = np.zeros((H, W, 4), dtype=np.float32)
 
     return {
@@ -772,8 +858,14 @@ def colossal_dragon_membrane(
     au = (u * k) % 1.0
     tip_env = np.power(np.sin(np.clip(au, 0.0, 1.0) * math.pi), 0.78).astype(np.float32)
     arch_cut = float(arch_depth) * np.power(1.0 - (2.0 * au - 1.0) ** 2, 1.15)
-    # Deterministic sharp organic tatter notches strictly in the suspended mid-arch (zero fingertip detachment!)
-    n_notch = value_noise(H, W, scale=max(10.0, W / 14.0), scale_y=2.0, seed=seed + 23, tileable=False)
+    # Deterministic sharp organic tatter notches strictly in the suspended mid-arch (100% function of u -> 100.0% identical dorsal & ventral!)
+    s_f = float(seed) * 0.731
+    n_notch = (
+        0.50
+        + 0.24 * np.sin(u * 19.3 + s_f)
+        + 0.16 * np.sin(u * 37.7 + 2.13 * s_f)
+        + 0.10 * np.cos(u * 61.1 - 1.47 * s_f)
+    ).astype(np.float32)
     n_serr = 0.5 + 0.5 * np.sin(u * math.pi * 15.0 + float(seed))
     tatters = (
         np.where(n_notch > 0.62, (n_notch - 0.62) * 2.8 * float(tatter_strength), 0.0)

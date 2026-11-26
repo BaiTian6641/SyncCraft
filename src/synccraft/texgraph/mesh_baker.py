@@ -438,12 +438,16 @@ def bake_bbmodel_maps(
     wing_bay_v = wing_trail_v.copy()
     wing_bay_mask = np.ones((H, W), dtype=np.float32)
 
-    def _obb_endpoints(o: dict[str, Any]) -> tuple[np.ndarray, np.ndarray]:
-        """Return (proximal_end, distal_end) along an OBB's longest axis (proximal = closer to X=0/carpal)."""
+    def _obb_endpoints(o: dict[str, Any], near_ref: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
+        """Return (proximal_end, distal_end) along an OBB's longest axis (nearest to ``near_ref`` when given)."""
         ax = int(np.argmax(o["half"]))
         axis_w = o["R"][:, ax] * float(o["half"][ax])
         p_a = o["center"] - axis_w
         p_b = o["center"] + axis_w
+        if near_ref is not None:
+            if float(np.linalg.norm(p_a - near_ref)) <= float(np.linalg.norm(p_b - near_ref)):
+                return p_a, p_b
+            return p_b, p_a
         # Proximal end is closer to body/centerline (smaller |x|, or larger z if same |x|)
         if abs(p_a[0]) < abs(p_b[0]) - 0.5 or (abs(abs(p_a[0]) - abs(p_b[0])) <= 0.5 and p_a[2] > p_b[2]):
             return p_a, p_b
@@ -471,30 +475,40 @@ def bake_bbmodel_maps(
     f4_o = _find_obb("f4_spar")
     rad_o = _find_obb("wing_rad_core", "wing_radius")
     hum_o = _find_obb("wing_hum_core", "wing_humerus")
+    carpal_o = _find_obb("wing_carpal_hub", "wing_wrist_hub")
+
+    wrist_ref: np.ndarray | None = None
+    if carpal_o is not None:
+        wrist_ref = carpal_o["center"]
+    elif rad_o is not None:
+        _, wrist_ref = _obb_endpoints(rad_o)
 
     def _finger_span(prox: dict[str, Any], dist: dict[str, Any] | None) -> tuple[np.ndarray, np.ndarray]:
-        r_p, t_p = _obb_endpoints(prox)
+        r_p, t_p = _obb_endpoints(prox, near_ref=wrist_ref)
         if dist is not None:
-            _, t_d = _obb_endpoints(dist)
+            _, t_d = _obb_endpoints(dist, near_ref=r_p)
             return r_p, t_d
         return r_p, t_p
 
-    bay_defs: list[tuple[str, tuple[np.ndarray, np.ndarray, np.ndarray]]] = []
+    # True 4-corner finger-bay quads: (r_lead, t_lead, r_trail, t_trail) so BOTH bounding spars hug at 0.00u!
+    finger_quads: list[tuple[str, tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]]] = []
     if f1_o and f2_o:
         r1, t1 = _finger_span(f1_o, f1_d)
         r2, t2 = _finger_span(f2_o, f2_d)
-        bay_defs.append(("wing_bay_1", (0.5 * (r1 + r2), t1, t2)))
+        finger_quads.append(("wing_bay_1", (r1, t1, r2, t2)))
     if f2_o and f3_o:
         r2, t2 = _finger_span(f2_o, f2_d)
         r3, t3 = _finger_span(f3_o, f3_d)
-        bay_defs.append(("wing_bay_2", (0.5 * (r2 + r3), t2, t3)))
+        finger_quads.append(("wing_bay_2", (r2, t2, r3, t3)))
     if f3_o and f4_o:
         r3, t3 = _finger_span(f3_o, f3_d)
-        r4, t4 = _obb_endpoints(f4_o)
-        bay_defs.append(("wing_bay_3", (0.5 * (r3 + r4), t3, t4)))
+        r4, t4 = _obb_endpoints(f4_o, near_ref=wrist_ref)
+        finger_quads.append(("wing_bay_3", (r3, t3, r4, t4)))
+
+    bay_defs: list[tuple[str, tuple[np.ndarray, np.ndarray, np.ndarray]]] = []
     if rad_o and f4_o:
         r_rad, t_rad = _obb_endpoints(rad_o)  # r_rad=elbow, t_rad=wrist
-        r4, t4 = _obb_endpoints(f4_o)
+        r4, t4 = _obb_endpoints(f4_o, near_ref=wrist_ref)
         # Bay 4 spans cleanly from forearm/f4 tip back toward elbow trailing point (shared with inner sail!)
         el_trail = np.array([r_rad[0] * 0.72, max(scene_min[1] + 12.0, 0.5 * (r_rad[1] + t4[1]) - 6.0), t4[2] + 8.0], dtype=np.float64)
         bay_defs.append(("wing_bay_4", (t_rad, t4, r_rad)))
@@ -509,7 +523,63 @@ def bake_bbmodel_maps(
         flank_back = np.array([r_hum[0] * 0.55, max(scene_min[1] + 12.0, r_hum[1] - 14.0), r_hum[2] - 26.0], dtype=np.float64)
         bay_defs.append(("wing_inner_sail", (r_hum, t_hum, flank_back)))
 
-    # Project texels of each matching bay onto exact 3D finger-to-finger sector (s, t)
+    def _tri_bary(pts_3d: np.ndarray, o_p: np.ndarray, a_p: np.ndarray, b_p: np.ndarray) -> tuple[np.ndarray, np.ndarray] | None:
+        e1 = a_p - o_p
+        e2 = b_p - o_p
+        a11 = float(np.dot(e1, e1)) + 1e-8
+        a12 = float(np.dot(e1, e2))
+        a22 = float(np.dot(e2, e2)) + 1e-8
+        det = a11 * a22 - a12 * a12
+        if abs(det) < 1e-6:
+            return None
+        rel = pts_3d - o_p[None, :]
+        d1 = rel @ e1
+        d2 = rel @ e2
+        s = (a22 * d1 - a12 * d2) / det
+        t = (-a12 * d1 + a11 * d2) / det
+        return s, t
+
+    def _point_to_seg_dist(pts_3d: np.ndarray, p0: np.ndarray, p1: np.ndarray) -> np.ndarray:
+        seg = p1 - p0
+        seg_l2 = float(np.dot(seg, seg)) + 1e-8
+        proj = np.clip(((pts_3d - p0[None, :]) @ seg) / seg_l2, 0.0, 1.0)
+        closest = p0[None, :] + proj[:, None] * seg[None, :]
+        return np.linalg.norm(pts_3d - closest, axis=-1)
+
+    # Project finger bays onto exact 4-corner quads (r_a -> t_a -> t_b -> r_b) so BOTH spars hug at <= 0.15u!
+    for bay_name, (r_a, t_a, r_b, t_b) in finger_quads:
+        bay_o = left_obbs.get(bay_name)
+        if bay_o is None:
+            continue
+        pix_m = (elem_id_map == bay_o["idx"]) & island_mask
+        if not np.any(pix_m):
+            continue
+        pts = world_pos[pix_m].astype(np.float64)
+        b1 = _tri_bary(pts, r_a, t_a, t_b)
+        if b1 is None:
+            continue
+        s1, t1 = b1
+        in_sec = (s1 >= -0.055) & (t1 >= -0.055) & ((s1 + t1) >= -0.03) & ((s1 + t1) <= 1.055)
+        if float(np.linalg.norm(r_a - r_b)) > 0.35:
+            b2 = _tri_bary(pts, r_b, t_b, r_a)
+            if b2 is not None:
+                s2, t2 = b2
+                in_tri2 = (s2 >= -0.065) & (t2 >= -0.065) & ((s2 + t2) >= -0.03) & ((s2 + t2) <= 1.065)
+                in_sec = in_sec | in_tri2
+        # C-infinity continuous (u, v): u=0 dead on leading spar (r_a->t_a), u=1 dead on trailing spar (r_b->t_b)!
+        d_lead = _point_to_seg_dist(pts, r_a, t_a)
+        d_trail = _point_to_seg_dist(pts, r_b, t_b)
+        u_val = np.clip(d_lead / np.maximum(1e-5, d_lead + d_trail), 0.0, 1.0)
+        root_u = (1.0 - u_val)[:, None] * r_a[None, :] + u_val[:, None] * r_b[None, :]
+        tip_u = (1.0 - u_val)[:, None] * t_a[None, :] + u_val[:, None] * t_b[None, :]
+        span_u_vec = tip_u - root_u
+        span_l2 = np.sum(span_u_vec * span_u_vec, axis=-1) + 1e-8
+        v_val = np.clip(np.sum((pts - root_u) * span_u_vec, axis=-1) / span_l2, 0.0, 1.0)
+        wing_bay_u[pix_m] = u_val.astype(np.float32)
+        wing_bay_v[pix_m] = v_val.astype(np.float32)
+        wing_bay_mask[pix_m] = in_sec.astype(np.float32)
+
+    # Project forearm bay 4 & inner sail onto exact 3D quad sectors (with generous -0.07 tuck into humerus/radius/flank!)
     bay_map = {k: v for k, v in bay_defs}
     for bay_name, (orig_p, tip_a, tip_b) in bay_map.items():
         if bay_name.endswith("_quad"):
@@ -522,36 +592,21 @@ def bake_bbmodel_maps(
         if not np.any(pix_m):
             continue
         pts = world_pos[pix_m].astype(np.float64)
-        e1 = tip_a - orig_p
-        e2 = tip_b - orig_p
-        a11 = float(np.dot(e1, e1)) + 1e-8
-        a12 = float(np.dot(e1, e2))
-        a22 = float(np.dot(e2, e2)) + 1e-8
-        det = a11 * a22 - a12 * a12
-        if abs(det) < 1e-6:
+        b1 = _tri_bary(pts, orig_p, tip_a, tip_b)
+        if b1 is None:
             continue
-        rel = pts - orig_p[None, :]
-        d1 = rel @ e1
-        d2 = rel @ e2
-        s = (a22 * d1 - a12 * d2) / det
-        t = (-a12 * d1 + a11 * d2) / det
+        s, t = b1
 
         quad_key = f"{bay_name}_quad"
         if quad_key in bay_map:
-            # Quad bay: union of leading triangle AND trailing triangle (smooth elbow-to-flank / wrist-to-elbow sweep!)
             o2, ta2, tb2 = bay_map[quad_key]
-            q1, q2 = ta2 - o2, tb2 - o2
-            qa11, qa12, qa22 = float(np.dot(q1, q1)) + 1e-8, float(np.dot(q1, q2)), float(np.dot(q2, q2)) + 1e-8
-            qdet = qa11 * qa22 - qa12 * qa12
-            if abs(qdet) > 1e-6:
-                rq = pts - o2[None, :]
-                s2 = (qa22 * (rq @ q1) - qa12 * (rq @ q2)) / qdet
-                t2 = (-qa12 * (rq @ q1) + qa11 * (rq @ q2)) / qdet
-                in_tri1 = (s >= -0.05) & (t >= -0.05) & ((s + t) <= 1.07)
-                in_tri2 = (s2 >= -0.05) & (t2 >= -0.05) & ((s2 + t2) <= 1.07)
+            b2 = _tri_bary(pts, o2, ta2, tb2)
+            if b2 is not None:
+                s2, t2 = b2
+                in_tri1 = (s >= -0.07) & (t >= -0.07) & ((s + t) <= 1.08)
+                in_tri2 = (s2 >= -0.07) & (t2 >= -0.07) & ((s2 + t2) <= 1.08)
                 in_sec = in_tri1 | in_tri2
                 if bay_name == "wing_inner_sail":
-                    # Smooth u from elbow (0) -> shoulder/flank (1), v from humerus (0) -> trailing arch (1)
                     r_val = np.where(in_tri2, np.clip(s2 + t2, 0.0, 1.05), np.clip(t + 0.35 * s, 0.0, 1.05))
                     u_val = np.where(in_tri2, np.clip(t2 / np.maximum(0.05, s2 + t2), 0.0, 1.0), np.clip(1.0 - s, 0.0, 1.0))
                 else:
@@ -562,9 +617,8 @@ def bake_bbmodel_maps(
                 wing_bay_mask[pix_m] = in_sec.astype(np.float32)
                 continue
 
-        # Standard finger-to-finger triangular sector (with 4.5% tuck under both spars so zero gaps!)
         r_sum = s + t
-        in_sec = (s >= -0.045) & (t >= -0.045) & (r_sum >= -0.02) & (r_sum <= 1.045)
+        in_sec = (s >= -0.055) & (t >= -0.055) & (r_sum >= -0.02) & (r_sum <= 1.055)
         u_val = np.clip(t / np.maximum(0.02, r_sum), 0.0, 1.0)
         v_val = np.clip(r_sum, 0.0, 1.0)
         wing_bay_u[pix_m] = u_val.astype(np.float32)
