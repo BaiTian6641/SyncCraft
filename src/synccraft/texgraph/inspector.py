@@ -60,19 +60,37 @@ def export_html_inspector(
     if not res.intermediates or res.pbr_maps is None:
         res = graph.evaluate(phase=0.0, capture_intermediates=True, build_pbr=True)
 
+    pass_of_node: dict[str, str] = {}
+    pass_titles: dict[str, str] = {}
+    for ps in getattr(graph, "passes", []):
+        pass_titles[ps.name] = ps.title
+        for nid_p in ps.node_ids:
+            pass_of_node[nid_p] = ps.name
+
+    out_base = (graph.output_node or "").split(".", 1)[0]
+    em_base = (graph.emissive_node or "").split(".", 1)[0]
     node_cards: list[dict[str, Any]] = []
     for nid in graph.node_order:
         sp = graph.nodes[nid]
-        arr = res.intermediates[nid]
-        is_out = (nid == graph.output_node)
-        is_em = (nid == graph.emissive_node)
-        pbr_role = next((k for k, v in graph.pbr_nodes.items() if v == nid), "")
+        raw_val = res.intermediates[nid]
+        ports: list[str] = []
+        if isinstance(raw_val, dict):
+            ports = [k for k in raw_val.keys() if not k.startswith("__")]
+            arr = raw_val.get("albedo", raw_val.get("rgba", raw_val.get("height", next(iter(raw_val.values())))))
+        else:
+            arr = raw_val
+        is_out = (nid == out_base) or (nid == getattr(graph, "output_material_node", None))
+        is_em = (nid == em_base) and not is_out
+        pbr_role = next((k for k, v in graph.pbr_nodes.items() if v.split(".", 1)[0] == nid), "")
         node_cards.append(
             {
                 "id": nid,
                 "op": sp.op,
                 "inputs": sp.inputs,
                 "params": sp.params,
+                "ports": ports,
+                "pass_name": pass_of_node.get(nid, ""),
+                "pass_title": pass_titles.get(pass_of_node.get(nid, ""), ""),
                 "shape": list(arr.shape),
                 "time_ms": res.timings_ms.get(nid, 0.0),
                 "thumb": _thumb_b64(arr, max_dim=192),
@@ -113,6 +131,7 @@ def export_html_inspector(
             "seed": graph.seed,
             "total_ms": round(sum(res.timings_ms.values()), 2),
             "nodes": node_cards,
+            "passes": [{"name": ps.name, "title": ps.title, "count": len(ps.node_ids)} for ps in getattr(graph, "passes", [])],
             "pbr": pbr_views,
             "frames": anim_b64,
             "uv_map": uv_b64,
@@ -163,7 +182,10 @@ def export_html_inspector(
   <div id="stats" style="font-size:12px;color:var(--muted);"></div>
 </header>
 <div class="layout">
-  <div class="graph-grid" id="grid"></div>
+  <div style="display:flex;flex-direction:column;overflow:hidden;">
+    <div id="passBar" style="display:none;gap:6px;flex-wrap:wrap;padding:10px 14px;background:#0e131e;border-bottom:1px solid var(--border);"></div>
+    <div class="graph-grid" id="grid" style="flex:1;"></div>
+  </div>
   <div class="sidebar">
     <div class="controls" id="btnRow">
       <button onclick="setView('pbr_lit')">PBR Lit (GGX)</button>
@@ -197,23 +219,42 @@ def export_html_inspector(
 const DATA = {payload_json};
 let selectedIdx = DATA.nodes.findIndex(n => n.is_output);
 if (selectedIdx < 0) selectedIdx = DATA.nodes.length - 1;
+let activePass = 'ALL';
 let viewMode = DATA.pbr && DATA.pbr.pbr_lit ? 'pbr_lit' : 'node';
 let animTimer = null;
 let animIdx = 0;
 let liveBufs = null;
 
 document.getElementById('stats').textContent =
-  `${{DATA.width}}x${{DATA.height}} | ${{DATA.nodes.length}} nodes | Tileable: ${{DATA.tileable}} | Eval: ${{DATA.total_ms}} ms`;
+  `${{DATA.width}}x${{DATA.height}} | ${{DATA.nodes.length}} nodes` + (DATA.passes && DATA.passes.length ? ` | ${{DATA.passes.length}} Passes` : '') + ` | Tileable: ${{DATA.tileable}} | Eval: ${{DATA.total_ms}} ms`;
 if (DATA.frames.length > 1) document.getElementById('btnAnim').style.display = 'inline-block';
 if (DATA.uv_map) document.getElementById('btnUV').style.display = 'inline-block';
+
+function renderPassBar() {{
+  const bar = document.getElementById('passBar');
+  if (!DATA.passes || DATA.passes.length === 0) return;
+  bar.style.display = 'flex';
+  bar.innerHTML = '';
+  const mkBtn = (id, label) => {{
+    const b = document.createElement('button');
+    b.textContent = label;
+    if (activePass === id) b.className = 'sel';
+    b.onclick = () => {{ activePass = id; renderPassBar(); renderGrid(); }};
+    bar.appendChild(b);
+  }};
+  mkBtn('ALL', `All Passes (${{DATA.nodes.length}})`);
+  DATA.passes.forEach((p, idx) => mkBtn(p.name, `Pass ${{idx+1}}: ${{p.title}} (${{p.count}})`));
+}}
 
 function renderGrid() {{
   const grid = document.getElementById('grid');
   grid.innerHTML = '';
   DATA.nodes.forEach((n, i) => {{
+    if (activePass !== 'ALL' && n.pass_name !== activePass) return;
     const card = document.createElement('div');
     card.className = 'card' + (i === selectedIdx ? ' active' : '') + (n.is_output ? ' is-out' : '') + (n.pbr_role ? ' is-pbr' : '');
-    const tag = n.is_output ? 'ALBEDO OUT' : (n.is_emissive ? 'EMISSIVE' : (n.pbr_role ? 'PBR:' + n.pbr_role.toUpperCase() : n.op));
+    const portTag = (n.ports && n.ports.length > 1) ? ` [${{n.ports.length}}p]` : '';
+    const tag = n.is_output ? 'MATERIAL OUT' : (n.is_emissive ? 'EMISSIVE' : (n.pbr_role ? 'PBR:' + n.pbr_role.toUpperCase() : n.op)) + portTag;
     card.innerHTML = `<img src="${{n.thumb}}"/><div class="card-title">${{n.id}}</div><div class="card-meta"><span>${{tag}}</span><span>${{n.time_ms}}ms</span></div>`;
     card.onclick = () => {{ selectedIdx = i; setView('node'); renderGrid(); }};
     grid.appendChild(card);
@@ -321,6 +362,7 @@ function renderSidebar() {{
   }}
 }}
 
+renderPassBar();
 renderGrid();
 renderSidebar();
 </script>

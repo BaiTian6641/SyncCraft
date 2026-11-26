@@ -132,6 +132,7 @@ def main(argv=None):
     tg_render.add_argument("--inspector", type=Path, help="optional interactive HTML node-graph inspector output")
     tg_render.add_argument("--size", type=int, default=32, help="canvas size for built-in block/item presets")
     tg_render.add_argument("--pbr", action="store_true", help="export full LabPBR 1.3 (_n, _s), Bedrock RTX (_mer) & standard PBR maps")
+    tg_render.add_argument("--multipass-sheet", type=Path, help="optional PNG path for Multi-Pass Pipeline Progression Contact Sheet")
 
     tg_repack = tg_subs.add_parser("repack-uv", help="repack an existing .bbmodel into semantic anatomical UV partitions")
     tg_repack.add_argument("input", type=Path)
@@ -186,7 +187,8 @@ def main(argv=None):
             )
 
             if args.tg_cmd == "presets":
-                print(_json({"presets": sorted(PRESET_REGISTRY.keys())}))
+                from synccraft.texgraph.pipeline import SUBGRAPH_REGISTRY
+                print(_json({"presets": sorted(PRESET_REGISTRY.keys()), "subgraphs": sorted(SUBGRAPH_REGISTRY.keys())}))
                 return 0
             if args.tg_cmd == "schema":
                 from synccraft.texgraph.registry import export_node_schema_json
@@ -261,6 +263,10 @@ def main(argv=None):
                 if args.inspector:
                     export_html_inspector(graph, args.inspector, flipbook_frames=frames_list)
                     summary["inspector"] = str(args.inspector)
+                if args.multipass_sheet:
+                    mp, _ = graph.render_multipass_sheet(args.multipass_sheet)
+                    summary["multipass_sheet"] = str(args.multipass_sheet)
+                    summary["passes"] = [{"name": ps.name, "title": ps.title, "nodes": ps.node_count, "ms": ps.time_ms} for ps in mp.passes]
                 print(_json(summary))
                 return 0
         return 0

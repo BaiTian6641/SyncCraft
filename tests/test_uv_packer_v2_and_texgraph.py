@@ -388,6 +388,111 @@ class TestTexGraphEngine(unittest.TestCase):
             self.assertEqual(ev_p.output.shape, (32, 32, 4))
             self.assertIsNotNone(ev_p.pbr_maps)
 
+    def test_v4_multipass_material_bus_height_blend_subgraphs_and_pinion_wings(self) -> None:
+        from synccraft.texgraph import (
+            SUBGRAPH_REGISTRY,
+            build_temple_carved_stone,
+            export_node_schema_json,
+            is_material_bus,
+            sculpted_pinion_wing,
+        )
+
+        # 1. Verify schema v3.0 multi-port, MATERIAL bus, multipass & subgraphs metadata
+        schema = export_node_schema_json()
+        self.assertEqual(schema["schema_version"], "3.0")
+        self.assertTrue(schema["supports_multi_port"])
+        self.assertTrue(schema["supports_material_bus"])
+        self.assertTrue(schema["supports_multipass"])
+        self.assertIn("Material Bus (PBR)", schema["categories"])
+        self.assertGreaterEqual(schema["subgraph_count"], 5)
+        self.assertIn("sculpted_pinion_wing_pbr", SUBGRAPH_REGISTRY)
+        self.assertIn("dragon_armor_plates_pbr", SUBGRAPH_REGISTRY)
+
+        # 2. Multi-pass Temple Carved Stone with Substance Height-Blend & v3.0 lossless JSON round-trip!
+        g = build_temple_carved_stone(size=32)
+        self.assertEqual(len(g.passes), 4)
+        self.assertIsNotNone(g.output_material_node)
+        rec = g.to_recipe()
+        self.assertEqual(rec["version"], "3.0")
+        self.assertEqual(len(rec["passes"]), 4)
+        self.assertEqual(rec["output_material"], g.output_material_node)
+
+        g_rt = TexGraph.from_recipe(rec)
+        self.assertEqual(len(g_rt.passes), 4)
+        self.assertEqual(g_rt.output_material_node, g.output_material_node)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            td = Path(tmp)
+            mp, mp_img = g_rt.render_multipass_sheet(td / "temple_mp.png", tile_size=128)
+            self.assertEqual(len(mp.passes), 4)
+            self.assertTrue((td / "temple_mp.png").is_file())
+            self.assertGreater(mp_img.width, 200)
+            # Every pass snapshot must carry an evaluated preview array
+            for ps in mp.passes:
+                self.assertIsNotNone(ps.preview_rgba)
+                self.assertGreaterEqual(ps.node_count, 1)
+            # HTML Inspector supports multi-pass tabs + MATERIAL bus cards cleanly
+            html_out = export_html_inspector(g_rt, td / "temple_mp_inspector.html")
+            html_txt = html_out.read_text(encoding="utf-8")
+            self.assertIn("passBar", html_txt)
+            self.assertIn("MATERIAL OUT", html_txt)
+            # CLI --multipass-sheet smoke test
+            rc = cli_main([
+                "texgraph", "render", "preset:temple_carved_stone",
+                "-o", str(td / "stone.png"), "--size", "32", "--pbr",
+                "--multipass-sheet", str(td / "stone_mp.png"),
+            ])
+            self.assertEqual(rc, 0)
+            self.assertTrue((td / "stone_mp.png").is_file())
+
+        # 3. Direct multi-output socket routing & Substance material_height_blend physics test
+        gm = TexGraph(32, 32, tileable=True, seed=7, name="height_blend_unit")
+        with gm.pass_("p1", title="Base") as p1:
+            h_low = gm.constant(0.25, id="h_low")
+            h_hi = gm.constant(0.85, id="h_hi")
+            m_base = gm.material_make(gm.constant("#222244", id="c_b"), height=h_low, roughness=0.7, metallic=0.0, id="m_base")
+            m_top = gm.material_make(gm.constant("#EAB308", id="c_t"), height=h_hi, roughness=0.15, metallic=0.95, id="m_top")
+            p1.preview_ref = f"{m_base}.albedo"
+        with gm.pass_("p2", title="HeightBlend") as p2:
+            grad_m = gm.gradient("horizontal", id="mask_h")
+            hb = gm.material_height_blend(m_base, m_top, mask=grad_m, height_offset=0.1, contrast=8.0, seam_ao_strength=0.3, id="hb_mat")
+            p2.preview_ref = f"{hb}.albedo"
+        gm.set_output_material(hb)
+        ev_m = gm.evaluate(capture_intermediates=True, build_pbr=True)
+        self.assertTrue(is_material_bus(ev_m.intermediates[hb]))
+        # High-relief metallic top must poke cleanly over low-relief base on right side & respect mask=0 on far left!
+        self.assertLess(float(ev_m.pbr_channels["metallic"][:, 0].mean()), 0.05)
+        self.assertGreater(float(ev_m.pbr_channels["metallic"][:, -1].mean()), 0.90)
+        self.assertGreater(float(ev_m.intermediates[hb]["seam_mask"].max()), 0.25)
+
+        # 4. Wing top/bottom orientation alignment (`wing_trail_v` identical on up & down) + `sculpted_pinion_wing`!
+        prog = parse_program(_CREATURE_DSL)
+        scene = compile_geometry(prog)
+        sem = pack_semantic_uv_atlas(prog, scene, padding=1, mirror_lr_uv="adaptive")
+        atlas = {
+            "width": sem["width"],
+            "height": sem["height"],
+            "faces": sem["faces"],
+            "rgba": np.full((sem["height"], sem["width"], 4), 200, dtype=np.uint8),
+        }
+        bb = export_bbmodel(scene, name="wing_orient_test", atlas=atlas, program=prog)
+        ctx = bake_bbmodel_maps(bb)
+        self.assertEqual(ctx.wing_span_u.shape, (ctx.height, ctx.width))
+        self.assertEqual(ctx.wing_trail_v.shape, (ctx.height, ctx.width))
+        self.assertGreater(float(ctx.face_is_down.sum()), 0.0)
+
+        # Sculpted Pinion Wing multi-port bus invariants
+        uu, vv = np.meshgrid(np.linspace(0.0, 1.0, 48, dtype=np.float32), np.linspace(0.0, 1.0, 32, dtype=np.float32))
+        pw = sculpted_pinion_wing(uu, vv, vanes=5, envelope_style="primary", gold_arc=True)
+        self.assertTrue(is_material_bus(pw))
+        self.assertEqual(pw["albedo"].shape, (32, 48, 4))
+        self.assertEqual(pw["normal"].shape, (32, 48, 3))
+        # Must carve clean hard alpha cutout AND paint high-metallic gold arc AND focused glowing quills!
+        self.assertGreater(float((pw["alpha"] < 0.5).mean()), 0.15)
+        self.assertGreater(float((pw["alpha"] > 0.5).mean()), 0.40)
+        self.assertGreater(float(pw["metallic"].max()), 0.85)
+        self.assertGreater(float(pw["glow_mask"].max()), 0.60)
+
 
 if __name__ == "__main__":
     unittest.main()

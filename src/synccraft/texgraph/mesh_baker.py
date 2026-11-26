@@ -85,6 +85,9 @@ class MeshBakeContext:
     zone_masks: dict[str, np.ndarray]
     face_id_map: np.ndarray = field(default_factory=lambda: np.full((1, 1), -1, dtype=np.int8))
     elem_center_x_map: np.ndarray = field(default_factory=lambda: np.zeros((1, 1), dtype=np.float32))
+    wing_span_u: np.ndarray = field(default_factory=lambda: np.zeros((1, 1), dtype=np.float32))
+    wing_trail_v: np.ndarray = field(default_factory=lambda: np.zeros((1, 1), dtype=np.float32))
+    face_is_down: np.ndarray = field(default_factory=lambda: np.zeros((1, 1), dtype=np.float32))
     islands: list[BakedIsland] = field(default_factory=list)
     elem_names: list[str] = field(default_factory=list)
     elem_bones: list[str] = field(default_factory=list)
@@ -258,6 +261,9 @@ def bake_bbmodel_maps(
     elem_id_map = np.full((H, W), -1, dtype=np.int32)
     face_id_map = np.full((H, W), -1, dtype=np.int8)
     elem_center_x_map = np.zeros((H, W), dtype=np.float32)
+    wing_span_u = np.zeros((H, W), dtype=np.float32)
+    wing_trail_v = np.zeros((H, W), dtype=np.float32)
+    face_is_down = np.zeros((H, W), dtype=np.float32)
     zone_masks: dict[str, np.ndarray] = {z: np.zeros((H, W), dtype=np.float32) for z in ANATOMICAL_ZONES}
 
     islands: list[BakedIsland] = []
@@ -408,6 +414,14 @@ def bake_bbmodel_maps(
             joint_cavity[y0:y1, x0:x1] = cav_grid
             local_uv[y0:y1, x0:x1, 0] = ug.astype(np.float32)
             local_uv[y0:y1, x0:x1, 1] = vg.astype(np.float32)
+            # Wing-aligned top/bottom consistent coordinates:
+            #   wing_span_u : 0.0 at inner root -> 1.0 at outer wingtip (symmetric L/R!)
+            #   wing_trail_v: 0.0 at leading spar (+Z) -> 1.0 at trailing tip (-Z) (IDENTICAL on up & down faces!)
+            u_tip = (1.0 - ug) if float(center[0]) < 0.0 else ug
+            v_trail = (1.0 - vg) if face == "up" else (vg if face == "down" else vg)
+            wing_span_u[y0:y1, x0:x1] = u_tip.astype(np.float32)
+            wing_trail_v[y0:y1, x0:x1] = v_trail.astype(np.float32)
+            face_is_down[y0:y1, x0:x1] = 1.0 if face == "down" else 0.0
             elem_id_map[y0:y1, x0:x1] = idx
             face_id_map[y0:y1, x0:x1] = FACES.index(face)
             elem_center_x_map[y0:y1, x0:x1] = float(center[0])
@@ -431,6 +445,9 @@ def bake_bbmodel_maps(
         zone_masks=zone_masks,
         face_id_map=face_id_map,
         elem_center_x_map=elem_center_x_map,
+        wing_span_u=wing_span_u,
+        wing_trail_v=wing_trail_v,
+        face_is_down=face_is_down,
         islands=islands,
         elem_names=elem_names,
         elem_bones=elem_bones,

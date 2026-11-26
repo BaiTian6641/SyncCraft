@@ -348,3 +348,209 @@ def stylized_foliage_clusters(
     sun_grad = np.clip(1.0 - v * 0.35 + (clump - 0.5) * 0.65, 0.0, 1.0)
     h = np.clip(0.55 * clump + 0.45 * sun_grad, 0.0, 1.0).astype(np.float32)
     return {"height": h, "clump": clump.astype(np.float32)}
+
+
+def sculpted_pinion_wing(
+    span_u: np.ndarray,
+    trail_v: np.ndarray,
+    *,
+    face_is_down: np.ndarray | None = None,
+    wave: np.ndarray | None = None,
+    vanes: int = 5,
+    sweep: float = 0.84,
+    envelope_style: str = "primary",
+    blade_stops: Sequence[tuple[float, str]] = (
+        (0.00, "#0A091E"),
+        (0.24, "#171A45"),
+        (0.52, "#283D7E"),
+        (0.78, "#4D7EC7"),
+        (0.93, "#99CEFA"),
+        (1.00, "#E3F6FF"),
+    ),
+    gold_stops: Sequence[tuple[float, str]] = (
+        (0.00, "#753E14"),
+        (0.45, "#D99527"),
+        (0.82, "#F9DA70"),
+        (1.00, "#FFF9D9"),
+    ),
+    neon_stops: Sequence[tuple[float, str]] = (
+        (0.00, "#0284C7"),
+        (0.45, "#22D3EE"),
+        (0.82, "#A5F3FC"),
+        (1.00, "#FFFFFF"),
+    ),
+    gold_arc: bool = True,
+    quill_glow_strength: float = 0.92,
+    smooth_blend: float = 0.70,
+    quantize_steps: int = 8,
+    seed: int = 42,
+) -> dict[str, np.ndarray]:
+    """Master Studio Sculpted Aerodynamic Pinion-Blade Wing Generator (Full Multi-Port `MATERIAL` Bus).
+
+    Carves crisp 100% hard-alpha overlapping pointed pinion-feather blades along ``span_u`` (0=root -> 1=tip)
+    and ``trail_v`` (0=leading spar -> 1=trailing tips, 100% aligned top & bottom!). Combines:
+    - Silky smooth-to-pixel OKLab metallic obsidian-sapphire pinion facets with dark overlap shadow & razor honed tips
+    - Subtle directional feather-barb micro-relief & slight ventral darkening on underside (``face_is_down``)
+    - Continuous brushed antique champagne-gold astrolabe anchor arc near spar root (LabPBR Metallic 0.94!)
+    - Sleek recessed glowing Twin-Spectrum energy quill filaments framed by dark obsidian bezels + soft optical bounce halo
+
+    Returns a complete `MATERIAL` bus dict:
+      ``{"albedo", "alpha", "height", "normal", "roughness", "metallic", "ao", "emissive", "sss", "porosity", "glow_mask", "gold_mask", "blade_mask"}``
+    """
+    from .pbr import height_to_normal_map
+
+    u = np.clip(np.asarray(span_u, dtype=np.float32), 0.0, 1.0)
+    v = np.clip(np.asarray(trail_v, dtype=np.float32), 0.0, 1.0)
+    H, W = u.shape[:2]
+    is_dn = (
+        np.clip(np.asarray(face_is_down, dtype=np.float32), 0.0, 1.0)
+        if face_is_down is not None
+        else np.zeros((H, W), dtype=np.float32)
+    )
+
+    n_vanes = max(2, int(vanes))
+    vane_coord = u * float(n_vanes) - v * float(sweep)
+    vane_idx = np.floor(vane_coord)
+    vane_frac = (vane_coord - vane_idx).astype(np.float32)
+
+    # Graceful aerodynamic trailing silhouette envelopes (tapered near carpal wrist so adjacent bays NEVER collide!)
+    if envelope_style == "distal_tip":
+        # Long razor outer primary wingtip tapering sleekly to a needle lance at u=1
+        env = 0.94 - 0.56 * np.power(np.clip(u - 0.08, 0.0, 1.0), 1.32) - 0.16 * np.clip(0.18 - u, 0.0, 1.0)
+    elif envelope_style == "inner_curtain":
+        # Sweeping inner covert/tertiary fan, fuller in middle, tucked smoothly near body & elbow
+        env = 0.90 - 0.38 * np.power(np.abs(u - 0.48) * 1.65, 1.35)
+    elif envelope_style == "forearm_covert":
+        # Sleek secondary flight pinions trailing cleanly behind the forearm spar
+        env = 0.88 - 0.42 * np.power(np.abs(u - 0.52) * 1.75, 1.40)
+    else:  # "primary": wedge-tapered at carpal root (u=0), sweeping deeply toward outer span (u=0.65..0.85)
+        root_taper = np.clip(0.38 + 0.62 * np.power(np.clip(u / 0.34, 0.0, 1.0), 0.72), 0.38, 1.0)
+        tip_taper = 1.0 - 0.24 * np.power(np.clip((u - 0.68) / 0.32, 0.0, 1.0), 1.45)
+        env = 0.96 * root_taper * tip_taper
+
+    # Crisp pointed aerodynamic lance-tip profile per pinion feather
+    blade_point = 1.0 - 0.38 * np.where(
+        vane_frac < 0.64,
+        (0.64 - vane_frac) / 0.64,
+        (vane_frac - 0.64) / 0.36,
+    )
+    max_v = np.clip(env * blade_point, 0.08, 0.99)
+    edge_mask = (u >= 0.015 + 0.09 * v) & (u <= 0.985 - 0.12 * np.power(v, 1.25))
+    solid = (v <= max_v) & edge_mask
+    alpha = solid.astype(np.float32)
+
+    # 1. Silky sculptural obsidian pinion blade shading & height relief
+    # Smooth gradient across each blade: dark overlap shadow on trailing-left seam (vane_frac -> 0),
+    # calm obsidian-sapphire facet across middle, honed cerulean-silver spine ridge along leading edge (vane_frac -> 0.88)
+    overlap_sh = np.clip(vane_frac / 0.22, 0.0, 1.0)
+    ridge_hi = np.clip((vane_frac - 0.58) / 0.34, 0.0, 1.0)
+    ridge_hi = ridge_hi * ridge_hi * (3.0 - 2.0 * ridge_hi)
+    root_ao = np.clip(v / 0.20, 0.0, 1.0)
+    tip_sheen = np.clip(1.0 - np.maximum(0.0, max_v - v) / 0.12, 0.0, 1.0) * np.clip((v - 0.25) / 0.25, 0.0, 1.0)
+    # Subtle micro-barb striations angled gently along each blade
+    barbs = 0.5 + 0.5 * np.sin((v * 26.0 - vane_frac * 9.0) * math.pi)
+    brush = directional_brushstrokes(H, W, angle_deg=-24.0, scale_along=3.0, scale_across=16.0, contrast=0.18, seed=seed + 11)
+
+    # Ventral underside naturally reads 14% deeper so top vs underside wing contrast feels physically grounded
+    dn_drop = 1.0 - 0.14 * is_dn
+    blade_tone = (
+        (0.11 + 0.30 * overlap_sh + 0.28 * ridge_hi + 0.18 * tip_sheen)
+        * (0.44 + 0.56 * root_ao)
+        + (barbs - 0.5) * 0.045
+        + (brush - 0.5) * 0.055
+    ) * dn_drop
+    # Razor honed silver-blue tip rim ONLY along trailing feather points (clean restrained highlight!)
+    near_tip = solid & ((max_v - v) <= 0.036) & (v > 0.28)
+    blade_tone = np.where(near_tip, np.maximum(blade_tone, 0.78 - 0.10 * is_dn), blade_tone)
+    blade_tone = np.clip(blade_tone, 0.0, 1.0).astype(np.float32)
+
+    blade_rgba = multi_stop_gradient(
+        blade_tone,
+        blade_stops,
+        space="oklab",
+        smooth_blend=smooth_blend,
+        quantize_steps=quantize_steps,
+        dither="clustered",
+        dither_strength=0.05,
+        alpha_mask=alpha,
+    )
+
+    # Sculpted bevel heightfield per blade (stepped feather overlap + proud central ridge + beveled tip)
+    blade_h = np.clip(
+        (0.28 + 0.42 * overlap_sh + 0.24 * ridge_hi + 0.06 * barbs) * (0.65 + 0.35 * root_ao) * alpha,
+        0.0,
+        1.0,
+    ).astype(np.float32)
+
+    # 2. Continuous brushed antique champagne-gold astrolabe anchor arc near spar root!
+    arc_v = 0.18 + 0.055 * np.sin(u * math.pi)
+    arc_d = np.abs(v - arc_v)
+    gold_band = (solid & (arc_d <= 0.036)).astype(np.float32) if gold_arc else np.zeros((H, W), dtype=np.float32)
+    gold_shadow = (solid & (v > arc_v + 0.036) & (v <= arc_v + 0.068)).astype(np.float32) if gold_arc else np.zeros((H, W), dtype=np.float32)
+    gold_tone = np.clip((0.68 - (arc_d / 0.040) * 0.32 + 0.16 * np.sin(u * 12.0)) * dn_drop, 0.0, 1.0).astype(np.float32)
+    gold_rgba = multi_stop_gradient(gold_tone, gold_stops, space="oklab", smooth_blend=0.78, quantize_steps=6, alpha_mask=alpha)
+
+    comp_rgb = blade_rgba[..., :3].copy()
+    # Cast dark bevel line directly under the gold arc
+    comp_rgb *= (1.0 - gold_shadow[..., None] * 0.42)
+    comp_rgb = comp_rgb * (1.0 - gold_band[..., None]) + gold_rgba[..., :3] * gold_band[..., None]
+
+    # 3. Sleek recessed glowing Twin-Spectrum Neon Quill Filaments framed by dark obsidian bezels!
+    quill_dist = np.abs(vane_frac - 0.56)
+    in_quill_len = solid & (v >= 0.26) & (v <= max_v - 0.11)
+    slit_bezel = (in_quill_len & (quill_dist <= 0.125)).astype(np.float32)
+    slit_halo = np.clip(1.0 - np.maximum(0.0, quill_dist - 0.035) / 0.065, 0.0, 1.0) * in_quill_len.astype(np.float32)
+    slit_core = np.clip(1.0 - quill_dist / 0.044, 0.0, 1.0) * (solid & (v >= 0.28) & (v <= max_v - 0.13)).astype(np.float32)
+    hot_core = np.clip(1.0 - quill_dist / 0.020, 0.0, 1.0) * (solid & (v >= 0.35) & (v <= max_v - 0.20)).astype(np.float32)
+
+    # Optional animated traveling pulse along the quill filament!
+    if wave is not None:
+        w_mod = np.clip(0.68 + 0.32 * np.asarray(wave, dtype=np.float32), 0.55, 1.0)
+    else:
+        w_mod = np.ones((H, W), dtype=np.float32)
+
+    neon_driver = np.clip(0.32 + 0.48 * slit_core + 0.30 * hot_core - 0.14 * np.clip(v - 0.4, 0.0, 0.6), 0.0, 1.0).astype(np.float32)
+    neon_rgba = multi_stop_gradient(neon_driver, neon_stops, space="oklab", smooth_blend=0.95, alpha_mask=alpha)
+
+    # Dark recessed obsidian bezel channel around each glowing slit (makes the glow razor-clean!)
+    bezel_only = np.clip(slit_bezel - slit_halo, 0.0, 1.0)
+    comp_rgb *= (1.0 - bezel_only[..., None] * 0.62)
+    # Soft optical bounce halo on the recessed obsidian bevel walls
+    halo_w = np.clip(slit_halo * 0.55 * float(quill_glow_strength), 0.0, 0.72)[..., None]
+    comp_rgb = comp_rgb * (1.0 - halo_w) + neon_rgba[..., :3] * halo_w
+    # Crisp luminous slit core
+    core_w = np.clip((slit_core * 0.92 + hot_core * 0.40) * w_mod * float(quill_glow_strength), 0.0, 1.0)[..., None]
+    comp_rgb = comp_rgb * (1.0 - core_w) + neon_rgba[..., :3] * core_w
+
+    albedo = np.concatenate((np.clip(comp_rgb, 0.0, 1.0), alpha[..., None]), axis=-1).astype(np.float32)
+    glow_mask = np.clip((slit_core * 0.92 + hot_core * 0.35 + slit_halo * 0.18) * w_mod * float(quill_glow_strength) * alpha, 0.0, 1.0).astype(np.float32)
+    emissive = np.concatenate((neon_rgba[..., :3] * glow_mask[..., None], (glow_mask > 0.04).astype(np.float32)[..., None] * alpha[..., None]), axis=-1).astype(np.float32)
+
+    # 4. Physical PBR channels for the pinion wing!
+    # Gold arc protrudes cleanly (+0.18 height), quill channel recesses cleanly (-0.22 height)!
+    height_f = np.clip(blade_h + gold_band * 0.22 - slit_bezel * 0.20, 0.0, 1.0).astype(np.float32)
+    normal_rgb = height_to_normal_map(height_f, strength=2.6, tileable=False)
+    # Metallic: 0.94 on champagne-gold astrolabe arc, 0.26 on honed obsidian blades, 0.0 on recessed energy slits
+    metallic = np.clip((0.26 * (1.0 - slit_bezel) + 0.68 * gold_band) * alpha, 0.0, 1.0).astype(np.float32)
+    # Roughness: 0.17 polished gold, 0.26 glossy obsidian facets, 0.12 energy lens glass
+    roughness = np.clip(0.28 * (1.0 - gold_band) * (1.0 - slit_core) + 0.17 * gold_band + 0.12 * slit_core, 0.08, 1.0).astype(np.float32)
+    ao = np.clip((0.55 + 0.45 * overlap_sh) * (0.62 + 0.38 * root_ao) * (1.0 - gold_shadow * 0.35), 0.18, 1.0).astype(np.float32)
+    sss = np.clip((0.18 * tip_sheen + 0.45 * slit_halo) * alpha, 0.0, 1.0).astype(np.float32)
+    porosity = np.zeros((H, W), dtype=np.float32)
+
+    return {
+        "__bus__": np.array([1.0], dtype=np.float32),
+        "albedo": albedo,
+        "alpha": alpha,
+        "height": height_f,
+        "normal": normal_rgb,
+        "roughness": roughness,
+        "metallic": metallic,
+        "ao": ao,
+        "emissive": emissive,
+        "sss": sss,
+        "porosity": porosity,
+        "glow_mask": glow_mask,
+        "gold_mask": gold_band,
+        "blade_mask": alpha,
+    }

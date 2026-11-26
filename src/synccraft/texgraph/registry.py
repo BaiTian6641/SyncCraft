@@ -38,6 +38,7 @@ class NodeMeta:
     description: str
     inputs: tuple[PortSchema, ...] = ()
     output_type: str = "SCALAR"
+    outputs: tuple[PortSchema, ...] = ()
     params: tuple[ParamSchema, ...] = ()
     time_aware: bool = False
 
@@ -95,6 +96,140 @@ NODE_CATALOG: dict[str, NodeMeta] = {
     "brushstrokes": NodeMeta("brushstrokes", "Painterly & Bio", "Directional Brushstrokes", "Long smooth overlapping hand-painted studio strokes.", (), "SCALAR", (ParamSchema("angle_deg", "slider", 0.0, -180.0, 180.0, 1.0), ParamSchema("contrast", "slider", 0.35, 0.05, 1.0, 0.05))),
     "layered_plates": NodeMeta("layered_plates", "Painterly & Bio", "Chunky Scale / Armor Plates", "Calm Blockbench staggered scale/armor plates with 1px lit rim + under-seam.", (), "HEIGHT"),
     "smooth_wing_rgba": NodeMeta("smooth_wing_rgba", "Painterly & Bio", "Master Dragon Wing Membrane", "Backlit translucent smooth-gradient dragon wing with bone AO, tension folds & organic scalloped edge.", (PortSchema("local_u", "SCALAR"), PortSchema("local_v", "SCALAR")), "RGBA"),
+    "sculpted_pinion_wing": NodeMeta(
+        "sculpted_pinion_wing",
+        "Painterly & Bio",
+        "Sculpted Pinion-Blade Wing (MATERIAL)",
+        "Aerodynamic overlapping metallic obsidian pinion blades + brushed gold astrolabe arc + Twin-Spectrum neon quill filaments (single-eval full MATERIAL bus).",
+        (PortSchema("span_u", "SCALAR"), PortSchema("trail_v", "SCALAR"), PortSchema("face_is_down", "SCALAR", True), PortSchema("wave", "SCALAR", True)),
+        "MATERIAL",
+        outputs=(
+            PortSchema("albedo", "RGBA"), PortSchema("alpha", "MASK"), PortSchema("height", "HEIGHT"),
+            PortSchema("normal", "NORMAL"), PortSchema("roughness", "SCALAR"), PortSchema("metallic", "SCALAR"),
+            PortSchema("ao", "SCALAR"), PortSchema("emissive", "RGBA"), PortSchema("sss", "SCALAR"),
+            PortSchema("glow_mask", "MASK"), PortSchema("gold_mask", "MASK"),
+        ),
+        params=(
+            ParamSchema("vanes", "int", 5, 2, 10, 1),
+            ParamSchema("sweep", "slider", 0.84, 0.2, 1.4, 0.02),
+            ParamSchema("envelope_style", "select", "primary", choices=("primary", "distal_tip", "inner_curtain", "forearm_covert")),
+            ParamSchema("smooth_blend", "slider", 0.70, 0.0, 1.0, 0.05),
+            ParamSchema("gold_arc", "checkbox", True),
+            ParamSchema("quill_glow_strength", "slider", 0.92, 0.0, 1.2, 0.05),
+        ),
+    ),
+    "smooth_wing_multi": NodeMeta(
+        "smooth_wing_multi",
+        "Painterly & Bio",
+        "Backlit Dragon Membrane (Multi-Port)",
+        "Single-evaluation multi-port backlit translucent smooth-gradient dragon wing membrane.",
+        (PortSchema("local_u", "SCALAR"), PortSchema("local_v", "SCALAR")),
+        "MATERIAL",
+        outputs=(PortSchema("albedo", "RGBA"), PortSchema("alpha", "MASK"), PortSchema("rim_mask", "MASK"), PortSchema("glow_mask", "MASK"), PortSchema("height", "HEIGHT")),
+    ),
+    "gradient_eye_multi": NodeMeta(
+        "gradient_eye_multi",
+        "Painterly & Bio",
+        "Non-Standard Gradient Eye (Multi-Port)",
+        "Single-evaluation mirror-symmetric luminous multi-stop gradient eye emitting albedo + emissive_mask.",
+        (PortSchema("local_u", "SCALAR"), PortSchema("local_v", "SCALAR"), PortSchema("side_sign", "SCALAR", True)),
+        "RGBA",
+        outputs=(PortSchema("albedo", "RGBA"), PortSchema("emissive_mask", "MASK")),
+    ),
+    "emissive_composite": NodeMeta(
+        "emissive_composite",
+        "PBR & Normal",
+        "Emissive Composite (Multi-Port)",
+        "Single-evaluation emissive bloom bleed composite returning both albedo and isolated emissive ports.",
+        (PortSchema("albedo", "RGBA"), PortSchema("mask", "MASK"), PortSchema("color", "RGBA", True)),
+        "RGBA",
+        outputs=(PortSchema("albedo", "RGBA"), PortSchema("emissive", "RGBA")),
+    ),
+    # --- Industry-Standard Material Bus & Multi-Pass Pipeline ---
+    "material_make": NodeMeta(
+        "material_make",
+        "Material Bus (PBR)",
+        "Make Material Bus",
+        "Packs albedo + height/normal/roughness/metallic/ao/emissive/sss/porosity into a unified MATERIAL bus.",
+        (
+            PortSchema("albedo", "RGBA"), PortSchema("height", "HEIGHT", True), PortSchema("normal", "NORMAL", True),
+            PortSchema("roughness", "SCALAR", True), PortSchema("metallic", "SCALAR", True), PortSchema("ao", "SCALAR", True),
+            PortSchema("emissive", "RGBA", True), PortSchema("sss", "SCALAR", True), PortSchema("porosity", "SCALAR", True),
+        ),
+        "MATERIAL",
+        outputs=(
+            PortSchema("albedo", "RGBA"), PortSchema("height", "HEIGHT"), PortSchema("normal", "NORMAL"),
+            PortSchema("roughness", "SCALAR"), PortSchema("metallic", "SCALAR"), PortSchema("ao", "SCALAR"),
+            PortSchema("emissive", "RGBA"), PortSchema("sss", "SCALAR"), PortSchema("porosity", "SCALAR"),
+        ),
+        params=(
+            ParamSchema("roughness", "slider", 0.55, 0.04, 1.0, 0.02),
+            ParamSchema("metallic", "slider", 0.0, 0.0, 1.0, 0.02),
+            ParamSchema("normal_strength", "slider", 2.4, 0.2, 6.0, 0.1),
+        ),
+    ),
+    "material_blend": NodeMeta(
+        "material_blend",
+        "Material Bus (PBR)",
+        "Blend Material Buses",
+        "Composites two full PBR MATERIAL buses simultaneously across albedo, normal, height, roughness, metallic, AO, SSS & emissive.",
+        (PortSchema("base", "MATERIAL"), PortSchema("top", "MATERIAL"), PortSchema("mask", "MASK", True)),
+        "MATERIAL",
+        outputs=(
+            PortSchema("albedo", "RGBA"), PortSchema("height", "HEIGHT"), PortSchema("normal", "NORMAL"),
+            PortSchema("roughness", "SCALAR"), PortSchema("metallic", "SCALAR"), PortSchema("ao", "SCALAR"),
+            PortSchema("emissive", "RGBA"), PortSchema("sss", "SCALAR"), PortSchema("porosity", "SCALAR"),
+            PortSchema("blend_mask", "MASK"),
+        ),
+        params=(
+            ParamSchema("opacity", "slider", 1.0, 0.0, 1.0, 0.05),
+            ParamSchema("normal_mode", "select", "lerp", choices=("lerp", "rnm")),
+        ),
+    ),
+    "material_height_blend": NodeMeta(
+        "material_height_blend",
+        "Material Bus (PBR)",
+        "Height-Blend Material (Substance)",
+        "Physical height-driven PBR material composite: higher relief pokes cleanly through cracks/seams with automatic contact AO.",
+        (PortSchema("base", "MATERIAL"), PortSchema("top", "MATERIAL"), PortSchema("mask", "MASK", True)),
+        "MATERIAL",
+        outputs=(
+            PortSchema("albedo", "RGBA"), PortSchema("height", "HEIGHT"), PortSchema("normal", "NORMAL"),
+            PortSchema("roughness", "SCALAR"), PortSchema("metallic", "SCALAR"), PortSchema("ao", "SCALAR"),
+            PortSchema("emissive", "RGBA"), PortSchema("sss", "SCALAR"), PortSchema("porosity", "SCALAR"),
+            PortSchema("blend_mask", "MASK"), PortSchema("seam_mask", "MASK"),
+        ),
+        params=(
+            ParamSchema("height_offset", "slider", 0.0, -0.5, 0.5, 0.02),
+            ParamSchema("contrast", "slider", 6.0, 0.5, 16.0, 0.25),
+            ParamSchema("seam_ao_strength", "slider", 0.25, 0.0, 0.75, 0.05),
+        ),
+    ),
+    "material_grade": NodeMeta(
+        "material_grade",
+        "Material Bus (PBR)",
+        "Grade Material Bus (Pass 4)",
+        "Applies 3D contact AO, Color Balance, OKLCH, Vibrance, Despeckle & RNM detail normals cleanly onto a MATERIAL bus.",
+        (PortSchema("mat", "MATERIAL"), PortSchema("ao_bake", "SCALAR", True), PortSchema("detail_normal", "NORMAL", True)),
+        "MATERIAL",
+        outputs=(PortSchema("albedo", "RGBA"), PortSchema("normal", "NORMAL"), PortSchema("ao", "SCALAR")),
+    ),
+    "material_set_alpha": NodeMeta(
+        "material_set_alpha",
+        "Material Bus (PBR)",
+        "Material Alpha Cutout",
+        "Applies hard or soft alpha cutout cleanly to both albedo and emissive inside a MATERIAL bus.",
+        (PortSchema("mat", "MATERIAL"), PortSchema("alpha", "MASK"), PortSchema("mask", "MASK", True)),
+        "MATERIAL",
+    ),
+    "material_pad_islands": NodeMeta(
+        "material_pad_islands",
+        "Material Bus (PBR)",
+        "Material Island Bleed Pad",
+        "Clamp-bleeds EVERY PBR channel of a MATERIAL bus cleanly into UV island padding.",
+        (PortSchema("mat", "MATERIAL"),),
+        "MATERIAL",
+    ),
     "gradient_eye_rgba": NodeMeta("gradient_eye_rgba", "Painterly & Bio", "Non-Standard Gradient Eye", "Fierce mythic multi-stop luminous gradient dragon eye (mirror-symmetric L/R).", (PortSchema("local_u", "SCALAR"), PortSchema("local_v", "SCALAR"), PortSchema("side_sign", "SCALAR", True)), "RGBA"),
     "eye_paint_rgba": NodeMeta("eye_paint_rgba", "Painterly & Bio", "7-Layer Iris/Slit Eye", "Detailed 7-layer slit/round iris creature eye.", (PortSchema("local_u", "SCALAR"), PortSchema("local_v", "SCALAR"), PortSchema("side_sign", "SCALAR", True)), "RGBA"),
     "imbricated_scales": NodeMeta("imbricated_scales", "Painterly & Bio", "Imbricated Dragon Scales", "Overlapping keeled dragon/fish/reptile scales.", (), "HEIGHT"),
@@ -154,15 +289,31 @@ NODE_CATALOG: dict[str, NodeMeta] = {
 
 
 def export_node_schema_json() -> dict[str, Any]:
-    """Return a clean UI-ready JSON descriptor grouping all TexGraph nodes by category."""
+    """Return a clean UI-ready JSON descriptor grouping all TexGraph nodes & reusable Subgraphs by category."""
+    from .pipeline import SUBGRAPH_REGISTRY
+
     by_cat: dict[str, list[dict[str, Any]]] = {}
     for op, meta in NODE_CATALOG.items():
         by_cat.setdefault(meta.category, []).append(asdict(meta))
+    subgraphs = [
+        {
+            "name": name,
+            "category": info["category"],
+            "description": info["description"],
+            "defaults": info["defaults"],
+        }
+        for name, info in SUBGRAPH_REGISTRY.items()
+    ]
     return {
-        "schema_version": "2.1",
+        "schema_version": "3.0",
         "node_count": len(NODE_CATALOG),
+        "subgraph_count": len(subgraphs),
+        "supports_multi_port": True,
+        "supports_material_bus": True,
+        "supports_multipass": True,
         "categories": list(by_cat.keys()),
         "nodes_by_category": by_cat,
+        "subgraphs": subgraphs,
     }
 
 

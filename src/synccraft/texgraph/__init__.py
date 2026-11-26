@@ -37,6 +37,7 @@ from .generators_painterly import (
     directional_brushstrokes,
     gradient_eye_paint,
     layered_scale_plates,
+    sculpted_pinion_wing,
     smooth_wing_membrane,
     stylized_foliage_clusters,
     stylized_wood_planks,
@@ -84,6 +85,22 @@ from .pbr import (
     pack_labpbr_1_3,
     render_pbr_material_sheet,
     render_pbr_preview_2d,
+)
+from .pipeline import (
+    MATERIAL_BUS_PORTS,
+    SUBGRAPH_REGISTRY,
+    MultiPassResult,
+    PassSnapshot,
+    PassSpec,
+    is_material_bus,
+    material_blend,
+    material_grade,
+    material_height_blend,
+    material_make,
+    material_pad_islands,
+    material_set_alpha,
+    register_subgraph,
+    render_multipass_sheet,
 )
 from .pixel_art_ops import (
     blend_layers,

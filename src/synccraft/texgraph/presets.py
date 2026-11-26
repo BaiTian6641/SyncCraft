@@ -74,53 +74,54 @@ def build_neon_hex_block(size: int = 32, *, seed: int = 404) -> TexGraph:
 
 
 def build_temple_carved_stone(size: int = 32, *, seed: int = 108) -> TexGraph:
-    """Sunlit Mayan/Ruin Carved Sandstone Masonry + Emerald Vine Moss (Inspired by Reference Image 6, Full PBR)."""
+    """5-Pass Industry-Standard Material-Bus Showcase: Carved Ruin Sandstone + Height-Blended Emerald Moss (Full PBR)."""
     g = TexGraph(size, size, tileable=True, seed=seed, name="temple_carved_stone_block")
 
-    st_h = g.temple_stone(cols=2, rows=4, carve_motif=True, output="height", seed=seed, id="temple_height")
-    st_seam = g.temple_stone(cols=2, rows=4, carve_motif=True, output="seam", seed=seed, id="temple_seam")
-    sun_grad = g.gradient_field("linear", angle_deg=-90.0, ease="smoothstep", id="sun_top_grad")
-    shaded = g.shade(st_h, use_mesh=False, bump_strength=1.75, spec_strength=0.12, id="stone_shade")
-    lit_mix = g.blend(shaded, sun_grad, mode="soft_light", opacity=0.28, id="stone_sun_mix")
+    # Pass 1: Structural Geometry & Weathering Drip Mask Bake
+    with g.pass_("pass_1_bake", title="Geometry & Seam Bake", description="Carved sandstone mortar seams & gravity drip paths.", color="#1E293B") as p1:
+        st_h = g.temple_stone(cols=2, rows=4, carve_motif=True, output="height", seed=seed, id="temple_height")
+        st_seam = g.temple_stone(cols=2, rows=4, carve_motif=True, output="seam", seed=seed, id="temple_seam")
+        drip = g.weathering_drip(st_h, cavity=st_seam, streak_length=5, strength=0.82, decay=0.80, id="vine_drip")
+        drip_cut = g.levels(drip, in_min=0.18, in_max=0.72, id="drip_mask")
+        p1.preview_ref = st_h
 
-    # Warm sunlit sandstone-limestone with silky cool-slate recessed seams (clean like Image 6!)
-    stone_rgba = g.multi_stop_gradient(
-        lit_mix,
-        stops=[
-            (0.00, "#3D4754"),
-            (0.26, "#697173"),
-            (0.54, "#A29E8B"),
-            (0.80, "#CDC4A4"),
-            (1.00, "#ECE5C8"),
-        ],
-        smooth_blend=0.65,
-        quantize_steps=7,
-        id="temple_stone_rgba",
-    )
+    # Pass 2: Macro Material Block-In (Reusable Stone Subgraph)
+    with g.pass_("pass_2_macro_blockin", title="Sandstone Block-In", description="Sunlit carved ashlar sandstone MaterialBus subgraph.", color="#422006") as p2:
+        stone_mat = g.use_subgraph("carved_ruin_stone_pbr", prefix="ruin_stone", seed=seed, cols=2, rows=4, carve_motif=True)
+        p2.preview_ref = f"{stone_mat}.albedo"
 
-    # Lush emerald jungle moss hugging mortar & hanging gently from top crevices
-    turing_m = g.gray_scott(preset="coral", steps=200, sim_scale=1, seed=seed + 29, id="vine_turing")
-    drip = g.weathering_drip(st_h, cavity=st_seam, streak_length=5, strength=0.82, decay=0.80, id="vine_drip")
-    moss_raw = g.math(turing_m, g.levels(drip, in_min=0.22, in_max=0.74, id="drip_cut"), op="mul", id="moss_spread")
-    moss_mask = g.levels(g.iterate(moss_raw, operation="moss_spread", steps=2, strength=0.40, id="moss_it"), in_min=0.26, in_max=0.52, id="moss_alpha")
-    moss_rgba = g.multi_stop_gradient(
-        g.shade(moss_raw, use_mesh=False, bump_strength=1.4, id="moss_sh"),
-        stops=[(0.0, "#14532D"), (0.45, "#22C55E"), (0.82, "#84CC16"), (1.0, "#D9F99D")],
-        smooth_blend=0.60,
-        quantize_steps=5,
-        id="moss_rgba",
-    )
+    # Pass 3: Surface Sculpt & Substance Height-Based Material Blending (Moss creeps physically through mortar cracks!)
+    with g.pass_("pass_3_height_blend", title="Height-Blend Moss", description="Turing coral moss Height-Blended cleanly into stone seams.", color="#14532D") as p3:
+        moss_mat = g.use_subgraph("emerald_moss_pbr", prefix="jungle_moss", seed=seed + 29, steps=200)
+        moss_grow = g.iterate(g.math(f"{moss_mat}.height", drip_cut, op="mul", id="moss_seed"), operation="moss_spread", steps=2, strength=0.40, id="moss_spread")
+        moss_mask = g.levels(moss_grow, in_min=0.22, in_max=0.58, id="moss_blend_mask")
+        blended_mat = g.material_height_blend(
+            stone_mat,
+            moss_mat,
+            mask=moss_mask,
+            height_offset=0.12,
+            contrast=5.5,
+            seam_ao_strength=0.30,
+            id="stone_moss_height_blend",
+        )
+        p3.preview_ref = f"{blended_mat}.albedo"
 
-    comp = g.blend(stone_rgba, moss_rgba, mode="normal", opacity=0.95, mask=moss_mask, id="moss_over_stone")
-    final = g.vibrance(comp, vibrance=0.18, contrast=1.04, lift=0.01, id="final_temple_stone")
+    # Pass 4: Atmospheric Lighting, Contact AO & Color Grading
+    with g.pass_("pass_4_grade", title="Lighting & Grade", description="Sunlit warm highlight balance & perceptual vibrance.", color="#1E3A8A") as p4:
+        final_mat = g.material_grade(
+            blended_mat,
+            shadows=(-0.01, 0.0, 0.02),
+            highlights=(0.02, 0.015, -0.005),
+            vibrance=0.18,
+            contrast=1.04,
+            lift=0.01,
+            id="final_temple_mat",
+        )
+        p4.preview_ref = f"{final_mat}.albedo"
 
-    total_h = g.blend(st_h, g.levels(moss_raw, out_min=0.62, out_max=0.95, id="moss_h"), mask=moss_mask, id="pbr_temple_height")
-    pbr_nrm = g.height_to_normal(total_h, strength=2.8, id="pbr_temple_normal")
-    pbr_rough = g.blend(g.constant(0.68, id="st_r"), g.constant(0.88, id="ms_r"), mask=moss_mask, id="pbr_temple_rough")
-    pbr_ao = g.ao_from_height(total_h, radius=3, strength=0.90, id="pbr_temple_ao")
-    pbr_por = g.blend(g.constant(0.45, id="st_p"), g.constant(0.85, id="ms_p"), mask=moss_mask, id="pbr_temple_porosity")
-
-    g.set_output(final, height_node=total_h, normal_node=pbr_nrm, roughness_node=pbr_rough, metallic_node=g.constant(0.0, id="st_m"), ao_node=pbr_ao, porosity_node=pbr_por, normal_strength=2.8)
+    g.set_output_material(final_mat, normal_strength=2.8)
+    g.expose_param("moss_height_offset", blended_mat, "height_offset", min_val=-0.4, max_val=0.4, step=0.05)
+    g.expose_param("moss_blend_contrast", blended_mat, "contrast", min_val=1.0, max_val=12.0, step=0.5)
     return g
 
 
@@ -309,286 +310,392 @@ def build_prism_blade_item(size: int = 32, *, seed: int = 901) -> TexGraph:
 # ---------------------------------------------------------------------------
 
 
-def build_aethelion_texgraph(mesh_ctx: MeshBakeContext, *, seed: int = 4204) -> TexGraph:
-    """Expert Studio Smooth-Gradient + Full-PBR TexGraph for Aethelion v4 (Antigravity x Gemini 4 Neon).
+def build_aethelion_texgraph(mesh_ctx: MeshBakeContext, *, seed: int = 4205) -> TexGraph:
+    """Industry-Standard 5-Pass Material-Bus TexGraph for Aethelion v5 (Antigravity x Gemini 4 Neon).
 
-    Distilled directly from the 7 Master Blockbench Studio References & User Feedback:
-    - **Non-Standard Luminous Gradient Eyes** (`gradient_eye`, 100% mirror-symmetric on BOTH eye_l AND head_face_r__eye_l!):
-      Fierce radiant cyan -> starlight-white -> pale-gold diagonal energy gradient with subtle brow shadow
-      (ZERO cartoon black slit pupil, strictly on outward lateral faces, dark socket on other 5 faces!)
-    - **Master Studio Backlit Smooth-Gradient Wings** (`smooth_wing`):
-      Deep velvety cosmic-indigo bone-proximity AO gradient hugging every wing spar -> silky smooth luminous
-      translucent amethyst-to-cyan backlit center -> subtle radial tension folds & painterly brushwork ->
-      single graceful concave tattered bat-wing arch per bay (80% calm, ZERO noisy marble confetti!)
-    - **Smooth-to-Pixel Hybrid Body Armor**:
-      Continuous 3D `body_flow_gradient` + `per_island_gradient` + `directional_brushstrokes` + chunky calm
-      `layered_plates` (like Images 2 & 3!) + brushed metallic champagne-gold astrolabe trim (`LabPBR Gold 231`) +
-      cohesive atmospheric `color_balance` + full LabPBR 1.3 & Bedrock MER + synchronized 8-frame animated PBR!
+    Structured into 5 Explicit Sequential Pipeline Passes (Substance Designer / MaterialX / Pixel Composer parity):
+    - **Pass 1 (`pass_1_bake`) — 3D Geometry, Wing Coords & Semantic Masks**:
+      Bakes 3D light wrap, dorsal-ventral flow, per-island gradients, baked AO, top/bottom-aligned
+      `wing_span_u` & `wing_trail_v` (ZERO inverted dorsal/ventral cutouts!), and anatomical masks.
+    - **Pass 2 (`pass_2_macro_blockin`) — Macro Material Block-In (25% Squint Readability)**:
+      Instantiates reusable PBR Material Subgraphs (`dragon_armor_plates_pbr`, `brushed_metal_pbr`,
+      `pearl_scutes_pbr`) plus oral/talon/fang material buses and composites them into a cohesive base bus.
+    - **Pass 3 (`pass_3_surface_sculpt`) — Sculpted Aerodynamic Pinion Wings & Height-Blended Relief**:
+      Builds Aethelion's signature **Sculpted Metallic Obsidian Pinion-Feather Louvers** (`sculpted_pinion_wing_pbr`
+      subgraphs — razor swept lance blades, brushed champagne-gold astrolabe anchor arc, subtle barb micro-relief,
+      and **Twin-Spectrum Horizon Cyan outer (`f1/f1d/f2/f2d`) + Cosmic Violet-Magenta inner (`f3/f4/fore`)**
+      recessed energy quill filaments!) — 100% aligned top & bottom, zero cupcake blobs, zero colliding slabs!
+    - **Pass 4 (`pass_4_lighting_grade`) — 3D Contact AO, Atmospheric Color Balance & Despeckle**:
+      Unified `material_grade` pass applying subtle cool contact shadow depth, atmospheric grading & vibrance.
+    - **Pass 5 (`pass_5_emissive_pbr`) — Bilateral Gradient Eyes, Neon Conduits, Wing Cutouts & LabPBR Final**:
+      Paints bilateral symmetric **non-standard luminous gradient eyes** (`gradient_eye_multi`), animates
+      focused Gemini 4 Neon conduits & pinion quill pulses, applies crisp 100% top/bottom aligned hard-alpha
+      wing cutouts, clamp-bleeds ALL PBR channels into UV padding, and binds via `set_output_material(...)`!
     """
     g = TexGraph(
         mesh_ctx.width,
         mesh_ctx.height,
         tileable=False,
         seed=seed,
-        name="aethelion_v4_smooth_studio_pbr",
+        name="aethelion_v5_multipass_pbr",
         mesh_context=mesh_ctx,
     )
 
-    # 1. Silky 3D Macro Light Wrap + Per-Face Smooth Gradient + Calm Chunky Dragon Plates + Painterly Brushstrokes
-    flow_lit = g.body_flow_gradient("top_light_wrap", gamma=0.95, id="body_light_wrap")
-    flow_dv = g.body_flow_gradient("dorsal_ventral", id="body_dorsal_ventral")
-    isl_grad = g.per_island_gradient("top_to_bottom", curve=0.88, id="island_top_grad")
-    plates = g.layered_plates(
-        cols=max(20, mesh_ctx.width // 18),
-        rows=max(24, mesh_ctx.height // 18),
-        stagger=0.5,
-        gap=0.07,
-        top_rim=0.20,
-        variance=0.16,
-        seed=seed + 11,
-        id="chunky_dragon_plates",
-    )
-    brush = g.brushstrokes(angle_deg=-18.0, scale_along=4.0, scale_across=18.0, contrast=0.22, seed=seed + 29, id="painterly_strokes")
-    n3_macro = g.noise_3d(scale=0.09, octaves=2, mode="fbm", seed=seed + 1, id="macro_3d_wash")
+    # =========================================================================
+    # PASS 1: 3D Geometry Bake, Wing Orientation & Semantic Material Masks
+    # =========================================================================
+    with g.pass_(
+        "pass_1_bake",
+        title="3D Bake & Masks",
+        description="3D light wrap, baked AO, top/bottom-aligned wing coords & anatomical masks.",
+        color="#1E293B",
+    ) as p1:
+        baked_ao = g.mesh_channel("baked_ao", id="mesh_baked_ao")
+        flow_lit = g.body_flow_gradient("top_light_wrap", gamma=0.95, id="body_light_wrap")
+        flow_dv = g.body_flow_gradient("dorsal_ventral", id="body_dorsal_ventral")
+        isl_grad = g.per_island_gradient("top_to_bottom", curve=0.88, id="island_top_grad")
+        lu = g.mesh_channel("local_u", id="mesh_lu")
+        lv = g.mesh_channel("local_v", id="mesh_lv")
+        side_s = g.mesh_channel("side_sign", id="mesh_side_sign")
+        span_u = g.mesh_channel("wing_span_u", id="mesh_wing_span_u")
+        trail_v = g.mesh_channel("wing_trail_v", id="mesh_wing_trail_v")
+        face_dn = g.mesh_channel("face_is_down", id="mesh_face_is_down")
+        up_down_f = g.mesh_channel("face", faces="up,down", id="wing_updown_face")
+        not_updown = g.levels(up_down_f, invert=True, id="not_updown")
 
-    # Calm structural heightfield: 65% clean chunky plates + 25% smooth brushwork + 10% 3D wash
-    armor_h_raw = g.blend(plates, brush, mode="soft_light", opacity=0.32, id="armor_h_brush")
-    armor_h = g.blend(armor_h_raw, n3_macro, mode="soft_light", opacity=0.20, id="armor_h_clean")
+        gold_mask = g.mesh_channel(
+            "element",
+            pattern=r"(gold|trim|collar|diadem|gemini_star|astrolabe|brow|carpal_hub|elbow_fin|claw_base|vambrace|pauldron|tricep_plate|thigh_armor|patella|knuckle_hood|horn_3|tip_a|tip_b|ring_top|ring_low|nasal_bridge)",
+            id="gold_elem_mask",
+        )
+        scute_mask = g.mesh_channel(
+            "element",
+            pattern=r"(ventral|sternum|throat|groin_bridge|pearl|horn_tip|tail_ventral|jaw_ventral)",
+            id="scute_elem_mask",
+        )
+        oral_mask = g.mesh_channel("element", pattern=r"(palate|pharynx|throat_back|oral_floor|cheek_web)", id="oral_mask")
+        tongue_mask = g.mesh_channel("element", pattern=r"tongue", id="tongue_mask")
+        fang_mask = g.mesh_channel("element", pattern=r"(teeth|fang)", id="fang_mask")
+        talon_mask = g.mesh_channel("element", pattern=r"(talon|claw_tip)", id="talon_mask")
+        eye_all_mask = g.mesh_channel("element", pattern=r"(^|/|__)eye_[lr]", id="eye_all_mask")
+        eye_outward_mask = g.mesh_channel("outward_eye", pattern=r"(^|/|__)eye_[lr]", id="eye_outward_mask")
 
-    # Silky smooth-to-pixel directional shading: 3D macro wrap + per-face gradient + subtle crisp 1px edge bevels!
-    armor_sh_3d = g.shade(
-        armor_h,
-        use_mesh=True,
-        bump_strength=1.25,
-        ao_strength=0.26,
-        bevel_strength=0.32,
-        cavity_strength=0.22,
-        rim_strength=0.30,
-        spec_strength=0.24,
-        id="armor_3d_shade",
-    )
-    # Blend in smooth macro 3D wrap & per-island gradient so cuboids read silky and painterly like Images 2, 3, 4!
-    armor_smooth_sh = g.blend(
-        g.blend(armor_sh_3d, flow_lit, mode="normal", opacity=0.34, id="armor_flow_mix"),
-        isl_grad,
-        mode="soft_light",
-        opacity=0.26,
-        id="armor_final_shade",
-    )
+        # Separate masks for Twin-Spectrum Wing Pinion Bays (Cyan outer vs Violet-Magenta inner!)
+        lobe_all_mask = g.mesh_channel("element", pattern=r"(wing_lobe|wing_hum_sail|wing_sail|membrane|patagium)", id="wing_lobe_all_mask")
+        lobe_cyan_prim_m = g.mesh_channel("element", pattern=r"wing_lobe_(1|2)$", id="wing_lobe_cyan_prim_mask")
+        lobe_cyan_tip_m = g.mesh_channel("element", pattern=r"wing_lobe_(1d|2d)$", id="wing_lobe_cyan_tip_mask")
+        lobe_mag_prim_m = g.mesh_channel("element", pattern=r"wing_lobe_3$", id="wing_lobe_mag_prim_mask")
+        lobe_mag_inner_m = g.mesh_channel("element", pattern=r"wing_lobe_(4|fore)$", id="wing_lobe_mag_inner_mask")
+        lobe_updown_m = g.math(lobe_all_mask, up_down_f, op="mul", id="lobe_updown_mask")
+        lobe_side_m = g.math(lobe_all_mask, not_updown, op="mul", id="lobe_side_mask")
 
-    # Hero Material 1: Silky Cosmic Midnight-Sapphire Armor (deep velvety plum-indigo -> royal sapphire -> cerulean rim!)
-    obsidian_rgba = g.multi_stop_gradient(
-        armor_smooth_sh,
-        stops=[
-            (0.00, "#0D0B24"),
-            (0.24, "#1C1B4B"),
-            (0.50, "#2B3A7A"),
-            (0.76, "#4670B8"),
-            (0.92, "#7CB8EB"),
-            (1.00, "#D1F0FF"),
-        ],
-        smooth_blend=0.66,
-        quantize_steps=8,
-        dither="clustered",
-        dither_strength=0.06,
-        id="obsidian_armor_rgba",
-    )
+        p1.preview_ref = baked_ao
 
-    # Subtle smooth dorsal cosmic-violet sheen sweeping along the crest & spine (inspired by Image 4 atmospheric wash!)
-    dorsal_sheen_m = g.levels(g.math(flow_dv, n3_macro, op="mul", id="dorsal_m_raw"), in_min=0.34, in_max=0.78, out_max=0.40, id="dorsal_sheen_mask")
-    dorsal_violet = g.multi_stop_gradient(
-        armor_smooth_sh,
-        stops=[(0.0, "#240E4A"), (0.45, "#6D28D9"), (0.82, "#C084FC"), (1.0, "#F5D0FE")],
-        smooth_blend=0.78,
-        quantize_steps=7,
-        id="dorsal_violet_rgba",
-    )
-    obsidian_irid = g.blend(obsidian_rgba, dorsal_violet, mode="screen", opacity=0.42, mask=dorsal_sheen_m, id="obsidian_iridescent")
+    # =========================================================================
+    # PASS 2: Macro Material Block-In (Reusable Studio PBR Subgraphs!)
+    # =========================================================================
+    with g.pass_(
+        "pass_2_macro_blockin",
+        title="Macro Material Buses",
+        description="Obsidian dragon plates, brushed champagne gold, opalescent scutes & detail materials.",
+        color="#172554",
+    ) as p2:
+        obsidian_mat = g.use_subgraph(
+            "dragon_armor_plates_pbr",
+            prefix="obsidian",
+            inputs={"flow_lit": flow_lit, "isl_grad": isl_grad, "ao": baked_ao},
+            seed=seed + 11,
+            cols=max(20, mesh_ctx.width // 18),
+            rows=max(24, mesh_ctx.height // 18),
+            stops=[
+                (0.00, "#07071A"),
+                (0.26, "#12153B"),
+                (0.54, "#1F2D66"),
+                (0.78, "#345496"),
+                (0.92, "#5E8ED1"),
+                (1.00, "#A8D5FA"),
+            ],
+            roughness=0.32,
+            metallic=0.18,
+            smooth_blend=0.66,
+            quantize_steps=8,
+        )
 
-    # Hero Material 2: Silky Brushed Champagne-Gold Astrolabe Armor (LabPBR Gold Metal ID 231!)
-    gold_mask = g.mesh_channel("element", pattern=r"(gold|trim|collar|diadem|gemini_star|astrolabe|brow|carpal_hub|elbow_fin|claw_base|vambrace|pauldron|tricep_plate|thigh_armor|patella|knuckle_hood|horn_3|tip_a|tip_b|ring_top|ring_low|nasal_bridge)", id="gold_elem_mask")
-    gold_grain = g.gabor(scale=24.0, angle_deg=18.0, anisotropy=4.0, octaves=2, id="gold_brushed_grain")
-    gold_h = g.blend(gold_grain, isl_grad, mode="soft_light", opacity=0.30, id="gold_h")
-    gold_sh = g.blend(
-        g.shade(gold_h, use_mesh=True, bump_strength=1.0, ao_strength=0.28, bevel_strength=0.36, cavity_strength=0.22, spec_strength=0.42, spec_power=16.0, id="gold_3d_shade"),
-        flow_lit,
-        mode="normal",
-        opacity=0.28,
-        id="gold_smooth_shade",
-    )
-    gold_rgba = g.multi_stop_gradient(
-        gold_sh,
-        stops=[
-            (0.00, "#5C2C14"),
-            (0.28, "#A8611B"),
-            (0.58, "#E3A735"),
-            (0.84, "#FAD96B"),
-            (1.00, "#FFF9D6"),
-        ],
-        smooth_blend=0.72,
-        quantize_steps=7,
-        id="astrolabe_gold_rgba",
-    )
-    comp1 = g.blend(obsidian_irid, gold_rgba, mode="normal", opacity=1.0, mask=gold_mask, id="comp_gold")
+        # Subtle smooth dorsal cosmic-violet iridescence sweeping along crest & spine
+        n3_macro = g.noise_3d(scale=0.09, octaves=2, mode="fbm", seed=seed + 1, id="macro_3d_wash")
+        dorsal_sheen_m = g.levels(g.math(flow_dv, n3_macro, op="mul", id="dorsal_m_raw"), in_min=0.36, in_max=0.80, out_max=0.34, id="dorsal_sheen_mask")
+        dorsal_violet = g.multi_stop_gradient(
+            f"{obsidian_mat}.height",
+            stops=[(0.0, "#240E4A"), (0.45, "#6D28D9"), (0.82, "#C084FC"), (1.0, "#F5D0FE")],
+            smooth_blend=0.78,
+            quantize_steps=7,
+            id="dorsal_violet_rgba",
+        )
+        dorsal_violet_mat = g.material_make(dorsal_violet, height=f"{obsidian_mat}.height", roughness=0.26, metallic=0.22, ao=baked_ao, id="dorsal_violet_mat")
+        obs_irid_mat = g.material_blend(obsidian_mat, dorsal_violet_mat, mask=dorsal_sheen_m, opacity=0.38, albedo_mode="screen", id="obsidian_irid_mat")
 
-    # Hero Material 3: Silky Opalescent Pearl Ventral Scutes & Ribbed Throat
-    scute_mask = g.mesh_channel("element", pattern=r"(ventral|sternum|throat|groin_bridge|pearl|horn_tip|tail_ventral|jaw_ventral)", id="scute_elem_mask")
-    scute_ribs = g.layered_plates(cols=12, rows=44, stagger=0.0, gap=0.09, top_rim=0.22, variance=0.08, seed=seed + 41, id="scute_ribs")
-    scute_sh = g.blend(
-        g.shade(scute_ribs, use_mesh=True, bump_strength=1.15, ao_strength=0.28, bevel_strength=0.22, cavity_strength=0.24, id="scute_3d_shade"),
-        isl_grad,
-        mode="soft_light",
-        opacity=0.25,
-        id="scute_smooth_sh",
-    )
-    scute_rgba = g.multi_stop_gradient(
-        scute_sh,
-        stops=[(0.0, "#4B5578"), (0.35, "#8E9EC2"), (0.72, "#CEDBF0"), (1.0, "#F5F9FF")],
-        smooth_blend=0.75,
-        quantize_steps=7,
-        id="pearl_scute_rgba",
-    )
-    comp2 = g.blend(comp1, scute_rgba, mode="normal", opacity=1.0, mask=scute_mask, id="comp_scute")
+        # Brushed Champagne-Gold Astrolabe Armor Subgraph (LabPBR Gold Metal ID 231!)
+        gold_mat = g.use_subgraph(
+            "brushed_metal_pbr",
+            prefix="gold_astrolabe",
+            inputs={"flow_lit": flow_lit, "isl_grad": isl_grad, "ao": baked_ao},
+            seed=seed + 23,
+            roughness=0.17,
+            metallic=0.94,
+        )
 
-    # Hero Material 4: MASTER STUDIO BACKLIT SMOOTH-GRADIENT WINGS (Inspired directly by Images 1, 3, 4!)
-    sail_mask = g.mesh_channel("element", pattern=r"(wing_lobe|wing_hum_sail|wing_sail|membrane|patagium)", id="wing_sail_mask")
-    lu = g.mesh_channel("local_u", id="mesh_lu")
-    lv = g.mesh_channel("local_v", id="mesh_lv")
-    side_s = g.mesh_channel("side_sign", id="mesh_side_sign")
-    up_down_f = g.mesh_channel("face", faces="up,down", id="wing_updown_face")
-    sail_updown_m = g.math(sail_mask, up_down_f, op="mul", id="sail_updown_mask")
-    sail_side_m = g.math(sail_mask, g.levels(up_down_f, invert=True, id="not_updown"), op="mul", id="sail_edge_faces")
+        # Opalescent Pearl Ventral Scutes Subgraph
+        scute_mat = g.use_subgraph(
+            "pearl_scutes_pbr",
+            prefix="pearl_scutes",
+            inputs={"isl_grad": isl_grad, "ao": baked_ao},
+            seed=seed + 41,
+            roughness=0.36,
+            sss=0.24,
+        )
 
-    wing = g.smooth_wing(
-        lu,
-        lv,
-        palette_stops=[
-            (0.00, "#120B2B"),  # deep velvety indigo bone-contact AO
-            (0.24, "#2B185C"),  # rich royal twilight plum
-            (0.50, "#5B2EA8"),  # silky cosmic amethyst mid-membrane
-            (0.76, "#A855F7"),  # luminous backlit orchid-violet glow
-            (0.91, "#67E8F9"),  # radiant Gemini 4 Neon cyan inner translucency!
-            (1.00, "#E0F7FF"),  # soft starlight core highlight
-        ],
-        rim_color="#38BDF8",
-        arch_depth=0.24,
-        arches=1,              # single sweeping, majestic Gothic bat-wing concave arch per bay (like Images 1 & 4!)
-        tatter_strength=0.055, # subtle organic tattered edge notches (like Images 1 & 3!)
-        fold_count=5.0,
-        fold_strength=0.14,
-        glow_center_strength=0.88,
-        bone_shadow_width=0.25,
-        rim_width=0.048,
-        smooth_blend=0.78,     # silky painterly smooth-gradient wings!
-        quantize_steps=9,
-        seed=seed + 71,
-        id="aethelion_studio_wing",
-    )
-    comp3 = g.blend(comp2, wing["rgba"], mode="normal", opacity=1.0, mask=sail_mask, id="comp_wings")
+        # Oral, Tongue, Ivory Fang & Obsidian Talon Material Buses
+        oral_mat = g.material_make(
+            g.multi_stop_gradient(flow_lit, stops=[(0.0, "#140924"), (1.0, "#3D184D")], smooth_blend=0.8, id="oral_rgba"),
+            height=f"{obsidian_mat}.height", roughness=0.42, metallic=0.0, ao=baked_ao, sss=0.20, id="oral_mat",
+        )
+        tongue_mat = g.material_make(
+            g.multi_stop_gradient(flow_lit, stops=[(0.0, "#521636"), (1.0, "#B84A76")], smooth_blend=0.8, id="tongue_rgba"),
+            height=f"{obsidian_mat}.height", roughness=0.32, metallic=0.0, ao=baked_ao, sss=0.38, id="tongue_mat",
+        )
+        fang_mat = g.material_make(
+            g.multi_stop_gradient(flow_lit, stops=[(0.0, "#B8B09E"), (1.0, "#FFFDF5")], smooth_blend=0.8, id="fang_rgba"),
+            height=f"{obsidian_mat}.height", roughness=0.22, metallic=0.0, ao=baked_ao, id="fang_mat",
+        )
+        talon_mat = g.material_make(
+            g.multi_stop_gradient(flow_lit, stops=[(0.0, "#0D0D1A"), (0.7, "#2E3552"), (1.0, "#8DA4CC")], smooth_blend=0.75, id="talon_rgba"),
+            height=f"{obsidian_mat}.height", roughness=0.20, metallic=0.32, ao=baked_ao, id="talon_mat",
+        )
 
-    # Hero Material 5: Dark Obsidian Talons, Oral Cavity, Tongue & Ivory Fangs
-    oral_mask = g.mesh_channel("element", pattern=r"(palate|pharynx|throat_back|oral_floor|cheek_web)", id="oral_mask")
-    tongue_mask = g.mesh_channel("element", pattern=r"tongue", id="tongue_mask")
-    fang_mask = g.mesh_channel("element", pattern=r"(teeth|fang)", id="fang_mask")
-    talon_mask = g.mesh_channel("element", pattern=r"(talon|claw_tip)", id="talon_mask")
-    comp4 = g.blend(comp3, g.multi_stop_gradient(armor_smooth_sh, stops=[(0.0, "#140924"), (1.0, "#3D184D")], smooth_blend=0.8, id="oral_rgba"), mask=oral_mask, id="comp_oral")
-    comp5 = g.blend(comp4, g.multi_stop_gradient(armor_smooth_sh, stops=[(0.0, "#521636"), (1.0, "#B84A76")], smooth_blend=0.8, id="tongue_rgba"), mask=tongue_mask, id="comp_tongue")
-    comp6 = g.blend(comp5, g.multi_stop_gradient(armor_smooth_sh, stops=[(0.0, "#B8B09E"), (1.0, "#FFFDF5")], smooth_blend=0.8, id="fang_rgba"), mask=fang_mask, id="comp_fangs")
-    comp7 = g.blend(comp6, g.multi_stop_gradient(armor_smooth_sh, stops=[(0.0, "#0D0D1A"), (0.7, "#2E3552"), (1.0, "#8DA4CC")], smooth_blend=0.75, id="talon_rgba"), mask=talon_mask, id="comp_talons")
+        # Composite full body MaterialBus stack (with Height-Blend on gold trim over obsidian plates!)
+        body_m1 = g.material_height_blend(obs_irid_mat, gold_mat, mask=gold_mask, height_offset=0.08, contrast=8.0, seam_ao_strength=0.18, id="body_gold_blend")
+        body_m2 = g.material_blend(body_m1, scute_mat, mask=scute_mask, id="body_scute_blend")
+        body_m3 = g.material_blend(body_m2, oral_mat, mask=oral_mask, id="body_oral_blend")
+        body_m4 = g.material_blend(body_m3, tongue_mat, mask=tongue_mask, id="body_tongue_blend")
+        body_m5 = g.material_blend(body_m4, fang_mat, mask=fang_mask, id="body_fang_blend")
+        body_mat = g.material_blend(body_m5, talon_mat, mask=talon_mask, id="body_macro_mat")
+        p2.preview_ref = f"{body_mat}.albedo"
 
-    # Hero Material 6: NON-STANDARD LUMINOUS GRADIENT EYES (User's Favorite Style, 100% Symmetric L & R!)
-    eye_all_mask = g.mesh_channel("element", pattern=r"(^|/|__)eye_[lr]", id="eye_all_mask")
-    eye_outward_mask = g.mesh_channel("outward_eye", pattern=r"(^|/|__)eye_[lr]", id="eye_outward_mask")
-    comp_eye_sock = g.blend(comp7, g.constant("#090B1C", id="eye_socket_dark"), mask=eye_all_mask, id="comp_eye_socket")
-    eye_rgba, eye_grad_em = g.gradient_eye(
-        lu,
-        lv,
-        side_sign=side_s,
-        stops=[
-            (0.00, "#0B3B7A"),
-            (0.24, "#06B6D4"),
-            (0.54, "#67E8F9"),
-            (0.80, "#FEF08A"),
-            (1.00, "#FFFFFF"),
-        ],
-        brow_shadow=0.38,
-        angle_deg=-22.0,
-        style="gradient_glow",
-        rim_color="#090D22",
-        id="aethelion_gradient_eye",
-    )
-    comp_eyes = g.blend(comp_eye_sock, eye_rgba, mode="normal", opacity=1.0, mask=eye_outward_mask, id="comp_eyes")
-    eye_em_masked = g.math(eye_outward_mask, eye_grad_em, op="mul", id="eye_emissive_mask")
+    # =========================================================================
+    # PASS 3: Sculpted Aerodynamic Metallic Pinion-Feather Wings (Twin-Spectrum!)
+    # =========================================================================
+    with g.pass_(
+        "pass_3_pinion_wings",
+        title="Sculpted Pinion Wings",
+        description="Swept metallic obsidian pinion blades, gold astrolabe arc & Twin-Spectrum cyan/magenta quills.",
+        color="#3B0764",
+    ) as p3:
+        # Animated traveling energy wave pulsing gently along pinion quills
+        quill_wave = g.scroll(g.fbm(scale=3.0, octaves=2, tileable=True, seed=seed + 131, id="quill_wave_n"), speed_x=1.0, speed_y=1.0, id="quill_wave_scroll")
 
-    # Hero Material 7: Focused Smooth Animated Gemini 4 Neon Energy Accents (Slits + Gentle Backlit Wing Pulse!)
-    em_elem_mask = g.mesh_channel("element", pattern=r"(slit|gravity_cyan|gravity_mag|gem|halo_energy|thruster_core|neon_conduit)", id="neon_elem_mask")
-    # Gentle smooth luminous breathing wave traveling across the backlit wing core & trailing edge!
-    wing_wave = g.scroll(g.fbm(scale=3.0, octaves=2, tileable=True, seed=seed + 131, id="wing_breath_n"), speed_x=1.0, speed_y=1.0, id="wing_breath_scroll")
-    wing_soft_em = g.math(
-        g.math(sail_updown_m, wing["glow"], op="mul", id="wing_glow_masked"),
-        g.levels(wing_wave, in_min=0.05, in_max=0.95, out_min=0.45, out_max=0.95, id="wing_breath_mod"),
-        op="mul",
-        id="wing_soft_em_mask",
-    )
-    total_neon_mask = g.math(em_elem_mask, wing_soft_em, op="max", id="neon_m_comb")
-    neon_pulsed = g.pulse(total_neon_mask, min_val=0.76, max_val=1.0, freq=1.0, id="neon_pulsed_mask")
+        blade_pal = [
+            (0.00, "#060618"),
+            (0.26, "#101438"),
+            (0.54, "#1B295E"),
+            (0.78, "#325294"),
+            (0.92, "#6396D8"),
+            (1.00, "#B8E1FF"),
+        ]
+        cyan_neon_pal = [(0.0, "#0284C7"), (0.42, "#22D3EE"), (0.78, "#A5F3FC"), (1.0, "#FFFFFF")]
+        mag_neon_pal = [(0.0, "#7E22CE"), (0.42, "#D946EF"), (0.78, "#F5D0FE"), (1.0, "#FFFFFF")]
 
-    pos_grad = g.blend(g.mesh_channel("side_sym", id="wing_span_grad"), g.mesh_channel("front_grad", id="body_z_grad"), mode="normal", opacity=0.45, id="neon_spatial_grad")
-    neon_hue_driver = g.blend(pos_grad, wing_wave, mode="soft_light", opacity=0.40, id="neon_hue_driver")
-    neon_color = g.multi_stop_gradient(
-        neon_hue_driver,
-        stops=[(0.0, "#0EA5E9"), (0.32, "#22D3EE"), (0.58, "#A5F3FC"), (0.80, "#C084FC"), (1.0, "#F472B6")],
-        smooth_blend=1.0,
-        id="gemini4_neon_ramp",
-    )
+        wing_in = {"span_u": span_u, "trail_v": trail_v, "face_is_down": face_dn, "wave": quill_wave}
 
-    all_em_mask = g.math(neon_pulsed, eye_em_masked, op="max", id="all_emissive_mask")
-    all_em_col = g.blend(neon_color, eye_rgba, mode="normal", opacity=1.0, mask=eye_outward_mask, id="all_emissive_col")
-    alb_em, em_map = g.emissive(comp_eyes, all_em_mask, color=all_em_col, glow_bleed_px=2, glow_strength=0.40, id="aethelion_glow")
+        # 4 Tailored Pinion Louver Archetypes (ALL sharing exact aligned wing_span_u & wing_trail_v!)
+        pinion_cyan_prim = g.use_subgraph(
+            "sculpted_pinion_wing_pbr",
+            prefix="pinion_cyan_prim",
+            inputs=wing_in,
+            seed=seed + 71,
+            vanes=5,
+            sweep=0.84,
+            envelope_style="primary",
+            blade_stops=blade_pal,
+            neon_stops=cyan_neon_pal,
+            gold_arc=True,
+            quill_glow_strength=0.95,
+        )
+        pinion_cyan_tip = g.use_subgraph(
+            "sculpted_pinion_wing_pbr",
+            prefix="pinion_cyan_tip",
+            inputs=wing_in,
+            seed=seed + 79,
+            vanes=4,
+            sweep=0.78,
+            envelope_style="distal_tip",
+            blade_stops=blade_pal,
+            neon_stops=cyan_neon_pal,
+            gold_arc=True,
+            quill_glow_strength=0.95,
+        )
+        pinion_mag_prim = g.use_subgraph(
+            "sculpted_pinion_wing_pbr",
+            prefix="pinion_mag_prim",
+            inputs=wing_in,
+            seed=seed + 83,
+            vanes=5,
+            sweep=0.84,
+            envelope_style="primary",
+            blade_stops=blade_pal,
+            neon_stops=mag_neon_pal,
+            gold_arc=True,
+            quill_glow_strength=0.95,
+        )
+        pinion_mag_inner = g.use_subgraph(
+            "sculpted_pinion_wing_pbr",
+            prefix="pinion_mag_inner",
+            inputs=wing_in,
+            seed=seed + 89,
+            vanes=4,
+            sweep=0.80,
+            envelope_style="inner_curtain",
+            blade_stops=blade_pal,
+            neon_stops=mag_neon_pal,
+            gold_arc=True,
+            quill_glow_strength=0.92,
+        )
 
-    # Cohesive atmospheric color grading + clean vibrance + graceful bat-wing alpha cutouts!
-    graded = g.color_balance(alb_em, shadows=(-0.01, -0.005, 0.025), midtones=(0.0, 0.008, 0.015), highlights=(0.02, 0.018, 0.01), id="aethelion_grade")
-    vib_alb = g.vibrance(graded, vibrance=0.16, contrast=1.04, lift=0.01, shadow_cool=0.04, id="aethelion_vibrance")
-    clean_alb = g.despeckle(vib_alb, threshold=0.22, id="aethelion_despeckled")
-    cut_alb1 = g.set_alpha(clean_alb, wing["alpha"], mask=sail_updown_m, id="aethelion_scalloped_wings")
-    cut_alb = g.set_alpha(cut_alb1, g.constant(0.0, id="zero_a"), mask=sail_side_m, id="aethelion_clean_sail_edges")
-    cut_em = g.set_alpha(em_map, wing["alpha"], mask=sail_updown_m, id="aethelion_scalloped_em")
+        # Layer all 4 sculpted pinion bays into the MaterialBus!
+        w_m1 = g.material_blend(body_mat, pinion_cyan_prim, mask=lobe_cyan_prim_m, id="comp_pinion_c1")
+        w_m2 = g.material_blend(w_m1, pinion_cyan_tip, mask=lobe_cyan_tip_m, id="comp_pinion_c2")
+        w_m3 = g.material_blend(w_m2, pinion_mag_prim, mask=lobe_mag_prim_m, id="comp_pinion_m1")
+        with_wings_mat = g.material_blend(w_m3, pinion_mag_inner, mask=lobe_mag_inner_m, id="body_and_wings_mat")
 
-    padded_alb = g.pad_islands(cut_alb, id="final_aethelion_atlas")
-    padded_em = g.pad_islands(cut_em, id="final_aethelion_emissive")
+        # Assemble exact combined hard-alpha mask & quill emissive mask across all 4 bay types!
+        a1 = g.blend(g.constant(1.0, id="solid_one"), f"{pinion_cyan_prim}.alpha", mask=lobe_cyan_prim_m, id="wing_alpha_1")
+        a2 = g.blend(a1, f"{pinion_cyan_tip}.alpha", mask=lobe_cyan_tip_m, id="wing_alpha_2")
+        a3 = g.blend(a2, f"{pinion_mag_prim}.alpha", mask=lobe_mag_prim_m, id="wing_alpha_3")
+        wing_alpha_all = g.blend(a3, f"{pinion_mag_inner}.alpha", mask=lobe_mag_inner_m, id="wing_alpha_all")
 
-    # Full LabPBR 1.3 + Bedrock MER Material Maps!
-    h1 = g.blend(armor_h, gold_h, mask=gold_mask, id="pbr_h_1")
-    h2 = g.blend(h1, scute_ribs, mask=scute_mask, id="pbr_h_2")
-    pbr_height = g.blend(h2, wing["height"], mask=sail_mask, id="pbr_aethelion_height")
-    pbr_normal = g.height_to_normal(pbr_height, strength=2.4, id="pbr_aethelion_normal")
+        p3.preview_ref = f"{with_wings_mat}.albedo"
 
-    pbr_metallic = g.blend(g.constant(0.14, id="obs_met"), g.constant(0.94, id="gold_met"), mask=gold_mask, id="pbr_aethelion_metallic")
-    r1 = g.blend(g.constant(0.30, id="obs_r"), g.constant(0.17, id="gold_r"), mask=gold_mask, id="pbr_r_1")
-    r2 = g.blend(r1, g.constant(0.36, id="scute_r"), mask=scute_mask, id="pbr_r_2")
-    r3 = g.blend(r2, g.constant(0.46, id="sail_r"), mask=sail_mask, id="pbr_r_3")
-    pbr_roughness = g.blend(r3, g.constant(0.08, id="eye_r"), mask=eye_outward_mask, id="pbr_aethelion_roughness")
+    # =========================================================================
+    # PASS 4: Contact AO, Cohesive Atmospheric Color Grading & Clean Despeckle
+    # =========================================================================
+    with g.pass_(
+        "pass_4_lighting_grade",
+        title="Lighting & Grading",
+        description="Cool shadow contact AO, atmospheric color balance, vibrance & despeckle.",
+        color="#0F172A",
+    ) as p4:
+        graded_mat = g.material_grade(
+            with_wings_mat,
+            ao_bake=baked_ao,
+            ao_darken=0.14,
+            shadows=(-0.01, -0.005, 0.024),
+            midtones=(0.0, 0.008, 0.014),
+            highlights=(0.02, 0.018, 0.010),
+            vibrance=0.16,
+            contrast=1.04,
+            lift=0.01,
+            shadow_cool=0.04,
+            despeckle_threshold=0.22,
+            id="aethelion_graded_mat",
+        )
+        p4.preview_ref = f"{graded_mat}.albedo"
 
-    sss1 = g.math(sail_mask, g.constant(0.78, id="sail_sss_c"), op="mul", id="pbr_sss_1")
-    pbr_sss = g.math(sss1, g.math(scute_mask, g.constant(0.24, id="scute_sss_c"), op="mul", id="pbr_sss_2"), op="max", id="pbr_aethelion_sss")
-    pbr_ao = g.mesh_channel("baked_ao", id="pbr_aethelion_ao")
+    # =========================================================================
+    # PASS 5: Bilateral Non-Standard Gradient Eyes, Focused Emissive, Cutouts & PBR Pad
+    # =========================================================================
+    with g.pass_(
+        "pass_5_emissive_pbr",
+        title="Eyes, Neon & PBR Final",
+        description="Bilateral non-standard gradient eyes, Twin-Spectrum emissive slits, 100% aligned wing alpha & island padding.",
+        color="#083344",
+    ) as p5:
+        # Bilateral Non-Standard Luminous Gradient Eyes (User's Favorite — 100% Mirror-Symmetric L & R!)
+        eye_socket_mat = g.material_make(g.constant("#090B1C", id="eye_socket_dark"), roughness=0.45, metallic=0.0, ao=baked_ao, id="eye_socket_mat")
+        with_sock_mat = g.material_blend(graded_mat, eye_socket_mat, mask=eye_all_mask, id="comp_eye_socket_mat")
 
-    g.set_output(
-        padded_alb,
-        emissive_node=padded_em,
-        height_node=pbr_height,
-        normal_node=pbr_normal,
-        roughness_node=pbr_roughness,
-        metallic_node=pbr_metallic,
-        ao_node=pbr_ao,
-        sss_node=pbr_sss,
-        normal_strength=2.4,
-    )
-    g.expose_param("wing_smoothness", "aethelion_studio_wing", "smooth_blend", min_val=0.0, max_val=1.0, step=0.05)
-    g.expose_param("eye_brow_shadow", "aethelion_gradient_eye", "brow_shadow", min_val=0.0, max_val=0.8, step=0.05)
-    g.add_group("Smooth Body Armor", ["body_light_wrap", "chunky_dragon_plates", "painterly_strokes", "obsidian_armor_rgba"], color="#1E293B")
-    g.add_group("Backlit Studio Wings", ["aethelion_studio_wing", "comp_wings", "aethelion_scalloped_wings"], color="#2E1065")
-    g.add_group("Non-Standard Gradient Eyes", ["aethelion_gradient_eye", "comp_eyes"], color="#083344")
+        eye_multi = g.gradient_eye_multi(
+            lu,
+            lv,
+            side_sign=side_s,
+            stops=[
+                (0.00, "#0B3B7A"),
+                (0.24, "#06B6D4"),
+                (0.54, "#67E8F9"),
+                (0.80, "#FEF08A"),
+                (1.00, "#FFFFFF"),
+            ],
+            brow_shadow=0.38,
+            angle_deg=-22.0,
+            style="gradient_glow",
+            rim_color="#090D22",
+            id="aethelion_gradient_eye",
+        )
+        eye_em_masked = g.math(eye_outward_mask, f"{eye_multi}.emissive_mask", op="mul", id="eye_em_masked")
+        eye_mat = g.material_make(
+            f"{eye_multi}.albedo",
+            height=g.constant(0.65, id="eye_h_const"),
+            roughness=0.08,
+            metallic=0.0,
+            ao=g.constant(1.0, id="eye_ao_const"),
+            id="eye_pbr_mat",
+        )
+        with_eyes_mat = g.material_blend(with_sock_mat, eye_mat, mask=eye_outward_mask, id="comp_eyes_mat")
+
+        # Focused Twin-Spectrum Neon Energy Accents (Cyan slits/gems + Magenta f3/f4 slits + Pinion Quills + Eyes!)
+        cyan_slit_m = g.mesh_channel("element", pattern=r"(f1_.*slit|f2_.*slit|gravity_cyan|carpal_gem|gemini_star|chest_core_gem|halo_energy|thruster_core|neon_conduit)", id="cyan_slit_mask")
+        mag_slit_m = g.mesh_channel("element", pattern=r"(f3_.*slit|f4_.*slit|gravity_mag)", id="mag_slit_mask")
+        cyan_pulsed = g.pulse(cyan_slit_m, min_val=0.78, max_val=1.0, freq=1.0, id="cyan_pulsed")
+        mag_pulsed = g.pulse(mag_slit_m, min_val=0.78, max_val=1.0, freq=1.0, phase_offset=0.5, id="mag_pulsed")
+
+        # Also extract pinion quill glow mask cleanly from our wing subgraphs!
+        q1 = g.blend(g.constant(0.0, id="zero_q"), f"{pinion_cyan_prim}.glow_mask", mask=lobe_cyan_prim_m, id="quill_g1")
+        q2 = g.blend(q1, f"{pinion_cyan_tip}.glow_mask", mask=lobe_cyan_tip_m, id="quill_g2")
+        q3 = g.blend(q2, f"{pinion_mag_prim}.glow_mask", mask=lobe_mag_prim_m, id="quill_g3")
+        quill_glow_all = g.math(g.blend(q3, f"{pinion_mag_inner}.glow_mask", mask=lobe_mag_inner_m, id="quill_g4"), lobe_updown_m, op="mul", id="quill_glow_masked")
+
+        cyan_col = g.multi_stop_gradient(quill_wave, stops=[(0.0, "#0284C7"), (0.45, "#22D3EE"), (0.82, "#A5F3FC"), (1.0, "#FFFFFF")], smooth_blend=1.0, id="cyan_neon_col")
+        mag_col = g.multi_stop_gradient(quill_wave, stops=[(0.0, "#7E22CE"), (0.45, "#D946EF"), (0.82, "#F5D0FE"), (1.0, "#FFFFFF")], smooth_blend=1.0, id="mag_neon_col")
+
+        # Build unified focused emissive mask + Twin-Spectrum color map
+        slit_em_mask = g.math(cyan_pulsed, mag_pulsed, op="max", id="slit_em_mask")
+        neon_and_quill_mask = g.math(slit_em_mask, quill_glow_all, op="max", id="neon_quill_mask")
+        all_em_mask = g.math(neon_and_quill_mask, eye_em_masked, op="max", id="all_emissive_mask")
+
+        em_col_1 = g.blend(cyan_col, mag_col, mask=g.math(mag_slit_m, g.math(lobe_mag_prim_m, lobe_mag_inner_m, op="max", id="mag_lobe_any"), op="max", id="mag_color_region"), id="twin_spec_col")
+        all_em_col = g.blend(em_col_1, f"{eye_multi}.albedo", mask=eye_outward_mask, id="all_emissive_col")
+
+        # Single-evaluation multi-port emissive composite!
+        em_comp = g.emissive_composite(
+            f"{with_eyes_mat}.albedo",
+            all_em_mask,
+            color=all_em_col,
+            glow_bleed_px=2,
+            glow_strength=0.42,
+            id="aethelion_glow",
+        )
+
+        # Pack final emissive & albedo back into the unified MATERIAL bus!
+        lit_mat = g.material_make(
+            f"{em_comp}.albedo",
+            height=f"{with_eyes_mat}.height",
+            normal=f"{with_eyes_mat}.normal",
+            roughness=f"{with_eyes_mat}.roughness",
+            metallic=f"{with_eyes_mat}.metallic",
+            ao=f"{with_eyes_mat}.ao",
+            emissive=f"{em_comp}.emissive",
+            sss=f"{with_eyes_mat}.sss",
+            porosity=f"{with_eyes_mat}.porosity",
+            id="aethelion_lit_mat",
+        )
+
+        # Apply crisp 100% aligned top/bottom hard-alpha wing pinion cutouts & clear 0.5u thin edge faces!
+        cut_mat_1 = g.material_set_alpha(lit_mat, wing_alpha_all, mask=lobe_updown_m, id="aethelion_cut_pinions")
+        cut_mat_2 = g.material_set_alpha(cut_mat_1, g.constant(0.0, id="zero_a"), mask=lobe_side_m, id="aethelion_clean_lobe_edges")
+        final_mat = g.material_pad_islands(cut_mat_2, id="final_aethelion_material")
+        p5.preview_ref = f"{final_mat}.albedo"
+
+    g.set_output_material(final_mat, normal_strength=2.5)
+    g.expose_param("eye_brow_shadow", eye_multi, "brow_shadow", min_val=0.0, max_val=0.8, step=0.05)
+    g.expose_param("glow_strength", em_comp, "glow_strength", min_val=0.0, max_val=1.0, step=0.05)
     return g
 
 

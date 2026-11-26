@@ -9,12 +9,13 @@ Supports:
 from __future__ import annotations
 
 import base64
+from contextlib import contextmanager
 import copy
 from dataclasses import dataclass, field
 import json
 from pathlib import Path
 import time
-from typing import Any
+from typing import Any, Iterator
 
 import numpy as np
 
@@ -41,6 +42,7 @@ from .generators_painterly import (
     directional_brushstrokes,
     gradient_eye_paint,
     layered_scale_plates,
+    sculpted_pinion_wing,
     smooth_wing_membrane,
     stylized_foliage_clusters,
     stylized_wood_planks,
@@ -87,6 +89,21 @@ from .pbr import (
     render_pbr_material_sheet,
     render_pbr_preview_2d,
 )
+from .pipeline import (
+    MATERIAL_BUS_PORTS,
+    SUBGRAPH_REGISTRY,
+    MultiPassResult,
+    PassSnapshot,
+    PassSpec,
+    is_material_bus,
+    material_blend,
+    material_grade,
+    material_height_blend,
+    material_make,
+    material_pad_islands,
+    material_set_alpha,
+    render_multipass_sheet,
+)
 from .pixel_art_ops import (
     blend_layers,
     directional_shade,
@@ -125,6 +142,49 @@ _TIME_AWARE_OPS: frozenset[str] = frozenset(
         "cosine_gradient", "wave_distort",
     }
 )
+
+
+# Ops whose primary input expects a full MATERIAL bus dict instead of a stripped albedo array
+_BUS_INPUT_KEYS: dict[str, frozenset[str]] = {
+    "material_blend": frozenset({"base", "top"}),
+    "material_height_blend": frozenset({"base", "top"}),
+    "material_grade": frozenset({"mat"}),
+    "material_set_alpha": frozenset({"mat"}),
+    "material_pad_islands": frozenset({"mat"}),
+}
+
+
+def _parse_ref(ref: str) -> tuple[str, str | None]:
+    """Split a typed multi-port socket reference ``'node_id.port'`` into ``(node_id, port)``."""
+    if "." in ref:
+        base, port = ref.split(".", 1)
+        return base, port
+    return ref, None
+
+
+def _resolve_ref(vals: dict[str, Any], ref: str, *, allow_bus: bool = False) -> Any:
+    """Resolve a node or ``'node_id.port'`` socket reference from evaluated DAG values."""
+    base, port = _parse_ref(ref)
+    v = vals[base]
+    if port is not None:
+        if isinstance(v, dict):
+            if port in v:
+                return v[port]
+            if port == "rgba" and "albedo" in v:
+                return v["albedo"]
+            if port == "albedo" and "rgba" in v:
+                return v["rgba"]
+            avail = [k for k in v if not k.startswith("__")]
+            raise KeyError(f"Node {base!r} has no output port {port!r} (available: {avail})")
+        raise TypeError(f"Node {base!r} returned a single array and cannot resolve port {port!r}")
+    if isinstance(v, dict) and not allow_bus:
+        for primary in ("albedo", "rgba", "height"):
+            if primary in v:
+                return v[primary]
+        for k, arr in v.items():
+            if not k.startswith("__"):
+                return arr
+    return v
 
 
 @dataclass
@@ -177,14 +237,18 @@ class TexGraph:
         self.node_order: list[str] = []
         self.output_node: str | None = None
         self.emissive_node: str | None = None
+        self.output_material_node: str | None = None
         # First-class PBR channel outputs (height, normal, roughness, metallic, ao, sss, porosity)
         self.pbr_nodes: dict[str, str] = {}
         self.pbr_config: dict[str, Any] = {"normal_strength": 2.4, "dielectric_f0": 0.04}
+        # Staged Multi-Pass Pipeline (Pass 1 Bake -> Pass 2 Macro -> Pass 3 Relief -> Pass 4 Grade -> Pass 5 Final)
+        self.passes: list[PassSpec] = []
+        self._active_pass: PassSpec | None = None
         # Future-UI-ready graph metadata: exposed parameters & visual node groups/frames
         self.exposed_params: dict[str, dict[str, Any]] = {}
         self.groups: list[dict[str, Any]] = []
         self._counter = 0
-        self._static_cache: dict[str, np.ndarray] = {}
+        self._static_cache: dict[str, Any] = {}
         self._dynamic_ids: set[str] = set()
 
     def expose_param(
@@ -223,6 +287,75 @@ class TexGraph:
         self.groups.append({"name": str(name), "nodes": list(node_ids), "color": str(color)})
         return self
 
+    @contextmanager
+    def pass_(
+        self,
+        name: str,
+        *,
+        title: str | None = None,
+        description: str = "",
+        color: str = "#1E293B",
+    ) -> Iterator[PassSpec]:
+        """Declare a named sequential stage in a Multi-Pass TexGraph pipeline.
+
+        Every node created inside ``with g.pass_(...) as p:`` is recorded in that pass;
+        set ``p.preview_ref = node_id`` (or call ``g.set_pass_preview(ref)``) to pick the
+        stage checkpoint image rendered in the Multi-Pass Progression Contact Sheet.
+        """
+        spec = PassSpec(
+            name=str(name),
+            title=str(title or name),
+            description=str(description),
+            color=str(color),
+        )
+        self.passes.append(spec)
+        prev = self._active_pass
+        self._active_pass = spec
+        try:
+            yield spec
+        finally:
+            self._active_pass = prev
+
+    def set_pass_preview(self, ref: str, *, pass_name: str | None = None) -> "TexGraph":
+        """Set the checkpoint preview node/socket for the active (or named) pipeline pass."""
+        base, _ = _parse_ref(ref)
+        if base not in self.nodes:
+            raise KeyError(f"Unknown pass preview node: {ref!r}")
+        if pass_name is not None:
+            for ps in self.passes:
+                if ps.name == pass_name:
+                    ps.preview_ref = ref
+                    return self
+            raise KeyError(f"Unknown pass name: {pass_name!r}")
+        if self._active_pass is not None:
+            self._active_pass.preview_ref = ref
+        elif self.passes:
+            self.passes[-1].preview_ref = ref
+        return self
+
+    def use_subgraph(
+        self,
+        subgraph_name: str,
+        *,
+        prefix: str | None = None,
+        inputs: dict[str, str] | None = None,
+        color: str = "#172554",
+        **params: Any,
+    ) -> str:
+        """Instantiate a reusable parameterized Material Subgraph (Substance .sbsar / Group parity)."""
+        if subgraph_name not in SUBGRAPH_REGISTRY:
+            raise KeyError(f"Unknown TexGraph subgraph {subgraph_name!r}. Available: {sorted(SUBGRAPH_REGISTRY)}")
+        info = SUBGRAPH_REGISTRY[subgraph_name]
+        pref = prefix or f"{subgraph_name}_{self._counter + 1:02d}"
+        before_n = len(self.node_order)
+        merged = dict(info["defaults"])
+        merged.update(params)
+        out_id = info["builder"](self, prefix=pref, inputs=dict(inputs or {}), **merged)
+        created = self.node_order[before_n:]
+        if created:
+            self.add_group(f"Subgraph: {subgraph_name} ({pref})", created, color=color)
+        return out_id
+
     def _next_id(self, op: str, node_id: str | None) -> str:
         if node_id:
             if node_id in self.nodes:
@@ -242,11 +375,14 @@ class TexGraph:
         nid = self._next_id(op, id)
         clean_inputs = {k: v for k, v in (inputs or {}).items() if v is not None}
         for ref in clean_inputs.values():
-            if ref not in self.nodes:
+            base_ref, _ = _parse_ref(ref)
+            if base_ref not in self.nodes:
                 raise KeyError(f"Node {nid!r} references unknown input node {ref!r}")
         spec = NodeSpec(id=nid, op=op, inputs=clean_inputs, params=params)
         self.nodes[nid] = spec
         self.node_order.append(nid)
+        if self._active_pass is not None:
+            self._active_pass.node_ids.append(nid)
         self._static_cache.clear()
         return nid
 
@@ -265,11 +401,13 @@ class TexGraph:
         normal_strength: float | None = None,
         dielectric_f0: float | None = None,
     ) -> "TexGraph":
-        if node_id not in self.nodes:
+        base_out, _ = _parse_ref(node_id)
+        if base_out not in self.nodes:
             raise KeyError(f"Unknown output node: {node_id!r}")
         self.output_node = node_id
         if emissive_node is not None:
-            if emissive_node not in self.nodes:
+            base_em, _ = _parse_ref(emissive_node)
+            if base_em not in self.nodes:
                 raise KeyError(f"Unknown emissive node: {emissive_node!r}")
             self.emissive_node = emissive_node
         for ch_name, ch_id in (
@@ -282,7 +420,8 @@ class TexGraph:
             ("porosity", porosity_node),
         ):
             if ch_id is not None:
-                if ch_id not in self.nodes:
+                base_ch, _ = _parse_ref(ch_id)
+                if base_ch not in self.nodes:
                     raise KeyError(f"Unknown PBR {ch_name} node: {ch_id!r}")
                 self.pbr_nodes[ch_name] = ch_id
         if normal_strength is not None:
@@ -290,6 +429,32 @@ class TexGraph:
         if dielectric_f0 is not None:
             self.pbr_config["dielectric_f0"] = float(dielectric_f0)
         return self
+
+    def set_output_material(
+        self,
+        mat_node_id: str,
+        *,
+        normal_strength: float | None = None,
+        dielectric_f0: float | None = None,
+    ) -> "TexGraph":
+        """Bind a unified `MATERIAL` bus node to ALL graph outputs (Albedo, Emissive & all LabPBR/MER channels)."""
+        base, _ = _parse_ref(mat_node_id)
+        if base not in self.nodes:
+            raise KeyError(f"Unknown MATERIAL bus output node: {mat_node_id!r}")
+        self.output_material_node = base
+        return self.set_output(
+            f"{base}.albedo",
+            emissive_node=f"{base}.emissive",
+            height_node=f"{base}.height",
+            normal_node=f"{base}.normal",
+            roughness_node=f"{base}.roughness",
+            metallic_node=f"{base}.metallic",
+            ao_node=f"{base}.ao",
+            sss_node=f"{base}.sss",
+            porosity_node=f"{base}.porosity",
+            normal_strength=normal_strength,
+            dielectric_f0=dielectric_f0,
+        )
 
     def attach_mesh(self, mesh_context: MeshBakeContext) -> "TexGraph":
         self.mesh_context = mesh_context
@@ -595,12 +760,167 @@ class TexGraph:
     def bloom(self, src: str, *, threshold: float = 0.72, radius: int = 3, intensity: float = 0.55, id: str | None = None) -> str:
         return self.add("bloom_glow", id=id, inputs={"src": src}, threshold=threshold, radius=radius, intensity=intensity)
 
+    # --- Industry-Standard Multi-Port & First-Class MATERIAL Bus Builders (v4) ---
+    def material_make(
+        self,
+        albedo: str,
+        *,
+        height: str | float | None = None,
+        normal: str | None = None,
+        roughness: str | float | None = 0.55,
+        metallic: str | float | None = 0.0,
+        ao: str | float | None = 1.0,
+        emissive: str | None = None,
+        sss: str | float | None = 0.0,
+        porosity: str | float | None = 0.0,
+        normal_strength: float = 2.4,
+        id: str | None = None,
+    ) -> str:
+        ins: dict[str, str] = {"albedo": albedo}
+        params: dict[str, Any] = {"normal_strength": float(normal_strength)}
+        for k, v in (
+            ("height", height),
+            ("normal", normal),
+            ("roughness", roughness),
+            ("metallic", metallic),
+            ("ao", ao),
+            ("emissive", emissive),
+            ("sss", sss),
+            ("porosity", porosity),
+        ):
+            if isinstance(v, str):
+                ins[k] = v
+            elif v is not None:
+                params[k] = float(v)
+        return self.add("material_make", id=id, inputs=ins, **params)
+
+    def material_blend(
+        self,
+        base: str,
+        top: str,
+        *,
+        mask: str | None = None,
+        opacity: float = 1.0,
+        albedo_mode: str = "normal",
+        normal_mode: str = "lerp",
+        preserve_base_alpha: bool = False,
+        id: str | None = None,
+    ) -> str:
+        ins: dict[str, str] = {"base": base, "top": top}
+        if mask:
+            ins["mask"] = mask
+        return self.add(
+            "material_blend",
+            id=id,
+            inputs=ins,
+            opacity=opacity,
+            albedo_mode=albedo_mode,
+            normal_mode=normal_mode,
+            preserve_base_alpha=preserve_base_alpha,
+        )
+
+    def material_height_blend(
+        self,
+        base: str,
+        top: str,
+        *,
+        mask: str | None = None,
+        height_offset: float = 0.0,
+        contrast: float = 6.0,
+        seam_ao_strength: float = 0.25,
+        normal_mode: str = "lerp",
+        id: str | None = None,
+    ) -> str:
+        ins: dict[str, str] = {"base": base, "top": top}
+        if mask:
+            ins["mask"] = mask
+        return self.add(
+            "material_height_blend",
+            id=id,
+            inputs=ins,
+            height_offset=height_offset,
+            contrast=contrast,
+            seam_ao_strength=seam_ao_strength,
+            normal_mode=normal_mode,
+        )
+
+    def material_grade(
+        self,
+        mat: str,
+        *,
+        ao_bake: str | None = None,
+        detail_normal: str | None = None,
+        id: str | None = None,
+        **kw: Any,
+    ) -> str:
+        ins: dict[str, str] = {"mat": mat}
+        if ao_bake:
+            ins["ao_bake"] = ao_bake
+        if detail_normal:
+            ins["detail_normal"] = detail_normal
+        return self.add("material_grade", id=id, inputs=ins, **kw)
+
+    def material_set_alpha(self, mat: str, alpha: str, *, mask: str | None = None, id: str | None = None) -> str:
+        ins: dict[str, str] = {"mat": mat, "alpha": alpha}
+        if mask:
+            ins["mask"] = mask
+        return self.add("material_set_alpha", id=id, inputs=ins)
+
+    def material_pad_islands(self, mat: str, *, pad: int | None = None, id: str | None = None) -> str:
+        return self.add("material_pad_islands", id=id, inputs={"mat": mat}, pad=pad)
+
+    def sculpted_pinion_wing(
+        self,
+        span_u: str,
+        trail_v: str,
+        *,
+        face_is_down: str | None = None,
+        wave: str | None = None,
+        id: str | None = None,
+        **kw: Any,
+    ) -> str:
+        """Single-eval Sculpted Pinion-Blade Wing emitting a complete multi-port `MATERIAL` bus."""
+        ins: dict[str, str] = {"span_u": span_u, "trail_v": trail_v}
+        if face_is_down:
+            ins["face_is_down"] = face_is_down
+        if wave:
+            ins["wave"] = wave
+        return self.add("sculpted_pinion_wing", id=id, inputs=ins, **kw)
+
+    def smooth_wing_multi(self, local_u: str, local_v: str, *, id: str | None = None, **kw: Any) -> str:
+        """Single-eval multi-port Backlit Dragon Wing Membrane (ports: albedo, alpha, rim_mask, glow_mask, height)."""
+        return self.add("smooth_wing_multi", id=id, inputs={"local_u": local_u, "local_v": local_v}, **kw)
+
+    def gradient_eye_multi(self, local_u: str, local_v: str, *, side_sign: str | None = None, id: str | None = None, **kw: Any) -> str:
+        """Single-eval multi-port Non-Standard Gradient Eye (ports: albedo, emissive_mask)."""
+        ins: dict[str, str] = {"local_u": local_u, "local_v": local_v}
+        if side_sign:
+            ins["side_sign"] = side_sign
+        return self.add("gradient_eye_multi", id=id, inputs=ins, **kw)
+
+    def emissive_composite(
+        self,
+        albedo: str,
+        mask: str,
+        *,
+        color: str | None = None,
+        glow_bleed_px: int = 2,
+        glow_strength: float = 0.35,
+        id: str | None = None,
+    ) -> str:
+        """Single-eval multi-port Emissive Composite (ports: albedo, emissive)."""
+        ins: dict[str, str] = {"albedo": albedo, "mask": mask}
+        if color:
+            ins["color"] = color
+        return self.add("emissive_composite", id=id, inputs=ins, glow_bleed_px=glow_bleed_px, glow_strength=glow_strength)
+
     # ------------------------------------------------------------------
-    # Declarative JSON Recipe Import / Export
+    # Declarative JSON Recipe Import / Export (v3.0 Multi-Pass & Multi-Port)
     # ------------------------------------------------------------------
     def to_recipe(self) -> dict[str, Any]:
+        is_v3 = bool(self.passes or self.output_material_node or any("." in r for sp in self.nodes.values() for r in sp.inputs.values()))
         rec: dict[str, Any] = {
-            "version": "2.1",
+            "version": "3.0" if is_v3 else "2.1",
             "name": self.name,
             "width": self.width,
             "height": self.height,
@@ -610,9 +930,13 @@ class TexGraph:
             "emissive": self.emissive_node,
             "nodes": [self.nodes[nid].to_dict() for nid in self.node_order],
         }
+        if self.output_material_node:
+            rec["output_material"] = self.output_material_node
         if self.pbr_nodes:
             rec["pbr"] = dict(self.pbr_nodes)
             rec["pbr_config"] = dict(self.pbr_config)
+        if self.passes:
+            rec["passes"] = [ps.to_dict() for ps in self.passes]
         if self.exposed_params:
             rec["exposed_params"] = copy.deepcopy(self.exposed_params)
         if self.groups:
@@ -642,7 +966,13 @@ class TexGraph:
             g.add(nd["op"], id=nd["id"], inputs=nd.get("inputs") or {}, **(nd.get("params") or {}))
         pbr_d = data.get("pbr") or {}
         pbr_cfg = data.get("pbr_config") or {}
-        if data.get("output"):
+        if data.get("output_material"):
+            g.set_output_material(
+                data["output_material"],
+                normal_strength=pbr_cfg.get("normal_strength"),
+                dielectric_f0=pbr_cfg.get("dielectric_f0"),
+            )
+        elif data.get("output"):
             g.set_output(
                 data["output"],
                 emissive_node=data.get("emissive"),
@@ -656,6 +986,17 @@ class TexGraph:
                 normal_strength=pbr_cfg.get("normal_strength"),
                 dielectric_f0=pbr_cfg.get("dielectric_f0"),
             )
+        for pd in data.get("passes") or []:
+            g.passes.append(
+                PassSpec(
+                    name=str(pd["name"]),
+                    title=str(pd.get("title", pd["name"])),
+                    description=str(pd.get("description", "")),
+                    node_ids=list(pd.get("nodes") or []),
+                    preview_ref=pd.get("preview"),
+                    color=str(pd.get("color", "#1E293B")),
+                )
+            )
         if data.get("exposed_params"):
             g.exposed_params = copy.deepcopy(data["exposed_params"])
         if data.get("groups"):
@@ -663,7 +1004,7 @@ class TexGraph:
         return g
 
     # ------------------------------------------------------------------
-    # DAG Evaluation Engine (With Static Caching Across Animation Frames)
+    # DAG Evaluation Engine (Multi-Port + Static Caching Across Frames)
     # ------------------------------------------------------------------
     def _compute_dynamic_set(self) -> set[str]:
         dyn: set[str] = set()
@@ -680,18 +1021,19 @@ class TexGraph:
                     is_dyn = True
                 if sp.op == "noise_3d" and any(abs(float(c)) > 1e-6 for c in p.get("flow_vec", (0, 0, 0))):
                     is_dyn = True
-            if not is_dyn and any(ref in dyn for ref in sp.inputs.values()):
+            if not is_dyn and any(_parse_ref(ref)[0] in dyn for ref in sp.inputs.values()):
                 is_dyn = True
             if is_dyn:
                 dyn.add(nid)
         return dyn
 
-    def _eval_node(self, sp: NodeSpec, vals: dict[str, np.ndarray], phase: float) -> np.ndarray:
+    def _eval_node(self, sp: NodeSpec, vals: dict[str, Any], phase: float) -> Any:
         H, W = self.height, self.width
         tile = self.tileable
         p = sp.params
-        ins = {k: vals[v] for k, v in sp.inputs.items()}
         op = sp.op
+        bus_keys = _BUS_INPUT_KEYS.get(op, frozenset())
+        ins = {k: _resolve_ref(vals, v, allow_bus=(k in bus_keys)) for k, v in sp.inputs.items()}
         seed = int(p.get("seed", self.seed))
 
         if op == "constant":
@@ -811,6 +1153,12 @@ class TexGraph:
                 return mc.face_filter_mask(str(p.get("faces", "up,down")))
             if ch == "side_sign":
                 return np.sign(mc.elem_center_x_map).astype(np.float32)
+            if ch == "wing_span_u":
+                return mc.wing_span_u
+            if ch == "wing_trail_v":
+                return mc.wing_trail_v
+            if ch == "face_is_down":
+                return mc.face_is_down
             raise ValueError(f"Unknown mesh_channel: {ch!r}")
 
         if op == "height_to_normal":
@@ -1069,6 +1417,135 @@ class TexGraph:
         if op == "bloom_glow":
             return bloom_glow(ins["src"], threshold=p.get("threshold", 0.72), radius=p.get("radius", 3), intensity=p.get("intensity", 0.55), tileable=p.get("tileable", tile))
 
+        # --- Industry-Standard Multi-Port & First-Class MATERIAL Bus Ops (v4) ---
+        if op == "material_make":
+            return material_make(
+                ins["albedo"],
+                height=ins.get("height", p.get("height")),
+                normal=ins.get("normal"),
+                roughness=ins.get("roughness", p.get("roughness", 0.55)),
+                metallic=ins.get("metallic", p.get("metallic", 0.0)),
+                ao=ins.get("ao", p.get("ao", 1.0)),
+                emissive=ins.get("emissive"),
+                sss=ins.get("sss", p.get("sss", 0.0)),
+                porosity=ins.get("porosity", p.get("porosity", 0.0)),
+                normal_strength=float(p.get("normal_strength", 2.4)),
+                tileable=p.get("tileable", tile),
+            )
+        if op == "material_blend":
+            return material_blend(
+                ins["base"],
+                ins["top"],
+                mask=ins.get("mask"),
+                opacity=float(p.get("opacity", 1.0)),
+                albedo_mode=str(p.get("albedo_mode", "normal")),
+                normal_mode=str(p.get("normal_mode", "lerp")),
+                preserve_base_alpha=bool(p.get("preserve_base_alpha", False)),
+                tileable=p.get("tileable", tile),
+            )
+        if op == "material_height_blend":
+            return material_height_blend(
+                ins["base"],
+                ins["top"],
+                mask=ins.get("mask"),
+                height_offset=float(p.get("height_offset", 0.0)),
+                contrast=float(p.get("contrast", 6.0)),
+                seam_ao_strength=float(p.get("seam_ao_strength", 0.25)),
+                normal_mode=str(p.get("normal_mode", "lerp")),
+                tileable=p.get("tileable", tile),
+            )
+        if op == "material_grade":
+            return material_grade(
+                ins["mat"],
+                ao_bake=ins.get("ao_bake"),
+                ao_darken=float(p.get("ao_darken", 0.0)),
+                shadows=tuple(p.get("shadows", (0.0, 0.0, 0.0))),
+                midtones=tuple(p.get("midtones", (0.0, 0.0, 0.0))),
+                highlights=tuple(p.get("highlights", (0.0, 0.0, 0.0))),
+                hue_shift_deg=float(p.get("hue_shift_deg", 0.0)),
+                chroma_scale=float(p.get("chroma_scale", 1.0)),
+                lightness_offset=float(p.get("lightness_offset", 0.0)),
+                vibrance=float(p.get("vibrance", 0.0)),
+                contrast=float(p.get("contrast", 1.0)),
+                lift=float(p.get("lift", 0.0)),
+                shadow_cool=float(p.get("shadow_cool", 0.0)),
+                despeckle_threshold=float(p.get("despeckle_threshold", 0.0)),
+                detail_normal=ins.get("detail_normal"),
+                detail_normal_strength=float(p.get("detail_normal_strength", 0.5)),
+                tileable=p.get("tileable", tile),
+            )
+        if op == "material_set_alpha":
+            return material_set_alpha(ins["mat"], ins["alpha"], mask=ins.get("mask"), tileable=p.get("tileable", tile))
+        if op == "material_pad_islands":
+            return material_pad_islands(ins["mat"], self.mesh_context, pad=p.get("pad"), tileable=p.get("tileable", tile))
+        if op == "sculpted_pinion_wing":
+            return sculpted_pinion_wing(
+                ins["span_u"],
+                ins["trail_v"],
+                face_is_down=ins.get("face_is_down"),
+                wave=ins.get("wave"),
+                vanes=int(p.get("vanes", 5)),
+                sweep=float(p.get("sweep", 0.84)),
+                envelope_style=str(p.get("envelope_style", "primary")),
+                blade_stops=p.get("blade_stops", ((0.00, "#0A091E"), (0.24, "#171A45"), (0.52, "#283D7E"), (0.78, "#4D7EC7"), (0.93, "#99CEFA"), (1.00, "#E3F6FF"))),
+                gold_stops=p.get("gold_stops", ((0.00, "#753E14"), (0.45, "#D99527"), (0.82, "#F9DA70"), (1.00, "#FFF9D9"))),
+                neon_stops=p.get("neon_stops", ((0.00, "#0284C7"), (0.45, "#22D3EE"), (0.82, "#A5F3FC"), (1.00, "#FFFFFF"))),
+                gold_arc=bool(p.get("gold_arc", True)),
+                quill_glow_strength=float(p.get("quill_glow_strength", 0.92)),
+                smooth_blend=float(p.get("smooth_blend", 0.70)),
+                quantize_steps=int(p.get("quantize_steps", 8)),
+                seed=seed,
+            )
+        if op == "smooth_wing_multi":
+            wd = smooth_wing_membrane(
+                ins["local_u"],
+                ins["local_v"],
+                palette_stops=p.get("palette_stops", [(0.0, "#190E33"), (0.28, "#3B1D6E"), (0.58, "#7C3AED"), (0.84, "#C084FC"), (1.0, "#A5F3FC")]),
+                rim_color=p.get("rim_color", "#67E8F9"),
+                arch_depth=p.get("arch_depth", 0.24),
+                arches=p.get("arches", 1),
+                tatter_strength=p.get("tatter_strength", 0.06),
+                fold_count=p.get("fold_count", 5.0),
+                fold_strength=p.get("fold_strength", 0.14),
+                glow_center_strength=p.get("glow_center_strength", 0.85),
+                bone_shadow_width=p.get("bone_shadow_width", 0.24),
+                rim_width=p.get("rim_width", 0.055),
+                smooth_blend=p.get("smooth_blend", 0.72),
+                quantize_steps=p.get("quantize_steps", 8),
+                seed=seed,
+            )
+            return {
+                "__bus__": np.array([1.0], dtype=np.float32),
+                "albedo": wd["rgba"],
+                "rgba": wd["rgba"],
+                "alpha": wd["alpha"],
+                "rim_mask": wd["rim_mask"],
+                "glow_mask": wd["glow_mask"],
+                "height": wd["height"],
+            }
+        if op == "gradient_eye_multi":
+            ergba, eem = gradient_eye_paint(
+                ins["local_u"],
+                ins["local_v"],
+                side_sign=ins.get("side_sign"),
+                stops=p.get("stops", [(0.0, "#0E4C92"), (0.28, "#06B6D4"), (0.58, "#67E8F9"), (0.82, "#FEF08A"), (1.0, "#FFFFFF")]),
+                brow_shadow=p.get("brow_shadow", 0.42),
+                angle_deg=p.get("angle_deg", -22.0),
+                style=p.get("style", "gradient_glow"),
+                rim_color=p.get("rim_color", "#0B1026"),
+            )
+            return {"albedo": ergba, "rgba": ergba, "emissive_mask": eem}
+        if op == "emissive_composite":
+            alb, em = emissive_extract(
+                ins["albedo"],
+                ins["mask"],
+                emissive_color_rgba=ins.get("color"),
+                glow_bleed_px=p.get("glow_bleed_px", 2),
+                glow_strength=p.get("glow_strength", 0.35),
+                tileable=p.get("tileable", tile),
+            )
+            return {"albedo": alb, "rgba": alb, "emissive": em}
+
         raise ValueError(f"Unsupported TexGraph op: {op!r}")
 
     def evaluate(
@@ -1098,11 +1575,17 @@ class TexGraph:
             if nid not in dyn_ids:
                 self._static_cache[nid] = res
 
-        out_id = target or self.output_node or self.node_order[-1]
-        out_arr = vals[out_id]
-        em_arr = vals[self.emissive_node] if (self.emissive_node and self.emissive_node in vals) else None
+        out_ref = target or self.output_node or self.node_order[-1]
+        out_arr = _resolve_ref(vals, out_ref)
+        em_arr = (
+            _resolve_ref(vals, self.emissive_node)
+            if (self.emissive_node and _parse_ref(self.emissive_node)[0] in vals)
+            else None
+        )
         pbr_ch: dict[str, np.ndarray] = {
-            k: vals[nid] for k, nid in self.pbr_nodes.items() if nid in vals
+            k: _resolve_ref(vals, ref)
+            for k, ref in self.pbr_nodes.items()
+            if _parse_ref(ref)[0] in vals
         }
 
         want_pbr = bool(self.pbr_nodes) if build_pbr is None else bool(build_pbr)
@@ -1164,6 +1647,80 @@ class TexGraph:
             pbr_maps=pbr_maps,
             pbr_preview=pbr_preview,
         )
+
+    def evaluate_multipass(
+        self,
+        *,
+        phase: float = 0.0,
+        build_pbr: bool = True,
+        light_az_deg: float = -38.0,
+        light_el_deg: float = 52.0,
+    ) -> MultiPassResult:
+        """Evaluate the full DAG and capture checkpoint previews & timings for every named pipeline Pass."""
+        ev = self.evaluate(
+            phase=phase,
+            capture_intermediates=True,
+            build_pbr=build_pbr,
+            light_az_deg=light_az_deg,
+            light_el_deg=light_el_deg,
+        )
+        snapshots: list[PassSnapshot] = []
+        if self.passes:
+            for ps in self.passes:
+                ref = ps.preview_ref or (ps.node_ids[-1] if ps.node_ids else None)
+                prev_arr = None
+                if ref is not None and _parse_ref(ref)[0] in ev.intermediates:
+                    prev_arr = _resolve_ref(ev.intermediates, ref)
+                t_ms = sum(ev.timings_ms.get(nid, 0.0) for nid in ps.node_ids)
+                snapshots.append(
+                    PassSnapshot(
+                        name=ps.name,
+                        title=ps.title,
+                        description=ps.description,
+                        preview_ref=ref,
+                        preview_rgba=prev_arr,
+                        node_count=len(ps.node_ids),
+                        time_ms=round(t_ms, 2),
+                    )
+                )
+        else:
+            snapshots.append(
+                PassSnapshot(
+                    name="main",
+                    title="Main Graph Output",
+                    description="",
+                    preview_ref=self.output_node,
+                    preview_rgba=ev.output,
+                    node_count=len(self.node_order),
+                    time_ms=round(sum(ev.timings_ms.values()), 2),
+                )
+            )
+        return MultiPassResult(
+            eval_result=ev,
+            passes=snapshots,
+            total_ms=round(sum(ev.timings_ms.values()), 2),
+        )
+
+    def render_multipass_sheet(
+        self,
+        out_path: Path | str | None = None,
+        *,
+        phase: float = 0.0,
+        title: str | None = None,
+        tile_size: int = 256,
+    ) -> tuple[MultiPassResult, Any]:
+        """Evaluate all stages and render a dark-studio Multi-Pass Progression Contact Sheet PNG."""
+        mp = self.evaluate_multipass(phase=phase, build_pbr=True)
+        img = render_multipass_sheet(
+            mp,
+            title=title or f"{self.name} | Multi-Pass Pipeline ({self.width}x{self.height})",
+            tile_size=tile_size,
+        )
+        if out_path is not None:
+            p = Path(out_path)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            img.save(p, format="PNG", optimize=True)
+        return mp, img
 
     def export_pbr_bundle(
         self,
