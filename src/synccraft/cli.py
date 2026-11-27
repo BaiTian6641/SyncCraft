@@ -115,6 +115,16 @@ def main(argv=None):
     bb_srv.add_argument("--host", default="127.0.0.1")
     bb_srv.add_argument("--port", type=int, default=18765)
 
+    studio_cmd = subs.add_parser(
+        "studio",
+        help="launch the interactive SyncCraft Studio 5-pane Node-Graph & 3D PBR Workstation UI",
+    )
+    studio_cmd.add_argument("--host", default="127.0.0.1")
+    studio_cmd.add_argument("--port", type=int, default=18790)
+    studio_cmd.add_argument("--sample", default="monolith_v10_3d", help="initial Studio project sample or preset name")
+    studio_cmd.add_argument("--size", type=int, default=64, help="default canvas resolution for procedural blocks/items")
+    studio_cmd.add_argument("--open", action="store_true", help="open default browser automatically")
+
     # Parametric Pixel Composer & Semantic UV v2 CLI
     tg = subs.add_parser(
         "texgraph",
@@ -194,6 +204,16 @@ def main(argv=None):
         elif args.command == "serve-blockbench":
             from synccraft.backends.blockbench_plugin_bridge import serve_blockbench_bridge
             serve_blockbench_bridge(host=args.host, port=args.port)
+            return 0
+        elif args.command == "studio":
+            from synccraft.texgraph.studio_server import serve_studio
+            serve_studio(
+                host=args.host,
+                port=args.port,
+                initial_sample=args.sample,
+                size=args.size,
+                open_browser=bool(args.open),
+            )
             return 0
         elif args.command == "texgraph":
             from synccraft.shading.uv_packer import repack_bbmodel_uvs

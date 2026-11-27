@@ -1,0 +1,341 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SyncCraft Studio — Commercial Procedural Texture &amp; 3D PBR Workstation</title>
+  <link rel="stylesheet" href="/assets/studio.css" />
+</head>
+<body>
+  <!-- =================================================================== -->
+  <!-- TOP WORKSTATION MENU & ACTION BAR                                   -->
+  <!-- =================================================================== -->
+  <header class="topbar">
+    <div class="topbar-group">
+      <div class="brand">
+        <div class="brand-mark">SC</div>
+        <span>SyncCraft Studio</span>
+        <span class="brand-sub" id="versionBadge">v10 · 144 nodes</span>
+      </div>
+
+      <select id="projectSelect" class="sel-input" title="Load Flagship Sample or Built-in Preset" style="width: 192px;"></select>
+      <button class="btn" id="btnLoadMesh" title="Load or attach a 3D Blockbench .bbmodel for live UV-seam &amp; ray-traced PBR baking">3D Mesh ▾</button>
+      <input type="file" id="bbmodelFileInput" accept=".bbmodel,.json" style="display:none" />
+
+      <div class="sep"></div>
+
+      <select id="resSelect" class="sel-input" title="Canvas Resolution (Blocks/Items)">
+        <option value="32">32×32</option>
+        <option value="64" selected>64×64</option>
+        <option value="128">128×128</option>
+      </select>
+      <button class="btn" id="btnTileable" title="Toggle seamless toroidal tiling">Tileable</button>
+    </div>
+
+    <div class="topbar-group">
+      <button class="btn icon-only" id="btnUndo" title="Undo (Ctrl/Cmd+Z)" disabled>↶</button>
+      <button class="btn icon-only" id="btnRedo" title="Redo (Ctrl/Cmd+Shift+Z)" disabled>↷</button>
+      <div class="sep"></div>
+      <select id="layoutPresetSelect" class="sel-input" title="Workspace Docking Layout" style="width: 112px;">
+        <option value="default">5-Pane Studio</option>
+        <option value="lookdev">3D Lookdev</option>
+        <option value="graph">Graph Focus</option>
+        <option value="code">TexDSL Split</option>
+      </select>
+      <div class="sep"></div>
+      <span class="pill-badge" id="perfBadge" title="Evaluation Time &amp; Content-Addressed Cache Hit Rate">0.0 ms</span>
+      <span class="pill-badge ok" id="qaBadge" title="Automated Multi-Domain Texture QA Score">QA —</span>
+      <button class="btn primary" id="btnOpenExport">Export PBR v2.0</button>
+    </div>
+  </header>
+
+  <!-- =================================================================== -->
+  <!-- MAIN 5-PANE DOCKED WORKSTATION                                      -->
+  <!-- =================================================================== -->
+  <main class="workspace" id="workspace">
+    <!-- LEFT COLUMN: VIEWPORT (2D/3D PBR) + NODE LIBRARY -->
+    <section class="col-left" id="colLeft">
+      <!-- PANE 1: 2D / 3D PBR VIEWPORT -->
+      <div class="pane pane-viewport" id="paneViewport" data-pane="viewport">
+        <div class="pane-header">
+          <div class="pane-tabs">
+            <button class="pane-tab active" data-vp-mode="3d" id="tabVp3d">3D PBR Stage</button>
+            <button class="pane-tab" data-vp-mode="2d" id="tabVp2d">2D Pixel Canvas</button>
+          </div>
+          <div class="topbar-group">
+            <select id="channelSelect" class="sel-input" style="height:22px;font-size:10.5px;" title="Active 12-Channel Special PBR View">
+              <option value="pbr_lit">PBR Lit (GGX)</option>
+              <option value="baked">Baked Studio Albedo</option>
+              <option value="albedo">Base Albedo</option>
+              <option value="normal">Normal Map (_n)</option>
+              <option value="shadow">3D Ray-Traced Shadow</option>
+              <option value="bent_normal">3D Bent Normal</option>
+              <option value="thickness">Ray-Traced Thickness</option>
+              <option value="ao">Ambient Occlusion</option>
+              <option value="roughness">Roughness</option>
+              <option value="metallic">Metallic</option>
+              <option value="height">Height / Relief</option>
+              <option value="emissive">Emissive Mask</option>
+              <option value="orm">Unreal / glTF ORM</option>
+              <option value="maskmap">Unity MaskMap</option>
+              <option value="bedrock_mer">Bedrock RTX MER</option>
+              <option value="labpbr_s">LabPBR 1.3 (_s)</option>
+              <option value="uv_seams">3D UV Seams + Thinness</option>
+              <option value="selected">Selected Node Output</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="viewport-toolbar">
+          <div class="topbar-group" id="vpTools3d">
+            <select id="primSelect" class="sel-input" style="height:22px;font-size:10.5px;" title="3D Preview Geometry">
+              <option value="bbmodel">Loaded .bbmodel</option>
+              <option value="cube">Block Cube</option>
+              <option value="wall">3×3 Wall Slab</option>
+              <option value="pillar">Bevel Pillar</option>
+              <option value="sphere">Lookdev Sphere</option>
+            </select>
+            <button class="btn sm active" id="btnSpin3d" title="Auto-Turntable">Spin</button>
+            <button class="btn sm" id="btnWire3d" title="Toggle Mesh Edges">Wire</button>
+            <button class="btn sm" id="btnResetCam3d" title="Reset Orbit Camera">Reset</button>
+          </div>
+          <div class="topbar-group" id="vpTools2d" style="display:none;">
+            <button class="btn sm" id="btnTile3x3" title="Toggle 3x3 Seamless Wrap Verification">3×3 Tile</button>
+            <button class="btn sm" id="btnZoom2dFit" title="Fit 2D View">Fit</button>
+            <button class="btn sm" id="btnZoom2dIn">+</button>
+            <button class="btn sm" id="btnZoom2dOut">−</button>
+          </div>
+          <select id="lightingPresetSelect" class="sel-input" style="height:22px;font-size:10.5px;" title="Studio PBR Lighting Rig">
+            <option value="studio_hero">Studio Hero</option>
+            <option value="dramatic_rim">Dramatic Rim</option>
+            <option value="high_noon">High Noon</option>
+            <option value="moonlit_obsidian">Moonlit</option>
+          </select>
+        </div>
+
+        <div class="viewport-stage" id="viewportStage">
+          <canvas id="gl3dCanvas"></canvas>
+          <canvas id="canvas2d" style="display:none;"></canvas>
+          <div class="vp-hud" id="vpHud">Ready · Drag to Orbit · Scroll to Zoom</div>
+        </div>
+
+        <div class="vp-light-strip">
+          <span>Key Light</span>
+          <input type="range" id="lightAzSlider" min="-180" max="180" value="-38" />
+          <span id="lightAzVal" style="font-family:var(--font-mono);min-width:34px;text-align:right;">-38°</span>
+          <span>Elev</span>
+          <input type="range" id="lightElSlider" min="10" max="85" value="52" />
+          <span id="lightElVal" style="font-family:var(--font-mono);min-width:28px;text-align:right;">52°</span>
+        </div>
+      </div>
+
+      <div class="splitter-h" id="splitLeftH"></div>
+
+      <!-- PANE 2: NODE LIBRARY & SUBGRAPHS -->
+      <div class="pane pane-library" id="paneLibrary" data-pane="library">
+        <div class="pane-header">
+          <span class="pane-title">Node Library (<span id="libCount">144</span>)</span>
+          <button class="btn sm" id="btnOpenPaletteLib" title="Fuzzy Command Palette (Tab)">⌘K / Tab</button>
+        </div>
+        <div class="lib-search-row">
+          <input type="text" id="libSearch" class="txt-input" placeholder="Filter 144 nodes (e.g. triplanar, seam, shadow, dither)..." />
+        </div>
+        <div class="lib-body" id="libBody"></div>
+      </div>
+    </section>
+
+    <div class="splitter-v" id="splitMainLeft"></div>
+
+    <!-- CENTER COLUMN: INFINITE NODE GRAPH CANVAS + TIMELINE / CONSOLE -->
+    <section class="col-center" id="colCenter">
+      <!-- PANE 3: NODE GRAPH CANVAS -->
+      <div class="pane pane-graph focused" id="paneGraph" data-pane="graph">
+        <div class="graph-toolbar">
+          <div class="topbar-group">
+            <button class="btn sm primary" id="btnAddNode" title="Spawn Node (Tab / Space)">+ Add Node</button>
+            <button class="btn sm" id="btnAutoLayout" title="Topological Sugiyama Auto-Layout (L)">Auto-Layout</button>
+            <button class="btn sm" id="btnFitGraph" title="Frame All Nodes (F)">Fit View</button>
+            <button class="btn sm" id="btnBypassSel" title="Bypass Selected Node (B)">Bypass (B)</button>
+            <button class="btn sm" id="btnDeleteSel" title="Delete Selected Node (Del)">Delete</button>
+          </div>
+          <div class="topbar-group" id="passFilterBar"></div>
+          <div class="topbar-group">
+            <span class="pill-badge" id="graphZoomBadge">100%</span>
+          </div>
+        </div>
+
+        <div class="graph-stage" id="graphStage">
+          <div class="graph-grid-bg" id="graphGridBg"></div>
+          <div class="graph-world" id="graphWorld">
+            <div id="passFramesLayer"></div>
+            <svg class="graph-wires-svg" id="graphWiresSvg"></svg>
+            <div id="nodesLayer"></div>
+          </div>
+          <div class="graph-hint-hud" id="graphHintHud">
+            Tab: Add Node · Drag Socket: Wire · Click Wire: Sever · Mid-Drag / Space+Drag: Pan · F: Fit
+          </div>
+          <div class="graph-minimap" id="graphMinimap" title="Click or drag to pan graph viewport">
+            <canvas id="minimapCanvas" width="176" height="112"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <div class="splitter-h" id="splitCenterH"></div>
+
+      <!-- PANE 4: ANIMATION TIMELINE & ENGINE CONSOLE -->
+      <div class="pane pane-bottom" id="paneBottom" data-pane="timeline">
+        <div class="pane-header">
+          <div class="pane-tabs">
+            <button class="pane-tab active" data-bot-tab="timeline" id="tabTimeline">Timeline</button>
+            <button class="pane-tab" data-bot-tab="exposed" id="tabExposed">Exposed (<span id="exposedCount">0</span>)</button>
+            <button class="pane-tab" data-bot-tab="console" id="tabConsole">Log</button>
+          </div>
+          <div class="topbar-group">
+            <button class="btn sm" id="btnPlayAnim" title="Play / Pause Animation">▶ Play</button>
+            <button class="btn sm" id="btnStepPrev" title="Previous Frame">⏮</button>
+            <button class="btn sm" id="btnStepNext" title="Next Frame">⏭</button>
+            <span class="pill-badge" id="frameReadout">F0/8 · φ0.00</span>
+            <label style="font-size:10.5px;color:var(--text-secondary);display:flex;align-items:center;gap:4px;white-space:nowrap;">
+              N
+              <input type="number" id="animFramesInput" class="num-input" value="8" min="2" max="32" style="width:42px;height:22px;" />
+            </label>
+          </div>
+        </div>
+
+        <div class="timeline-body" id="botTabTimeline">
+          <div class="scrubber-track">
+            <span style="font-family:var(--font-mono);font-size:10.5px;color:var(--text-muted);min-width:46px;">Phase</span>
+            <input type="range" id="phaseSlider" min="0" max="1" step="0.01" value="0" />
+            <span id="phaseLabel" style="font-family:var(--font-mono);font-size:10.5px;color:var(--focus-amber);min-width:42px;text-align:right;">0.00</span>
+          </div>
+          <div id="driversList"></div>
+        </div>
+
+        <div class="timeline-body" id="botTabExposed" style="display:none;">
+          <div id="exposedParamsGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:8px;"></div>
+        </div>
+
+        <div class="timeline-body" id="botTabConsole" style="display:none;">
+          <div id="validationAlerts"></div>
+          <div class="log-list" id="consoleLogList"></div>
+        </div>
+      </div>
+    </section>
+
+    <div class="splitter-v" id="splitMainRight"></div>
+
+    <!-- RIGHT COLUMN: SCHEMA V4.0 INSPECTOR / LIVE TEXDSL / QA AUDIT -->
+    <section class="col-right" id="colRight">
+      <div class="pane" style="flex:1;" id="paneInspector" data-pane="inspector">
+        <div class="pane-header">
+          <div class="pane-tabs">
+            <button class="pane-tab active" data-right-tab="inspector" id="tabInspector">Inspector</button>
+            <button class="pane-tab" data-right-tab="texdsl" id="tabTexdsl">TexDSL</button>
+            <button class="pane-tab" data-right-tab="qa" id="tabQa">QA &amp; Profile</button>
+          </div>
+          <button class="btn sm" id="btnSetOutputSel" title="Set Selected Node as Final Graph Output">Set Output</button>
+        </div>
+
+        <div class="right-body" id="rightTabInspector"></div>
+
+        <div class="right-body" id="rightTabTexdsl" style="display:none;">
+          <div class="texdsl-wrap">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;">
+              <span style="font-size:11px;color:var(--text-secondary);">Live Bidirectional <code>.texdsl</code> Source</span>
+              <div style="display:flex;gap:5px;">
+                <button class="btn sm" id="btnSyncFromGraph">Refresh</button>
+                <button class="btn sm primary" id="btnApplyTexdsl">Compile &amp; Apply</button>
+              </div>
+            </div>
+            <textarea id="texdslEditor" class="texdsl-editor" spellcheck="false"></textarea>
+            <div id="texdslStatus" style="font-family:var(--font-mono);font-size:10.5px;color:var(--text-muted);">Synced with node graph</div>
+          </div>
+        </div>
+
+        <div class="right-body" id="rightTabQa" style="display:none;">
+          <div id="qaPanelBody"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- =================================================================== -->
+  <!-- FUZZY COMMAND PALETTE (`Tab` / `Space` / `Cmd+K`)                   -->
+  <!-- =================================================================== -->
+  <div class="modal-backdrop" id="paletteModal">
+    <div class="palette-box">
+      <input type="text" id="paletteInput" class="palette-search" placeholder="Search 144 TexGraph nodes by name, category or description..." autocomplete="off" />
+      <div class="palette-list" id="paletteList"></div>
+    </div>
+  </div>
+
+  <!-- =================================================================== -->
+  <!-- MULTI-ENGINE EXPORT MODAL                                           -->
+  <!-- =================================================================== -->
+  <div class="modal-backdrop" id="exportModal">
+    <div class="modal-card">
+      <div class="modal-head">
+        <span>Export Commercial PBR Bundle (`synccraft.pbr.bundle/2.0`)</span>
+        <button class="btn sm" id="btnCloseExport">✕</button>
+      </div>
+      <div class="modal-body">
+        <div style="font-size:11px;color:var(--text-secondary);">
+          Simultaneously exports <strong>SyncCraft Special PBR</strong> (<code>_shadow</code>, <code>_bent_normal</code>, <code>_thickness</code>), <strong>LabPBR 1.3</strong> (<code>_n</code>, <code>_s</code>), <strong>Bedrock RTX</strong> (<code>_mer</code>), <strong>Unreal/glTF</strong> (<code>_orm</code>), <strong>Unity</strong> (<code>_maskmap</code>), <strong>Vanilla Pre-Baked Albedo</strong> (<code>_baked.png</code> / <code>_baked.bbmodel</code>), plus <code>.texdsl</code> &amp; <code>.texgraph.json</code>.
+        </div>
+        <div class="param-row">
+          <div class="param-label-row"><span>Asset Stem</span></div>
+          <input type="text" id="exportStemInput" class="txt-input" />
+        </div>
+        <div class="param-row">
+          <div class="param-label-row"><span>Studio Lighting Bake Preset</span></div>
+          <select id="exportPresetSelect" class="sel-input">
+            <option value="studio_hero">studio_hero</option>
+            <option value="dramatic_rim">dramatic_rim</option>
+            <option value="high_noon">high_noon</option>
+            <option value="moonlit_obsidian">moonlit_obsidian</option>
+          </select>
+        </div>
+        <div class="param-row">
+          <div class="param-label-row"><span>Local Output Directory (optional — leave blank to download in browser)</span></div>
+          <input type="text" id="exportDirInput" class="txt-input" placeholder="/path/to/export_folder (optional)" />
+        </div>
+        <pre id="exportResultPre" style="display:none;max-height:140px;overflow:auto;background:var(--bg-input);border:1px solid var(--border-subtle);border-radius:4px;padding:8px;font-family:var(--font-mono);font-size:10.5px;color:#86efac;margin:0;"></pre>
+      </div>
+      <div class="modal-foot">
+        <button class="btn" id="btnDownloadTexdsl">Download .texdsl</button>
+        <button class="btn" id="btnDownloadRecipe">Download .texgraph.json</button>
+        <button class="btn primary" id="btnRunExport">Export Full PBR v2.0</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- =================================================================== -->
+  <!-- 3D MESH ATTACHMENT MODAL                                            -->
+  <!-- =================================================================== -->
+  <div class="modal-backdrop" id="meshModal">
+    <div class="modal-card">
+      <div class="modal-head">
+        <span>3D Blockbench <code>.bbmodel</code> Mesh Baker</span>
+        <button class="btn sm" id="btnCloseMesh">✕</button>
+      </div>
+      <div class="modal-body">
+        <div style="font-size:11px;color:var(--text-secondary);">
+          Attaching a <code>.bbmodel</code> runs SyncCraft's vectorized 3D ray-vs-OBB baker (<code>baked_shadow</code>, <code>bent_normal</code>, <code>thickness</code>, <code>baked_ao</code>, <code>uv_seam_pairs</code>) and loads live geometry into the 3D WebGL PBR viewport.
+        </div>
+        <div style="display:flex;flex-direction:column;gap:6px;">
+          <button class="btn" id="btnMeshMonolith">Load Built-in Sculpted Temple Monolith (.bbmodel)</button>
+          <button class="btn" id="btnMeshOrc">Load Ironjaw Orc Warlord 84-Box Boss (.bbmodel)</button>
+          <button class="btn primary" id="btnMeshUpload">Upload Custom .bbmodel From Disk...</button>
+          <button class="btn" id="btnMeshDetach">Detach Mesh (Standard Block/Item Primitives)</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="studioToast"></div>
+
+  <script src="/assets/studio_gl3d.js"></script>
+  <script src="/assets/studio_graph.js"></script>
+  <script src="/assets/studio_app.js"></script>
+</body>
+</html>

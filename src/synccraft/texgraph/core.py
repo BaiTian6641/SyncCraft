@@ -491,8 +491,8 @@ class TexGraph:
         raw = json.dumps(payload, sort_keys=True, default=str, separators=(",", ":")).encode("utf-8")
         return hashlib.sha256(raw).hexdigest()[:24]
 
-    def auto_layout(self, *, col_spacing: float = 280.0, row_spacing: float = 180.0) -> dict[str, tuple[float, float]]:
-        """Assign clean Sugiyama-layered GUI `(x, y)` coordinates for every node (grouped by DAG depth / `@pass`)."""
+    def auto_layout(self, *, col_spacing: float = 290.0, row_spacing: float = 195.0) -> dict[str, tuple[float, float]]:
+        """Assign clean vertically centered Sugiyama-layered GUI `(x, y)` coordinates for every node."""
         topo = self.topological_order()
         depth: dict[str, int] = {}
         for nid in topo:
@@ -506,10 +506,14 @@ class TexGraph:
         cols: dict[int, list[str]] = {}
         for nid in topo:
             cols.setdefault(depth[nid], []).append(nid)
+        max_rows = max((len(v) for v in cols.values()), default=1)
+        total_h = float(max(0, max_rows - 1)) * float(row_spacing)
         positions: dict[str, tuple[float, float]] = {}
         for c_idx, nids in sorted(cols.items()):
+            col_h = float(max(0, len(nids) - 1)) * float(row_spacing)
+            y_offset = 0.5 * (total_h - col_h)
             for r_idx, nid in enumerate(nids):
-                pos = (float(c_idx) * float(col_spacing), float(r_idx) * float(row_spacing))
+                pos = (float(c_idx) * float(col_spacing), round(y_offset + float(r_idx) * float(row_spacing), 1))
                 self.nodes[nid].pos = pos
                 positions[nid] = pos
         return positions
@@ -2774,10 +2778,29 @@ class TexGraph:
         build_pbr: bool | None = None,
         light_az_deg: float = -38.0,
         light_el_deg: float = 52.0,
+        allow_orphan_errors: bool = False,
     ) -> EvalResult:
         if not self.node_order:
             raise ValueError("TexGraph has no nodes")
         exec_order = self.topological_order()
+        reachable: set[str] | None = None
+        if allow_orphan_errors:
+            reachable = set()
+            roots: list[str] = []
+            for r_ref in (target, self.output_node, self.output_material_node, self.emissive_node, *self.pbr_nodes.values()):
+                if r_ref:
+                    roots.append(_parse_ref(r_ref)[0])
+            if not roots:
+                roots.append(exec_order[-1])
+            stack = list(roots)
+            while stack:
+                cur = stack.pop()
+                if cur in reachable or cur not in self.nodes:
+                    continue
+                reachable.add(cur)
+                for ref in self.nodes[cur].inputs.values():
+                    stack.append(_parse_ref(ref)[0])
+
         dyn_ids = self._compute_dynamic_set()
         vals: dict[str, Any] = {}
         node_hashes: dict[str, str] = {}
@@ -2801,13 +2824,24 @@ class TexGraph:
                 continue
 
             t0 = time.perf_counter()
-            if sp.bypassed and sp.inputs:
-                # GUI non-destructive bypass toggle: pass primary input directly through at 0.0ms!
-                first_key = next(iter(sp.inputs))
-                bus_keys = _BUS_INPUT_KEYS.get(sp.op, frozenset())
-                res = _resolve_ref(vals, sp.inputs[first_key], allow_bus=(first_key in bus_keys))
-            else:
-                res = self._eval_node(sp, vals, float(phase))
+            try:
+                if sp.bypassed and sp.inputs:
+                    # GUI non-destructive bypass toggle: pass primary input directly through at 0.0ms!
+                    first_key = next(iter(sp.inputs))
+                    bus_keys = _BUS_INPUT_KEYS.get(sp.op, frozenset())
+                    res = _resolve_ref(vals, sp.inputs[first_key], allow_bus=(first_key in bus_keys))
+                else:
+                    res = self._eval_node(sp, vals, float(phase))
+            except (KeyError, ValueError, TypeError):
+                if allow_orphan_errors and reachable is not None and nid not in reachable:
+                    # Unconnected freshly spawned node in interactive GUI: keep output live with neutral placeholder!
+                    ph = np.zeros((self.height, self.width, 4), dtype=np.float32)
+                    ph[..., :3] = 0.16
+                    ph[..., 3] = 1.0
+                    vals[nid] = ph
+                    timings[nid] = 0.0
+                    continue
+                raise
             timings[nid] = round((time.perf_counter() - t0) * 1000.0, 2)
             vals[nid] = res
             self._content_cache[nid] = (chash, res)

@@ -209,6 +209,15 @@ from .presets import (
     build_temple_carved_stone,
 )
 from .registry import NODE_CATALOG, PORT_COLORS, PORT_COMPATIBILITY, NodeMeta, ParamSchema, PortSchema, export_node_schema_json, save_node_schema_json
+from .studio_server import (
+    STUDIO_SAMPLES,
+    StudioSession,
+    build_sample_monolith_bbmodel,
+    build_studio_sample,
+    create_studio_server,
+    extract_bbmodel_webgl_mesh,
+    serve_studio,
+)
 from .simulation_filters import (
     GRAY_SCOTT_PRESETS,
     anisotropic_kuwahara,
