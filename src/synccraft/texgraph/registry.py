@@ -427,6 +427,17 @@ NODE_CATALOG: dict[str, NodeMeta] = {
     "palette_quantize": NodeMeta("palette_quantize", "Color & Grading", "OKLab Palette Quantize", "Quantize RGBA to exact artist hex palette with Bayer/Floyd dithering.", (PortSchema("src", "RGBA"),), "RGBA"),
     "vibrance_grade": NodeMeta("vibrance_grade", "Color & Grading", "Vibrance & Clean Contrast", "Chroma-preserving perceptual vibrance boost.", (PortSchema("src", "RGBA"),), "RGBA"),
     "selout": NodeMeta("selout", "Color & Grading", "Selective Outlining (Selout)", "Tinted silhouette & internal pixel-art outlines.", (PortSchema("src", "RGBA"),), "RGBA"),
+    # --- Compositing & Utilities ---
+    "reroute": NodeMeta(
+        "reroute",
+        "Compositing",
+        "Reroute Dot",
+        "Zero-overhead pass-through dot node to cleanly route wires around complex shader graphs (double-click any wire to insert).",
+        (PortSchema("in", "ANY", True),),
+        "ANY",
+        outputs=(PortSchema("out", "ANY"),),
+        params=(ParamSchema("note", "text", "", group="Label", tooltip="Optional short wire label"),),
+    ),
     "blend": NodeMeta("blend", "Compositing", "Blend Layers", "Normal, multiply, screen, overlay, soft_light, hard_light, add, sub, max, min.", (PortSchema("base", "ANY"), PortSchema("top", "ANY"), PortSchema("mask", "MASK", True)), "ANY"),
     "math": NodeMeta("math", "Compositing", "Math Combine", "Mul, add, sub, max, min, lerp scalar fields.", (PortSchema("a", "SCALAR"), PortSchema("b", "SCALAR")), "SCALAR"),
     "set_alpha": NodeMeta("set_alpha", "Compositing", "Set Alpha Cutout", "Apply hard or soft alpha mask globally or per region.", (PortSchema("src", "RGBA"), PortSchema("alpha", "MASK"), PortSchema("mask", "MASK", True)), "RGBA"),

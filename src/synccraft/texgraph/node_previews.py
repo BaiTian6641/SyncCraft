@@ -29,6 +29,7 @@ from .registry import NODE_CATALOG
 _CACHE_LOCK = threading.Lock()
 _PREVIEW_CACHE: dict[int, dict[str, str]] = {}
 _ANIM_CACHE: dict[tuple[str, int, int], list[str]] = {}
+_ANIM_SHEET_CACHE: dict[tuple[int, int], dict[str, list[str]]] = {}
 _REF_CACHE: dict[int, tuple[dict[str, Any], MeshBakeContext]] = {}
 
 
@@ -350,3 +351,23 @@ def generate_node_anim_preview(op: str, *, size: int = 48, frames: int = 8) -> l
     with _CACHE_LOCK:
         _ANIM_CACHE[key] = list(out_frames)
     return out_frames
+
+
+def generate_anim_preview_sheet(*, size: int = 36, frames: int = 6) -> dict[str, list[str]]:
+    """Generate (and memoize) multi-frame animated swatches for EVERY time-aware node in one batch."""
+    sz = max(24, min(48, int(size)))
+    nf = max(2, min(12, int(frames)))
+    key = (sz, nf)
+    with _CACHE_LOCK:
+        hit = _ANIM_SHEET_CACHE.get(key)
+        if hit is not None:
+            return dict(hit)
+
+    out: dict[str, list[str]] = {}
+    for op, meta in NODE_CATALOG.items():
+        if meta.time_aware:
+            out[op] = generate_node_anim_preview(op, size=sz, frames=nf)
+
+    with _CACHE_LOCK:
+        _ANIM_SHEET_CACHE[key] = dict(out)
+    return out

@@ -311,6 +311,7 @@ _BUS_INPUT_KEYS: dict[str, frozenset[str]] = {
     "anim_shimmer": frozenset({"src"}),
     "anim_flicker_pulse": frozenset({"src"}),
     "anim_flow_warp": frozenset({"src"}),
+    "reroute": frozenset({"in"}),
     "paint_entity_eyes_and_parts": frozenset({"base"}),
     "bake_emissive_bounce": frozenset({"mat"}),
     "triplanar_project": frozenset({"src"}),
@@ -456,6 +457,7 @@ class TexGraph:
         self.exposed_params: dict[str, dict[str, Any]] = {}
         self.param_drivers: list[dict[str, Any]] = []
         self.groups: list[dict[str, Any]] = []
+        self.frames: list[dict[str, Any]] = []
         self.domain: str = "block"
         self.animation_config: dict[str, Any] = {"frames": 1, "frametime": 2, "interpolate": False, "frames_schedule": None}
         self._counter = 0
@@ -1588,6 +1590,8 @@ class TexGraph:
             rec["exposed_params"] = copy.deepcopy(self.exposed_params)
         if self.groups:
             rec["groups"] = copy.deepcopy(self.groups)
+        if self.frames:
+            rec["frames"] = copy.deepcopy(self.frames)
         return rec
 
     def save_recipe(self, path: Path | str) -> None:
@@ -1658,6 +1662,8 @@ class TexGraph:
             g.exposed_params = copy.deepcopy(data["exposed_params"])
         if data.get("groups"):
             g.groups = copy.deepcopy(data["groups"])
+        if data.get("frames"):
+            g.frames = copy.deepcopy(data["frames"])
         return g
 
     def to_texdsl(self) -> str:
@@ -1760,6 +1766,11 @@ class TexGraph:
         bus_keys = _BUS_INPUT_KEYS.get(op, frozenset())
         ins = {k: _resolve_ref(vals, v, allow_bus=(k in bus_keys)) for k, v in sp.inputs.items()}
         seed = int(self.seed if p.get("seed") is None else p["seed"])
+
+        if op == "reroute":
+            if "in" in ins:
+                return ins["in"]
+            return np.zeros((H, W, 4), dtype=np.float32)
 
         if op == "constant":
             v = p["value"]

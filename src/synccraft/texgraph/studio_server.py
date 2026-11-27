@@ -21,6 +21,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import io
 import json
+import math
 import mimetypes
 from pathlib import Path
 import threading
@@ -36,7 +37,7 @@ from synccraft import __version__
 from .ai_copilot import BUILT_IN_STYLE_PRESETS, apply_surgical_patch, diagnose_asset, extract_style_dna
 from .core import GraphCycleError, NodeSpec, TexGraph, _parse_ref
 from .mesh_baker import _FACE_BASIS, _euler_xyz_mat, MeshBakeContext, bake_bbmodel_maps
-from .node_previews import generate_node_anim_preview, generate_node_preview_catalog
+from .node_previews import generate_anim_preview_sheet, generate_node_anim_preview, generate_node_preview_catalog
 from .pbr import BAKE_LIGHTING_PRESETS as BAKE_PRESETS, bake_pbr_to_albedo
 from .pipeline import MATERIAL_BUS_PORTS, SUBGRAPH_REGISTRY
 from .pixel_art_ops import encode_png, rgba_float_to_u8
@@ -45,6 +46,13 @@ from .production import PALETTE_BANK
 from .quality import evaluate_texture_quality
 from .region_ops import build_uv_region_overlay
 from .registry import NODE_CATALOG as NODE_REGISTRY, PORT_COMPATIBILITY, export_node_schema_json
+from .syncmat_and_mtlx import (
+    export_materialx_xml,
+    extract_syncmat_from_graph,
+    insert_syncmat_into_graph,
+    list_all_syncmats,
+    save_user_syncmat,
+)
 from .syncproj import DEFAULT_CHRONO_VARIANTS, SyncProject, apply_variant_to_graph, generate_variant_pack
 from .texdsl import TexDslError as TexDSLParseError, export_texdsl, parse_texdsl
 
@@ -152,6 +160,8 @@ def extract_bbmodel_webgl_mesh(bb_doc: dict[str, Any]) -> dict[str, Any]:
     normals: list[float] = []
     tangents: list[float] = []
     uvs: list[float] = []
+    pick_ids: list[float] = []
+    elem_meta: list[dict[str, str]] = []
 
     pmin = np.array([1e9, 1e9, 1e9], dtype=np.float64)
     pmax = np.array([-1e9, -1e9, -1e9], dtype=np.float64)
@@ -167,6 +177,10 @@ def extract_bbmodel_webgl_mesh(bb_doc: dict[str, Any]) -> dict[str, Any]:
         if not f_pt or not t_pt:
             continue
         box_count += 1
+        pick_id = float(box_count)
+        ename = str(elem.get("name") or f"box_{box_count}")
+        eshort = ename.split("__")[-1]
+        elem_meta.append({"id": box_count, "name": ename, "short": eshort})
         inf = float(elem.get("inflate", 0.0) or 0.0)
         x0, y0, z0 = float(f_pt[0]) - inf, float(f_pt[1]) - inf, float(f_pt[2]) - inf
         x1, y1, z1 = float(t_pt[0]) + inf, float(t_pt[1]) + inf, float(t_pt[2]) + inf
@@ -245,6 +259,7 @@ def extract_bbmodel_webgl_mesh(bb_doc: dict[str, Any]) -> dict[str, Any]:
                 normals.extend((round(float(wn[0]), 4), round(float(wn[1]), 4), round(float(wn[2]), 4)))
                 tangents.extend((round(float(wt[0]), 4), round(float(wt[1]), 4), round(float(wt[2]), 4)))
                 uvs.extend((round(float(uv_pt[0]), 5), round(float(uv_pt[1]), 5)))
+                pick_ids.append(pick_id)
 
     if not positions:
         pmin = np.array([-8.0, 0.0, -8.0])
@@ -268,6 +283,8 @@ def extract_bbmodel_webgl_mesh(bb_doc: dict[str, Any]) -> dict[str, Any]:
         "normals": normals,
         "tangents": tangents,
         "uvs": uvs,
+        "pick_ids": pick_ids,
+        "elem_meta": elem_meta,
     }
 
 
@@ -897,6 +914,9 @@ class StudioSession:
                     sp.inputs = {k: v for k, v in sp.inputs.items() if _parse_ref(v)[0] not in id_set}
                 for ps in g.passes:
                     ps.node_ids = [nid for nid in ps.node_ids if nid not in id_set]
+                for fr in g.frames:
+                    fr["node_ids"] = [nid for nid in (fr.get("node_ids") or []) if nid not in id_set]
+                g.frames = [fr for fr in g.frames if fr.get("node_ids")]
                 if g.output_node and _parse_ref(g.output_node)[0] in id_set:
                     g.output_node = g.node_order[-1] if g.node_order else None
                 if g.output_material_node and g.output_material_node in id_set:
@@ -968,6 +988,87 @@ class StudioSession:
                 g._static_cache.clear()
                 self._log("info", f"Disconnected all wires on '{nid}'")
                 return self.get_state_payload()
+
+            if action == "toggle_bypass_multi":
+                ids = [str(x) for x in (payload.get("ids") or []) if str(x) in g.nodes]
+                if not ids:
+                    return self.get_state_payload()
+                self._push_undo()
+                any_active = any(not g.nodes[nid].bypassed for nid in ids)
+                for nid in ids:
+                    g.nodes[nid].bypassed = any_active
+                g._static_cache.clear()
+                self._log("info", f"{'Bypassed' if any_active else 'Enabled'} {len(ids)} node(s)")
+                return self.get_state_payload()
+
+            if action == "create_frame":
+                ids = [str(x) for x in (payload.get("node_ids") or []) if str(x) in g.nodes]
+                if not ids:
+                    raise ValueError("Select at least one node to create a Comment Frame")
+                self._push_undo()
+                fid = f"frame_{len(g.frames) + 1}_{int(time.time() * 100) % 10000}"
+                fr = {
+                    "id": fid,
+                    "title": str(payload.get("title") or "Comment Frame").strip(),
+                    "color": str(payload.get("color") or "#2563EB"),
+                    "node_ids": list(dict.fromkeys(ids)),
+                }
+                g.frames.append(fr)
+                self._log("info", f"Created frame '{fr['title']}' ({len(ids)} nodes)")
+                out = self.get_state_payload()
+                out["created_frame_id"] = fid
+                return out
+
+            if action == "update_frame":
+                fid = str(payload.get("frame_id") or "")
+                for fr in g.frames:
+                    if fr.get("id") == fid:
+                        self._push_undo()
+                        if "title" in payload and str(payload["title"]).strip():
+                            fr["title"] = str(payload["title"]).strip()
+                        if "color" in payload and str(payload["color"]).startswith("#"):
+                            fr["color"] = str(payload["color"])
+                        break
+                return self.get_state_payload()
+
+            if action == "delete_frame":
+                fid = str(payload.get("frame_id") or "")
+                before = len(g.frames)
+                if any(fr.get("id") == fid for fr in g.frames):
+                    self._push_undo()
+                    g.frames = [fr for fr in g.frames if fr.get("id") != fid]
+                    if len(g.frames) != before:
+                        self._log("info", f"Removed frame '{fid}'")
+                return self.get_state_payload()
+
+            if action == "insert_reroute":
+                dst = str(payload.get("dst_node") or "")
+                dst_port = str(payload.get("dst_port") or "")
+                if dst not in g.nodes or dst_port not in g.nodes[dst].inputs:
+                    raise ValueError("Target wire does not exist for reroute insertion")
+                self._push_undo()
+                orig_ref = g.nodes[dst].inputs[dst_port]
+                base_id = "dot"
+                nid = base_id
+                idx = 1
+                while nid in g.nodes:
+                    nid = f"{base_id}_{idx}"
+                    idx += 1
+                pos = payload.get("pos") or [240.0, 140.0]
+                sp = NodeSpec(id=nid, op="reroute", inputs={"in": orig_ref}, params={"note": ""}, pos=(float(pos[0]), float(pos[1])))
+                g.nodes[nid] = sp
+                # Insert reroute right before dst in node_order so topological order stays clean
+                try:
+                    di = g.node_order.index(dst)
+                    g.node_order.insert(di, nid)
+                except ValueError:
+                    g.node_order.append(nid)
+                g.nodes[dst].inputs[dst_port] = nid
+                g._static_cache.clear()
+                self._log("info", f"Inserted reroute '{nid}' on wire {orig_ref} -> {dst}.{dst_port}")
+                out = self.get_state_payload()
+                out["created_node_id"] = nid
+                return out
 
             if action == "set_param":
                 nid = str(payload.get("node_id", ""))
@@ -1182,6 +1283,7 @@ class StudioSession:
                 lighting_preset = "studio_hero"
             preview_node = payload.get("preview_node")
             include_thumbs = bool(payload.get("include_thumbs", True))
+            include_thumbs_mode = str(payload.get("include_thumbs_mode") or ("all" if include_thumbs else "none"))
             include_qa = bool(payload.get("include_qa", True))
 
             t_start = time.perf_counter()
@@ -1209,9 +1311,12 @@ class StudioSession:
             # Encode per-node thumbnails using cached content hashes!
             thumbs: dict[str, str] = {}
             node_shapes: dict[str, list[int]] = {}
-            if include_thumbs:
+            dyn_set = self.graph._compute_dynamic_set() if include_thumbs_mode == "dynamic" else None
+            if include_thumbs_mode in ("all", "dynamic"):
                 for nid in self.graph.node_order:
                     if nid not in ev.intermediates:
+                        continue
+                    if dyn_set is not None and nid not in dyn_set:
                         continue
                     arr = _arr_to_u8_rgba(ev.intermediates[nid])
                     node_shapes[nid] = [int(arr.shape[1]), int(arr.shape[0])]
@@ -1220,7 +1325,6 @@ class StudioSession:
                     if cache_key not in self._thumb_cache:
                         self._thumb_cache[cache_key] = _u8_to_data_url(arr, max_dim=128, min_dim=64)
                         if len(self._thumb_cache) > 512:
-                            # Evict oldest 128 keys
                             for k_old in list(self._thumb_cache.keys())[:128]:
                                 self._thumb_cache.pop(k_old, None)
                     thumbs[nid] = self._thumb_cache[cache_key]
@@ -1350,12 +1454,16 @@ class StudioSession:
                 # Also write `.texdsl` & `.texgraph.json` alongside PBR bundle!
                 dsl_path = out_dir / f"{stem}.texdsl"
                 rec_path = out_dir / f"{stem}.texgraph.json"
+                mtlx_path = out_dir / f"{stem}.mtlx"
                 dsl_path.write_text(export_texdsl(self.graph), encoding="utf-8")
                 rec_path.write_text(json.dumps(self.graph.to_recipe(), indent=2) + "\n", encoding="utf-8")
+                mtlx_xml = self.export_materialx({"stem": stem})["xml"]
+                mtlx_path.write_text(mtlx_xml, encoding="utf-8")
                 files = dict(pkg["files"])
                 files["texdsl"] = str(dsl_path)
                 files["texgraph_json"] = str(rec_path)
-                self._log("info", f"Exported commercial PBR v2.0 bundle ({len(files)} files) -> {out_dir}")
+                files["materialx"] = str(mtlx_path)
+                self._log("info", f"Exported commercial PBR v2.0 + MaterialX bundle ({len(files)} files) -> {out_dir}")
                 return {"ok": True, "mode": "disk", "out_dir": str(out_dir), "files": files, "manifest": pkg["manifest"]}
 
             # In-memory browser download payload
@@ -1374,6 +1482,7 @@ class StudioSession:
                 downloads: dict[str, str] = {
                     f"{stem}.texdsl": export_texdsl(self.graph),
                     f"{stem}.texgraph.json": json.dumps(self.graph.to_recipe(), indent=2) + "\n",
+                    f"{stem}.mtlx": self.export_materialx({"stem": stem})["xml"],
                     f"{stem}.synccraft.pbr.json": json.dumps(manifest, indent=2) + "\n",
                 }
                 if "baked_bbmodel" in pkg["files"]:
@@ -1482,6 +1591,108 @@ class StudioSession:
                 self._log("info", f"Exported unified .syncproj -> {p_path}")
                 return {"ok": True, "path": str(p_path), "manifest": proj.to_dict(), "variant_pack": vpack}
             return {"ok": True, "manifest": proj.to_dict(), "filename": f"{stem}.syncproj"}
+
+    # -----------------------------------------------------------------------
+    # Milestone v14: 2D UV Picking, `.syncmat` Presets & MaterialX / OpenPBR
+    # -----------------------------------------------------------------------
+
+    def pick_uv_part(self, u: float, v: float) -> dict[str, Any]:
+        with self._lock:
+            if self.mesh_ctx is None:
+                return {"ok": True, "hit": False, "message": "No 3D .bbmodel loaded"}
+            mc = self.mesh_ctx
+            px = int(np.clip(math.floor(float(u) * mc.width), 0, mc.width - 1))
+            py = int(np.clip(math.floor(float(v) * mc.height), 0, mc.height - 1))
+            eid = int(mc.elem_id_map[py, px])
+            if eid < 0 or eid >= len(mc.elem_names):
+                return {"ok": True, "hit": False, "px": px, "py": py}
+            ename = mc.elem_names[eid]
+            short = ename.split("__")[-1]
+            bone = mc.elem_bones[eid] if eid < len(mc.elem_bones) else ""
+            zone = mc.elem_zones[eid] if eid < len(mc.elem_zones) else ""
+            return {"ok": True, "hit": True, "px": px, "py": py, "elem_idx": eid, "name": ename, "short": short, "bone": bone, "zone": zone}
+
+    def list_syncmats(self) -> dict[str, Any]:
+        return {"ok": True, "presets": list_all_syncmats()}
+
+    def save_syncmat(self, payload: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            node_ids = payload.get("node_ids")
+            name = str(payload.get("name") or self.graph.name or "Custom Material").strip()
+            category = str(payload.get("category") or "User Presets")
+            desc = str(payload.get("description") or "")
+            color = str(payload.get("frame_color") or "#2563EB")
+            thumb = str(payload.get("thumbnail") or "")
+            preset = extract_syncmat_from_graph(
+                self.graph,
+                node_ids=list(node_ids) if isinstance(node_ids, list) and node_ids else None,
+                name=name,
+                category=category,
+                description=desc,
+                frame_color=color,
+                thumbnail=thumb,
+            )
+            saved_path = None
+            if payload.get("persist", True):
+                saved_path = str(save_user_syncmat(preset))
+            self._log("info", f"Saved .syncmat preset '{preset['name']}' ({len(preset['nodes'])} nodes)")
+            return {"ok": True, "preset": preset, "path": saved_path, "filename": f"{preset['id']}.syncmat.json", "presets": list_all_syncmats()}
+
+    def insert_syncmat(self, payload: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            preset = payload.get("preset")
+            if preset is None:
+                pid = str(payload.get("preset_id") or "")
+                all_p = {p["id"]: p for p in list_all_syncmats()}
+                if pid not in all_p:
+                    raise ValueError(f"Unknown .syncmat preset: {pid!r}")
+                preset = all_p[pid]
+            if not isinstance(preset, dict):
+                raise ValueError("Expected .syncmat JSON object or preset_id")
+            pos = payload.get("pos") or [220.0, 140.0]
+            self._push_undo()
+            created, out_id, frame_obj = insert_syncmat_into_graph(
+                self.graph,
+                preset,
+                pos=(float(pos[0]), float(pos[1])),
+                wrap_frame=bool(payload.get("wrap_frame", True)),
+            )
+            self._log("info", f"Inserted .syncmat '{preset.get('name', 'preset')}' ({len(created)} nodes)")
+            st = self.get_state_payload()
+            st["created_node_id"] = out_id
+            st["created_node_ids"] = created
+            st["created_frame"] = frame_obj
+            return st
+
+    def export_materialx(self, payload: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            stem = str(payload.get("stem") or self.graph.name or "synccraft_material")
+            shader = str(payload.get("shader_model") or "open_pbr_surface")
+            coat = float(payload.get("coat_weight", 0.15))
+            trans = float(payload.get("transmission_weight", 0.0))
+            sss_w = float(payload.get("subsurface_weight", 0.0))
+            has_em = False
+            has_op = False
+            try:
+                ev = self.graph.evaluate(phase=0.0, build_pbr=True, allow_orphan_errors=True)
+                has_em = bool(ev.emissive is not None and float(np.max(ev.emissive[..., 3])) > 0.05)
+                has_op = bool(ev.output.ndim == 3 and ev.output.shape[2] == 4 and float(np.min(ev.output[..., 3])) < 0.96)
+                if has_op and trans <= 0.0:
+                    trans = 0.45
+                if ev.pbr_channels and "sss" in ev.pbr_channels and float(np.mean(ev.pbr_channels["sss"])) > 0.05:
+                    sss_w = max(sss_w, 0.35)
+            except Exception:
+                pass
+            xml = export_materialx_xml(
+                stem,
+                shader_model=shader,
+                has_emissive=has_em,
+                has_opacity=has_op,
+                coat_weight=coat,
+                transmission_weight=trans,
+                subsurface_weight=sss_w,
+            )
+            return {"ok": True, "filename": f"{stem}.mtlx", "shader_model": shader, "xml": xml}
 
 
 # ---------------------------------------------------------------------------
@@ -1593,6 +1804,31 @@ def create_studio_server(
                 self.wfile.write(raw)
                 return
 
+            if path == "/api/schema/preview_anim_sheet":
+                qs = urllib.parse.parse_qs(parsed.query)
+                sz = int((qs.get("size") or ["36"])[0])
+                nf = int((qs.get("frames") or ["6"])[0])
+                sheet = generate_anim_preview_sheet(size=sz, frames=nf)
+                raw = json.dumps({"ok": True, "size": sz, "frames": nf, "count": len(sheet), "sheet": sheet}).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(raw)))
+                self.send_header("Cache-Control", "public, max-age=3600")
+                self.end_headers()
+                self.wfile.write(raw)
+                return
+
+            if path == "/api/mesh/pick_uv":
+                qs = urllib.parse.parse_qs(parsed.query)
+                u = float((qs.get("u") or ["0.5"])[0])
+                v = float((qs.get("v") or ["0.5"])[0])
+                self._send_json(sess.pick_uv_part(u, v))
+                return
+
+            if path == "/api/syncmat/list":
+                self._send_json(sess.list_syncmats())
+                return
+
             if path == "/api/state":
                 self._send_json(sess.get_state_payload())
                 return
@@ -1651,6 +1887,15 @@ def create_studio_server(
                     return
                 if path == "/api/syncproj/export":
                     self._send_json(sess.export_syncproj(body))
+                    return
+                if path == "/api/syncmat/save":
+                    self._send_json(sess.save_syncmat(body))
+                    return
+                if path == "/api/syncmat/insert":
+                    self._send_json(sess.insert_syncmat(body))
+                    return
+                if path == "/api/export/materialx":
+                    self._send_json(sess.export_materialx(body))
                     return
                 self._send_json({"error": f"Unknown API endpoint: {path}"}, status=404)
             except (ValueError, KeyError, TypeError, TexDSLParseError, GraphCycleError) as exc:

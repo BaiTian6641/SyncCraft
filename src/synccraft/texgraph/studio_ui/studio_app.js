@@ -15,9 +15,11 @@
     serverState: null,
     evalData: null,
     selectedNodeId: null,
+    selectedIds: new Set(),
     activePass: 'ALL',
     vpMode: '3d',
     channel: 'pbr_lit',
+    pickMode: false,
     tile3x3: false,
     zoom2d: 1.0,
     phase: 0.0,
@@ -39,11 +41,17 @@
     paletteViewMode: 'grid',
     paletteCategory: 'ALL',
     libViewMode: 'grid',
+    libTab: 'nodes',
+    liveSwatches: true,
     nodePreviews: {},
     timeAwareOps: new Set(),
+    animSheet: {},
+    animSheetFrame: 0,
+    liveSwatchTimer: null,
     animPreviews: {},
     palAnimTimer: null,
     palAnimOp: null,
+    syncmats: [],
     img2d: null,
     img2dBuf: null,
     lastDiagnosis: null,
@@ -88,11 +96,30 @@
     toastTimer = setTimeout(() => { el.className = 'toast'; }, 2800);
   }
 
+  function syncSelectionUI() {
+    const badge = $('selCountBadge');
+    if (badge) {
+      if (state.selectedIds.size > 1) {
+        badge.style.display = 'inline-flex';
+        badge.textContent = `${state.selectedIds.size} sel`;
+      } else {
+        badge.style.display = 'none';
+      }
+    }
+  }
+
+  function getActiveSelectionIds() {
+    const ids = Array.from(state.selectedIds).filter(Boolean);
+    if (ids.length) return ids;
+    return state.selectedNodeId ? [state.selectedNodeId] : [];
+  }
+
   // ------------------------------------------------------------------------
   // Core Evaluation & Synchronization Loop
   // ------------------------------------------------------------------------
   async function runEvaluate(opts) {
     opts = opts || {};
+    const thumbsMode = opts.includeThumbsMode || (opts.includeThumbs === false ? 'none' : 'all');
     try {
       const ev = await apiPost('/api/evaluate', {
         phase: state.phase,
@@ -100,9 +127,20 @@
         light_el: state.lightEl,
         lighting_preset: state.lightingPreset,
         preview_node: state.selectedNodeId,
-        include_thumbs: opts.includeThumbs !== false,
+        include_thumbs: thumbsMode !== 'none',
+        include_thumbs_mode: thumbsMode,
         include_qa: opts.includeQa !== false,
       });
+      if (thumbsMode === 'dynamic') {
+        const mergedThumbs = Object.assign({}, (state.evalData && state.evalData.thumbs) || {}, ev.thumbs || {});
+        ev.thumbs = mergedThumbs;
+        if (state.evalData && !ev.qa && state.evalData.qa) ev.qa = state.evalData.qa;
+        state.evalData = ev;
+        updatePerfAndQaBadges();
+        updateViewportTextures();
+        graphCanvas.updateNodeThumbs(ev.thumbs, ev.timings_ms);
+        return;
+      }
       if (state.evalData && (!ev.thumbs || !Object.keys(ev.thumbs).length)) {
         ev.thumbs = state.evalData.thumbs || {};
       }
@@ -112,7 +150,7 @@
       state.evalData = ev;
       updatePerfAndQaBadges();
       updateViewportTextures();
-      graphCanvas.setData(state.serverState.recipe, state.evalData, state.selectedNodeId, state.activePass);
+      graphCanvas.setData(state.serverState.recipe, state.evalData, state.selectedNodeId, state.activePass, state.selectedIds);
       renderQaPanel();
     } catch (err) {
       showToast(`Eval error: ${err.message}`, 'err');
@@ -136,14 +174,27 @@
     state.serverState = st;
     const rec = st.recipe;
 
-    // Ensure valid selected node
+    // Ensure valid selected node & multi-selection set
     const nodeIds = (rec.nodes || []).map((n) => n.id);
-    if (st.created_node_id && nodeIds.includes(st.created_node_id)) {
+    const idSet = new Set(nodeIds);
+    state.selectedIds = new Set(Array.from(state.selectedIds).filter((id) => idSet.has(id)));
+    if (Array.isArray(st.created_node_ids) && st.created_node_ids.length) {
+      const validCreated = st.created_node_ids.filter((id) => idSet.has(id));
+      state.selectedIds = new Set(validCreated);
+      state.selectedNodeId = (st.created_node_id && idSet.has(st.created_node_id))
+        ? st.created_node_id
+        : (validCreated[validCreated.length - 1] || null);
+    } else if (st.created_node_id && idSet.has(st.created_node_id)) {
       state.selectedNodeId = st.created_node_id;
-    } else if (!state.selectedNodeId || !nodeIds.includes(state.selectedNodeId)) {
+      state.selectedIds = new Set([st.created_node_id]);
+    } else if (!state.selectedNodeId || !idSet.has(state.selectedNodeId)) {
       const outBase = (rec.output_material || rec.output || rec.output_material_node || rec.output_node || '').split('.')[0];
-      state.selectedNodeId = nodeIds.includes(outBase) ? outBase : (nodeIds[nodeIds.length - 1] || null);
+      state.selectedNodeId = idSet.has(outBase) ? outBase : (nodeIds[nodeIds.length - 1] || null);
+      state.selectedIds = new Set(state.selectedNodeId ? [state.selectedNodeId] : []);
+    } else if (!state.selectedIds.size && state.selectedNodeId) {
+      state.selectedIds.add(state.selectedNodeId);
     }
+    syncSelectionUI();
 
     // Update topbar controls
     $('btnUndo').disabled = !st.undo_depth;
@@ -193,7 +244,7 @@
     renderExposedParams();
     renderConsoleLog();
     renderAiVariantsPanel();
-    graphCanvas.setData(rec, state.evalData, state.selectedNodeId, state.activePass);
+    graphCanvas.setData(rec, state.evalData, state.selectedNodeId, state.activePass, state.selectedIds);
     if (opts.fitGraph) {
       setTimeout(() => graphCanvas.fitToView(), 30);
     }
@@ -308,17 +359,64 @@
     ctx.strokeRect(ox, oy, drawW, drawH);
   }
 
-  function updateViewportHud(pixelInfo) {
+  function updateViewportHud(extraInfo) {
     const hud = $('vpHud');
     const ev = state.evalData;
     const res = ev ? `${ev.width}×${ev.height}` : '—';
     const ms = state.serverState && state.serverState.mesh_stats;
+    const pickTag = state.pickMode ? ' · 🎯 PICK MODE' : '';
     if (state.vpMode === '3d') {
       const seams = ms ? (ms.seam_pairs >= 1000 ? `${(ms.seam_pairs / 1000).toFixed(1)}k` : `${ms.seam_pairs}`) : '';
       const mText = ms ? ` · ${ms.elements}b · ${seams} seams` : ` · ${$('primSelect').value}`;
-      hud.textContent = `3D PBR · ${state.channel} · ${res}${mText}`;
+      hud.textContent = `3D PBR · ${state.channel} · ${res}${mText}${pickTag}${extraInfo ? ' · ' + extraInfo : ''}`;
     } else {
-      hud.textContent = `2D Pixel · ${state.channel} · ${res}${state.tile3x3 ? ' · 3×3 Wrap' : ''}${pixelInfo ? ' · ' + pixelInfo : ''}`;
+      hud.textContent = `2D Pixel · ${state.channel} · ${res}${state.tile3x3 ? ' · 3×3 Wrap' : ''}${pickTag}${extraInfo ? ' · ' + extraInfo : ''}`;
+    }
+  }
+
+  function setPickMode(on) {
+    state.pickMode = !!on;
+    if (gl3d) gl3d.pickMode = state.pickMode;
+    if ($('btnPickPart')) $('btnPickPart').classList.toggle('pick-on', state.pickMode);
+    if ($('btnPickPart2d')) $('btnPickPart2d').classList.toggle('pick-on', state.pickMode);
+    if ($('viewportStage')) $('viewportStage').classList.toggle('pick-active', state.pickMode);
+    updateViewportHud();
+  }
+
+  async function handlePickedPart(partShortName, additive) {
+    if (!partShortName) return;
+    const rec = state.serverState && state.serverState.recipe;
+    const selNode = rec && (rec.nodes || []).find((n) => n.id === state.selectedNodeId);
+    const meta = selNode ? state.opMap[selNode.op] : null;
+    const hasPartPattern = !!(meta && (meta.params || []).some((p) => p.name === 'part_pattern'));
+
+    if (selNode && hasPartPattern) {
+      const curStr = String((selNode.params && selNode.params.part_pattern) || '');
+      let nextPat = partShortName;
+      if (additive && curStr) {
+        const parts = curStr.split('|').filter(Boolean);
+        if (!parts.includes(partShortName)) parts.push(partShortName);
+        nextPat = parts.join('|');
+      }
+      await mutate({ action: 'set_param', node_id: selNode.id, param: 'part_pattern', value: nextPat }, { immediateEval: true });
+      showToast(`🎯 Masked '${nextPat}' on ${selNode.id}`, 'ok');
+      return;
+    }
+
+    // No part_pattern node selected -> spawn a ready-to-wire `mask_uv_part` node & preview it!
+    const cx = Math.round((-graphCanvas.panX + graphCanvas.stage.clientWidth * 0.45) / graphCanvas.zoom - 90);
+    const cy = Math.round((-graphCanvas.panY + graphCanvas.stage.clientHeight * 0.42) / graphCanvas.zoom - 50);
+    const st = await mutate({
+      action: 'add_node',
+      op: 'mask_uv_part',
+      params: { part_pattern: partShortName },
+      pos: [cx, cy],
+    }, { skipEval: true });
+    if (st) {
+      state.channel = 'selected';
+      $('channelSelect').value = 'selected';
+      await runEvaluate({ includeThumbs: true, includeQa: false });
+      showToast(`🎯 Created 3D part mask '${partShortName}'`, 'ok');
     }
   }
 
@@ -721,7 +819,7 @@
       b.onclick = () => {
         state.activePass = id;
         renderPassFilterBar();
-        graphCanvas.setData(state.serverState.recipe, state.evalData, state.selectedNodeId, state.activePass);
+        graphCanvas.setData(state.serverState.recipe, state.evalData, state.selectedNodeId, state.activePass, state.selectedIds);
       };
       bar.appendChild(b);
     };
@@ -815,6 +913,94 @@
     }
   }
 
+  function stopLiveSwatchLoop() {
+    if (state.liveSwatchTimer) {
+      clearInterval(state.liveSwatchTimer);
+      state.liveSwatchTimer = null;
+    }
+  }
+
+  function startLiveSwatchLoop() {
+    stopLiveSwatchLoop();
+    if (!state.liveSwatches) return;
+    state.liveSwatchTimer = setInterval(() => {
+      if (!state.liveSwatches || !state.animSheet) return;
+      state.animSheetFrame = (state.animSheetFrame + 1) % 6000;
+      const updateScope = (container) => {
+        if (!container) return;
+        const imgs = container.querySelectorAll('img[data-anim-op]');
+        for (const im of imgs) {
+          const op = im.dataset.animOp;
+          const frames = state.animSheet[op];
+          if (frames && frames.length) {
+            im.src = frames[state.animSheetFrame % frames.length];
+          }
+        }
+      };
+      if (state.libTab === 'nodes') updateScope($('libBody'));
+      if ($('paletteModal') && $('paletteModal').classList.contains('open')) {
+        updateScope($('paletteList'));
+      }
+    }, 185);
+  }
+
+  function switchLibTab(tab) {
+    state.libTab = tab === 'syncmat' ? 'syncmat' : 'nodes';
+    if ($('tabLibNodes')) $('tabLibNodes').classList.toggle('active', state.libTab === 'nodes');
+    if ($('tabLibSyncmat')) $('tabLibSyncmat').classList.toggle('active', state.libTab === 'syncmat');
+    if ($('libNodesSearchRow')) $('libNodesSearchRow').style.display = state.libTab === 'nodes' ? '' : 'none';
+    if ($('libBody')) $('libBody').style.display = state.libTab === 'nodes' ? '' : 'none';
+    if ($('syncmatBody')) $('syncmatBody').style.display = state.libTab === 'syncmat' ? 'flex' : 'none';
+    if (state.libTab === 'syncmat') renderSyncmatList();
+  }
+
+  function renderSyncmatList() {
+    const list = $('syncmatList');
+    if (!list) return;
+    list.innerHTML = '';
+    const presets = state.syncmats || [];
+    if ($('syncmatCount')) $('syncmatCount').textContent = String(presets.length);
+    if (!presets.length) {
+      list.innerHTML = '<div style="font-size:11px;color:var(--text-muted);padding:6px;">No .syncmat presets yet. Select nodes and click + Save .syncmat!</div>';
+      return;
+    }
+    for (const p of presets) {
+      const card = document.createElement('div');
+      card.className = 'syncmat-card';
+      card.style.borderLeftColor = p.frame_color || '#2563EB';
+      const nCount = (p.nodes || []).length;
+      const badge = p.builtin ? 'Built-in' : 'User';
+      card.innerHTML = `
+        <div class="syncmat-card-top">
+          <span class="syncmat-card-name">${p.name || p.id}</span>
+          <span class="syncmat-card-cat">${badge} · ${nCount}n</span>
+        </div>
+        <div class="syncmat-card-desc">${p.description || p.category || ''}</div>
+        <div class="syncmat-card-acts">
+          <button class="btn sm primary" data-act="insert">+ Insert into Graph</button>
+          <button class="btn sm" data-act="dl" title="Download .syncmat.json">⬇ .syncmat</button>
+        </div>
+      `;
+      card.querySelector('[data-act="insert"]').onclick = async () => {
+        try {
+          const cx = Math.round((-graphCanvas.panX + graphCanvas.stage.clientWidth * 0.45) / graphCanvas.zoom - 120);
+          const cy = Math.round((-graphCanvas.panY + graphCanvas.stage.clientHeight * 0.42) / graphCanvas.zoom - 60);
+          const st = await apiPost('/api/syncmat/insert', { preset_id: p.id, pos: [cx, cy], wrap_frame: true });
+          applyServerState(st, { autoPrim: false });
+          await runEvaluate({ includeThumbs: true, includeQa: true });
+          showToast(`Inserted .syncmat '${p.name}' (${nCount} nodes)`, 'ok');
+        } catch (err) {
+          showToast(err.message, 'err');
+        }
+      };
+      card.querySelector('[data-act="dl"]').onclick = () => {
+        triggerDownload(`${p.id || 'material'}.syncmat.json`, JSON.stringify(p, null, 2));
+        showToast(`Downloaded ${p.id}.syncmat.json`, 'ok');
+      };
+      list.appendChild(card);
+    }
+  }
+
   function renderNodeLibrary() {
     const body = $('libBody');
     const q = ($('libSearch').value || '').trim().toLowerCase();
@@ -855,14 +1041,15 @@
         const col = (state.schemaPayload.schema.port_colors || {})[outType] || '#94a3b8';
         const prevSrc = getNodePreviewSrc(n.op);
         const isAnim = isOpAnimated(n.op);
+        const animAttr = isAnim ? ` data-anim-op="${n.op}"` : '';
         if (isGrid) {
           it.innerHTML = `
-            <div class="lib-swatch">${prevSrc ? `<img src="${prevSrc}" alt="${n.op}" loading="lazy" />` : ''}${isAnim ? '<span class="anim-pill-mini">▶</span>' : ''}</div>
+            <div class="lib-swatch">${prevSrc ? `<img src="${prevSrc}" alt="${n.op}" loading="lazy"${animAttr} />` : ''}${isAnim ? '<span class="anim-pill-mini">▶</span>' : ''}</div>
             <div class="lib-item-name">${n.op}</div>
           `;
         } else {
           it.innerHTML = `
-            <div class="lib-swatch-sm">${prevSrc ? `<img src="${prevSrc}" alt="${n.op}" loading="lazy" />` : ''}</div>
+            <div class="lib-swatch-sm">${prevSrc ? `<img src="${prevSrc}" alt="${n.op}" loading="lazy"${animAttr} />` : ''}</div>
             <span class="lib-item-name">${isAnim ? '<span class="tg-anim-dot">▶</span>' : ''}${n.op}</span>
             <span class="lib-dot" style="background:${col};" title="${outType}"></span>
           `;
@@ -1042,13 +1229,14 @@
       const prevSrc = getNodePreviewSrc(it.op);
       const accent = LIB_CAT_COLORS[it.cat] || '#64748b';
       const isAnim = isOpAnimated(it.op);
+      const animAttr = isAnim ? ` data-anim-op="${it.op}"` : '';
       const el = document.createElement('div');
       if (isGrid) {
         el.className = 'palette-card' + (idx === state.paletteIdx ? ' sel' : '');
         el.style.setProperty('--card-accent', accent);
         el.innerHTML = `
           <div class="palette-card-thumb">
-            ${prevSrc ? `<img src="${prevSrc}" alt="${it.op}" loading="lazy" />` : ''}
+            ${prevSrc ? `<img src="${prevSrc}" alt="${it.op}" loading="lazy"${animAttr} />` : ''}
             ${isAnim ? '<span class="anim-pill-mini">▶ ANIM</span>' : ''}
             <span class="palette-port-pill" style="color:${pColors[it.output_type] || '#cbd5e1'};">${it.output_type}</span>
           </div>
@@ -1058,7 +1246,7 @@
       } else {
         el.className = 'palette-item' + (idx === state.paletteIdx ? ' sel' : '');
         el.innerHTML = `
-          <div class="palette-list-thumb">${prevSrc ? `<img src="${prevSrc}" alt="${it.op}" loading="lazy" />` : ''}</div>
+          <div class="palette-list-thumb">${prevSrc ? `<img src="${prevSrc}" alt="${it.op}" loading="lazy"${animAttr} />` : ''}</div>
           <div class="palette-item-main">
             <span class="palette-item-name">${isAnim ? '<span class="tg-anim-dot">▶</span>' : ''}${it.display_name} <span style="font-family:var(--font-mono);font-size:10px;color:var(--text-muted);font-weight:400;">${it.op}</span></span>
             <span class="palette-item-desc">${it.desc}</span>
@@ -1613,8 +1801,9 @@
     const fIdx = Math.floor(state.phase * state.animFrames);
     $('frameReadout').textContent = `F${fIdx}/${state.animFrames} · φ${state.phase.toFixed(2)}`;
     renderTimelineDrivers();
-    if (immediate) return runEvaluate({ includeThumbs: false, includeQa: false });
-    scheduleEvaluate(20);
+    if (immediate) return runEvaluate({ includeThumbsMode: 'dynamic', includeQa: false });
+    if (evalTimer) clearTimeout(evalTimer);
+    evalTimer = setTimeout(() => runEvaluate({ includeThumbsMode: 'dynamic', includeQa: false }), 22);
     return Promise.resolve();
   }
 
@@ -1660,11 +1849,25 @@
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   }
 
+  async function createFrameFromSelection() {
+    const ids = getActiveSelectionIds();
+    if (!ids.length) {
+      showToast('Select one or more nodes first to create a Comment Frame', 'err');
+      return;
+    }
+    const title = ids.length > 1 ? `Material Group (${ids.length})` : `${ids[0]} Group`;
+    await mutate({ action: 'create_frame', node_ids: ids, title }, { skipEval: true });
+    showToast(`Wrapped ${ids.length} node(s) in Comment Frame`, 'ok');
+  }
+
   // ------------------------------------------------------------------------
   // Bootstrap Studio Application
   // ------------------------------------------------------------------------
   async function boot() {
     gl3d = new StudioGL3DViewport($('gl3dCanvas'), $('vpHud'));
+    gl3d.onPickPart = (hit, shift) => handlePickedPart(hit.short, shift);
+    gl3d.onHoverPart = (hit) => updateViewportHud(hit ? `🎯 ${hit.short}` : null);
+
     graphCanvas = new StudioGraphCanvas({
       stage: $('graphStage'),
       gridBg: $('graphGridBg'),
@@ -1677,17 +1880,36 @@
       callbacks: {
         onSelectNode: (nid, inspectInVp) => {
           state.selectedNodeId = nid;
+          state.selectedIds = new Set(nid ? [nid] : []);
+          syncSelectionUI();
           renderInspector();
-          graphCanvas.setData(state.serverState.recipe, state.evalData, state.selectedNodeId, state.activePass);
+          graphCanvas.setData(state.serverState.recipe, state.evalData, state.selectedNodeId, state.activePass, state.selectedIds);
           if (inspectInVp) {
             state.channel = 'selected';
             $('channelSelect').value = 'selected';
             runEvaluate({ includeThumbs: false, includeQa: false });
           }
         },
-        onMoveNode: (nid, pos) => mutate({ action: 'move_nodes', positions: { [nid]: pos }, undoable: false }, { skipEval: true }),
+        onSelectionChange: (ids, primary) => {
+          state.selectedIds = new Set(ids || []);
+          state.selectedNodeId = primary || (ids && ids[0]) || null;
+          syncSelectionUI();
+          renderInspector();
+          graphCanvas.setData(state.serverState.recipe, state.evalData, state.selectedNodeId, state.activePass, state.selectedIds);
+        },
+        onMoveNode: (nid, pos) => mutate({ action: 'move_nodes', positions: { [nid]: pos }, undoable: true }, { skipEval: true }),
+        onMoveNodes: (positions) => mutate({ action: 'move_nodes', positions, undoable: true }, { skipEval: true }),
         onConnect: (src, srcPort, dst, dstPort) => mutate({ action: 'connect', src_node: src, src_port: srcPort, dst_node: dst, dst_port: dstPort }, { immediateEval: true }),
         onDisconnect: (dst, dstPort) => mutate({ action: 'disconnect', dst_node: dst, dst_port: dstPort }, { immediateEval: true }),
+        onInsertReroute: (dst, dstPort, pos) => {
+          mutate({ action: 'insert_reroute', dst_node: dst, dst_port: dstPort, pos }, { immediateEval: true });
+          showToast('Inserted Reroute Dot on wire', 'ok');
+        },
+        onUpdateFrame: (fid, patch) => mutate(Object.assign({ action: 'update_frame', frame_id: fid }, patch), { skipEval: true }),
+        onDeleteFrame: (fid) => {
+          mutate({ action: 'delete_frame', frame_id: fid }, { skipEval: true });
+          showToast('Removed Comment Frame', 'ok');
+        },
         onDropWireEmpty: (srcNode, srcPort, portType, wPos) => openPalette({
           filterType: portType,
           connectFrom: { node: srcNode, port: srcPort },
@@ -1699,25 +1921,30 @@
           showToast(`Deleted node '${nid}'`, 'ok');
         },
         onDuplicateNode: (nid) => mutate({ action: 'duplicate_nodes', ids: [nid] }, { immediateEval: true }),
-        onNodeContextMenu: (nid, cx, cy) => {
+        onNodeContextMenu: (nid, cx, cy, selIds) => {
+          const targetIds = (Array.isArray(selIds) && selIds.length > 1) ? selIds : [nid];
+          const multi = targetIds.length > 1;
           const nObj = ((state.serverState && state.serverState.recipe && state.serverState.recipe.nodes) || []).find((q) => q.id === nid);
           const meta = nObj ? state.opMap[nObj.op] : null;
           const items = [
             { label: '👁 Inspect in Viewport', kbd: 'Dbl-Clk', action: () => { state.channel = 'selected'; $('channelSelect').value = 'selected'; runEvaluate({ includeThumbs: false, includeQa: false }); } },
             { label: '★ Set Final Graph Output', action: () => mutate({ action: 'set_output', node_id: nid }, { immediateEval: true }) },
             { sep: true },
-            { label: '⧉ Duplicate Node', kbd: '⌘D', action: () => mutate({ action: 'duplicate_nodes', ids: [nid] }, { immediateEval: true }) },
+            { label: `▭ Wrap ${multi ? targetIds.length + ' Nodes' : 'Node'} in Frame`, kbd: 'Ctrl+J', action: () => createFrameFromSelection() },
+            { label: `⧉ Duplicate ${multi ? targetIds.length + ' Nodes' : 'Node'}`, kbd: '⌘D', action: () => mutate({ action: 'duplicate_nodes', ids: targetIds }, { immediateEval: true }) },
             { label: '🎲 Randomize Seed', action: () => mutate({ action: 'randomize_seed', node_id: nid }, { immediateEval: true }) },
-            { label: nObj && nObj.bypassed ? '✓ Enable Node' : 'B Bypass / Mute', kbd: 'B', action: () => mutate({ action: 'toggle_bypass', node_id: nid }, { immediateEval: true }) },
+            { label: nObj && nObj.bypassed ? '✓ Enable Node(s)' : 'B Bypass / Mute', kbd: 'B', action: () => mutate(multi ? { action: 'toggle_bypass_multi', ids: targetIds } : { action: 'toggle_bypass', node_id: nid }, { immediateEval: true }) },
             { label: '✂ Disconnect All Wires', action: () => mutate({ action: 'disconnect_all', node_id: nid }, { immediateEval: true }) },
             { sep: true },
-            { label: '✕ Delete Node', kbd: 'Del', danger: true, action: () => { mutate({ action: 'delete_nodes', ids: [nid] }, { immediateEval: true }); showToast(`Deleted '${nid}'`, 'ok'); } },
+            { label: `✕ Delete ${multi ? targetIds.length + ' Nodes' : 'Node'}`, kbd: 'Del', danger: true, action: () => { mutate({ action: 'delete_nodes', ids: targetIds }, { immediateEval: true }); showToast(`Deleted ${targetIds.length} node(s)`, 'ok'); } },
           ];
-          showContextMenu(cx, cy, `${nid}${meta ? ` (${meta.op})` : ''}`, items);
+          showContextMenu(cx, cy, multi ? `${targetIds.length} Selected Nodes` : `${nid}${meta ? ` (${meta.op})` : ''}`, items);
         },
         onCanvasContextMenu: (cx, cy, wPos) => {
           showContextMenu(cx, cy, 'Node Graph Canvas', [
             { label: '+ Add Node Here...', kbd: 'Tab', action: () => openPalette({ spawnPos: [Math.round(wPos.x), Math.round(wPos.y)] }) },
+            { label: '• Add Reroute Dot Here', action: () => mutate({ action: 'add_node', op: 'reroute', pos: [Math.round(wPos.x), Math.round(wPos.y)] }, { skipEval: true }) },
+            { label: '▭ Wrap Selection in Frame', kbd: 'Ctrl+J', action: () => createFrameFromSelection() },
             { sep: true },
             { label: '⊞ Auto-Layout Graph', kbd: 'L', action: () => mutate({ action: 'auto_layout' }, { skipEval: true, fitGraph: true }) },
             { label: '⌖ Fit All Nodes', kbd: 'F', action: () => graphCanvas.fitToView() },
@@ -1743,25 +1970,29 @@
 
     setupSplitters();
 
-    // Load Schema v4.0 + Initial Workspace State + Real Procedural Node Previews in parallel!
-    const [schemaPayload, initState, prevPayload] = await Promise.all([
+    // Load Schema v4.0 + Initial Workspace State + Real Procedural Node Previews + Live Anim Swatch Sheet + .syncmat Presets!
+    const [schemaPayload, initState, prevPayload, animSheetPayload, syncmatPayload] = await Promise.all([
       apiGet('/api/schema'),
       apiGet('/api/state'),
       apiGet('/api/schema/previews?size=40').catch(() => ({ previews: {} })),
+      apiGet('/api/schema/preview_anim_sheet?size=36&frames=6').catch(() => ({ sheet: {} })),
+      apiGet('/api/syncmat/list').catch(() => ({ presets: [] })),
     ]);
     state.schemaPayload = schemaPayload;
     state.nodePreviews = (prevPayload && prevPayload.previews) || {};
     state.timeAwareOps = new Set((prevPayload && prevPayload.time_aware_ops) || []);
+    state.animSheet = (animSheetPayload && animSheetPayload.sheet) || {};
+    state.syncmats = (syncmatPayload && syncmatPayload.presets) || [];
     for (const [cat, nodes] of Object.entries(schemaPayload.schema.nodes_by_category || {})) {
       for (const n of nodes) state.opMap[n.op] = Object.assign({ category: cat }, n);
     }
     graphCanvas.setSchema(schemaPayload.schema);
-    $('versionBadge').textContent = `v13 · ${schemaPayload.schema.node_count} nodes`;
+    $('versionBadge').textContent = `v14 · ${schemaPayload.schema.node_count} nodes`;
 
     // Populate Project / Preset Dropdown
     const pSel = $('projectSelect');
     const ogSamples = document.createElement('optgroup');
-    ogSamples.label = 'Flagship 3D Studio Projects (v12)';
+    ogSamples.label = 'Flagship 3D Studio Projects (v14)';
     for (const s of schemaPayload.samples) {
       const o = document.createElement('option');
       o.value = `sample:${s.id}`;
@@ -1788,6 +2019,8 @@
     pSel.value = initState.source || 'sample:monolith_v10_3d';
 
     renderNodeLibrary();
+    renderSyncmatList();
+    startLiveSwatchLoop();
     applyServerState(initState, { fitGraph: true, autoPrim: true });
     await runEvaluate({ includeThumbs: true, includeQa: true });
     setTimeout(() => graphCanvas.fitToView(), 80);
@@ -1860,6 +2093,14 @@
       gl3d.wireframe = !gl3d.wireframe;
       $('btnWire3d').classList.toggle('active', gl3d.wireframe);
     };
+    if ($('btnEnvBg3d')) {
+      $('btnEnvBg3d').onclick = () => {
+        gl3d.showEnvBg = !gl3d.showEnvBg;
+        $('btnEnvBg3d').classList.toggle('active', gl3d.showEnvBg);
+      };
+    }
+    if ($('btnPickPart')) $('btnPickPart').onclick = () => setPickMode(!state.pickMode);
+    if ($('btnPickPart2d')) $('btnPickPart2d').onclick = () => setPickMode(!state.pickMode);
     $('btnResetCam3d').onclick = () => gl3d.resetCamera();
     $('btnTile3x3').onclick = () => {
       state.tile3x3 = !state.tile3x3;
@@ -1872,6 +2113,7 @@
     $('btnZoom2dOut').onclick = () => { state.zoom2d = Math.max(0.4, state.zoom2d * 0.8); render2DCanvas(); };
     $('lightingPresetSelect').onchange = (e) => {
       state.lightingPreset = e.target.value;
+      if (gl3d) gl3d.lightingPreset = state.lightingPreset;
       runEvaluate({ includeThumbs: false, includeQa: false });
     };
     $('lightAzSlider').oninput = (e) => {
@@ -1886,8 +2128,22 @@
       if (gl3d) gl3d.lightEl = state.lightEl;
       scheduleEvaluate(90);
     };
+    if ($('coatSlider')) {
+      $('coatSlider').oninput = (e) => {
+        const v = parseFloat(e.target.value);
+        if ($('coatVal')) $('coatVal').textContent = v.toFixed(2);
+        if (gl3d) gl3d.clearcoat = v;
+      };
+    }
+    if ($('bloomSlider')) {
+      $('bloomSlider').oninput = (e) => {
+        const v = parseFloat(e.target.value);
+        if ($('bloomVal')) $('bloomVal').textContent = v.toFixed(2);
+        if (gl3d) gl3d.bloomStrength = v;
+      };
+    }
 
-    // 2D Pixel Eyedropper HUD
+    // 2D Pixel Eyedropper HUD + 2D UV Island Click-to-Mask!
     $('canvas2d').addEventListener('pointermove', (e) => {
       const dr = state._draw2dRect;
       const buf = state.img2dBuf;
@@ -1905,8 +2161,94 @@
       const hex = '#' + [R, G, B].map((c) => c.toString(16).padStart(2, '0')).join('').toUpperCase();
       updateViewportHud(`(${px},${py}) ${hex}`);
     });
+    $('canvas2d').addEventListener('click', async (e) => {
+      if (!state.pickMode && !e.altKey) return;
+      const dr = state._draw2dRect;
+      if (!dr) return;
+      const r = $('canvas2d').getBoundingClientRect();
+      const cx = (e.clientX - r.left) * dr.dpr;
+      const cy = (e.clientY - r.top) * dr.dpr;
+      const u = (((cx - dr.ox) / dr.drawW) * dr.tiles) % 1;
+      const v = (((cy - dr.oy) / dr.drawH) * dr.tiles) % 1;
+      if (u < 0 || v < 0 || u >= 1 || v >= 1) return;
+      try {
+        const res = await apiGet(`/api/mesh/pick_uv?u=${u.toFixed(5)}&v=${v.toFixed(5)}`);
+        if (res.hit && res.short) {
+          await handlePickedPart(res.short, e.shiftKey);
+        } else {
+          showToast(res.message || 'No UV island under cursor', 'err');
+        }
+      } catch (err) {
+        showToast(err.message, 'err');
+      }
+    });
+
+    // Node Library Tabs, Live Swatches & .syncmat Preset Drawer
+    if ($('tabLibNodes')) $('tabLibNodes').onclick = () => switchLibTab('nodes');
+    if ($('tabLibSyncmat')) $('tabLibSyncmat').onclick = () => switchLibTab('syncmat');
+    if ($('btnLiveSwatches')) {
+      $('btnLiveSwatches').onclick = () => {
+        state.liveSwatches = !state.liveSwatches;
+        $('btnLiveSwatches').classList.toggle('active', state.liveSwatches);
+        if (state.liveSwatches) startLiveSwatchLoop();
+        else stopLiveSwatchLoop();
+      };
+    }
+    if ($('btnSaveSyncmat')) {
+      $('btnSaveSyncmat').onclick = async () => {
+        const ids = getActiveSelectionIds();
+        const defName = (state.serverState && state.serverState.recipe && state.serverState.recipe.name) || 'Custom Material';
+        try {
+          const res = await apiPost('/api/syncmat/save', {
+            node_ids: ids.length ? ids : null,
+            name: ids.length ? `${defName} (${ids.length}n)` : defName,
+            category: 'User Presets',
+            description: `Saved from ${defName} (${ids.length || 'all'} nodes)`,
+          });
+          state.syncmats = res.presets || state.syncmats;
+          switchLibTab('syncmat');
+          showToast(`Saved .syncmat preset '${res.preset.name}'`, 'ok');
+        } catch (err) {
+          showToast(err.message, 'err');
+        }
+      };
+    }
+    if ($('btnUploadSyncmat')) $('btnUploadSyncmat').onclick = () => $('syncmatFileInput').click();
+    if ($('syncmatFileInput')) {
+      $('syncmatFileInput').onchange = async (e) => {
+        const f = e.target.files && e.target.files[0];
+        if (!f) return;
+        try {
+          const doc = JSON.parse(await f.text());
+          const cx = Math.round((-graphCanvas.panX + graphCanvas.stage.clientWidth * 0.45) / graphCanvas.zoom - 120);
+          const cy = Math.round((-graphCanvas.panY + graphCanvas.stage.clientHeight * 0.42) / graphCanvas.zoom - 60);
+          const st = await apiPost('/api/syncmat/insert', { preset: doc, pos: [cx, cy], wrap_frame: true });
+          applyServerState(st, { autoPrim: false });
+          await runEvaluate({ includeThumbs: true, includeQa: true });
+          showToast(`Imported .syncmat '${doc.name || f.name}'`, 'ok');
+        } catch (err) {
+          showToast(`Invalid .syncmat: ${err.message}`, 'err');
+        }
+        e.target.value = '';
+      };
+    }
 
     // Graph Toolbar & Canvas Zoom HUD
+    if ($('btnToolSelect')) {
+      $('btnToolSelect').onclick = () => {
+        graphCanvas.setToolMode('select');
+        $('btnToolSelect').classList.add('active');
+        if ($('btnToolPan')) $('btnToolPan').classList.remove('active');
+      };
+    }
+    if ($('btnToolPan')) {
+      $('btnToolPan').onclick = () => {
+        graphCanvas.setToolMode('pan');
+        $('btnToolPan').classList.add('active');
+        if ($('btnToolSelect')) $('btnToolSelect').classList.remove('active');
+      };
+    }
+    if ($('btnFrameSel')) $('btnFrameSel').onclick = () => createFrameFromSelection();
     $('btnAddNode').onclick = () => openPalette();
     $('btnOpenPaletteLib').onclick = () => openPalette();
     if ($('btnLibList')) $('btnLibList').onclick = () => { state.libViewMode = 'list'; renderNodeLibrary(); };
@@ -1915,10 +2257,14 @@
     if ($('btnGraphZoomOut')) $('btnGraphZoomOut').onclick = () => graphCanvas.zoomBy(0.82);
     if ($('btnGraphZoomFit')) $('btnGraphZoomFit').onclick = () => graphCanvas.fitToView();
     $('btnAutoLayout').onclick = () => mutate({ action: 'auto_layout' }, { skipEval: true, fitGraph: true });
-    if ($('btnDupSel')) $('btnDupSel').onclick = () => { if (state.selectedNodeId) mutate({ action: 'duplicate_nodes', ids: [state.selectedNodeId] }, { immediateEval: true }); };
+    if ($('btnDupSel')) $('btnDupSel').onclick = () => { const ids = getActiveSelectionIds(); if (ids.length) mutate({ action: 'duplicate_nodes', ids }, { immediateEval: true }); };
     $('btnFitGraph').onclick = () => graphCanvas.fitToView();
-    $('btnBypassSel').onclick = () => { if (state.selectedNodeId) mutate({ action: 'toggle_bypass', node_id: state.selectedNodeId }, { immediateEval: true }); };
-    $('btnDeleteSel').onclick = () => { if (state.selectedNodeId) mutate({ action: 'delete_nodes', ids: [state.selectedNodeId] }, { immediateEval: true }); };
+    $('btnBypassSel').onclick = () => {
+      const ids = getActiveSelectionIds();
+      if (ids.length > 1) mutate({ action: 'toggle_bypass_multi', ids }, { immediateEval: true });
+      else if (ids.length === 1) mutate({ action: 'toggle_bypass', node_id: ids[0] }, { immediateEval: true });
+    };
+    $('btnDeleteSel').onclick = () => { const ids = getActiveSelectionIds(); if (ids.length) mutate({ action: 'delete_nodes', ids }, { immediateEval: true }); };
     $('btnSetOutputSel').onclick = () => { if (state.selectedNodeId) mutate({ action: 'set_output', node_id: state.selectedNodeId }, { immediateEval: true }); };
     $('libSearch').oninput = renderNodeLibrary;
 
@@ -2064,6 +2410,25 @@
     };
     $('btnCloseExport').onclick = () => $('exportModal').classList.remove('open');
     $('exportModal').addEventListener('click', (e) => { if (e.target === $('exportModal')) $('exportModal').classList.remove('open'); });
+    if ($('btnDownloadMtlx')) {
+      $('btnDownloadMtlx').onclick = async () => {
+        const stem = $('exportStemInput').value.trim() || 'asset';
+        const shader = ($('exportMtlxShader') && $('exportMtlxShader').value) || 'open_pbr_surface';
+        const coat = $('coatSlider') ? parseFloat($('coatSlider').value) : 0.25;
+        try {
+          const res = await apiPost('/api/export/materialx', { stem, shader_model: shader, coat_weight: coat });
+          triggerDownload(res.filename || `${stem}.mtlx`, res.xml);
+          const pre = $('exportResultPre');
+          if (pre) {
+            pre.style.display = 'block';
+            pre.textContent = `Downloaded ASWF MaterialX 1.38 (${shader}): ${res.filename}\n\n${res.xml.slice(0, 620)}...`;
+          }
+          showToast(`Downloaded MaterialX 1.38 (${res.filename})`, 'ok');
+        } catch (err) {
+          showToast(err.message, 'err');
+        }
+      };
+    }
     $('btnDownloadTexdsl').onclick = () => {
       const stem = $('exportStemInput').value.trim() || 'asset';
       triggerDownload(`${stem}.texdsl`, (state.serverState && state.serverState.texdsl) || '');
@@ -2111,28 +2476,57 @@
         mutate({ action: e.shiftKey ? 'redo' : 'undo' }, { immediateEval: true });
         return;
       }
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'd') {
-        if (inField || !state.selectedNodeId) return;
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'a') {
+        if (inField) return;
         e.preventDefault();
-        mutate({ action: 'duplicate_nodes', ids: [state.selectedNodeId] }, { immediateEval: true });
+        const vis = (graphCanvas && graphCanvas._visibleNodes) || ((state.serverState && state.serverState.recipe && state.serverState.recipe.nodes) || []);
+        const allIds = vis.map((n) => n.id);
+        state.selectedIds = new Set(allIds);
+        if (allIds.length) state.selectedNodeId = allIds[allIds.length - 1];
+        syncSelectionUI();
+        renderInspector();
+        graphCanvas.setData(state.serverState.recipe, state.evalData, state.selectedNodeId, state.activePass, state.selectedIds);
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'j') {
+        if (inField) return;
+        e.preventDefault();
+        createFrameFromSelection();
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'd') {
+        const ids = getActiveSelectionIds();
+        if (inField || !ids.length) return;
+        e.preventDefault();
+        mutate({ action: 'duplicate_nodes', ids }, { immediateEval: true });
         return;
       }
       if (e.key === 'Escape') {
         hideContextMenu();
         closePalette();
+        if (state.pickMode) setPickMode(false);
         $('exportModal').classList.remove('open');
         $('meshModal').classList.remove('open');
         return;
       }
       if (inField) return;
       if (e.key === 'Tab' || (e.shiftKey && e.key.toLowerCase() === 'a')) { e.preventDefault(); openPalette(); }
-      else if (e.key === ' ') { e.preventDefault(); togglePlayAnim(); }
+      else if (e.key === ' ' && !e.repeat) { e.preventDefault(); togglePlayAnim(); }
+      else if (e.key.toLowerCase() === 'c' && !e.metaKey && !e.ctrlKey) { e.preventDefault(); createFrameFromSelection(); }
       else if (e.key.toLowerCase() === 'f') { e.preventDefault(); graphCanvas.fitToView(); }
       else if (e.key.toLowerCase() === 'l') { e.preventDefault(); mutate({ action: 'auto_layout' }, { skipEval: true, fitGraph: true }); }
-      else if ((e.key.toLowerCase() === 'b' || e.key.toLowerCase() === 'm') && state.selectedNodeId) { e.preventDefault(); mutate({ action: 'toggle_bypass', node_id: state.selectedNodeId }, { immediateEval: true }); }
-      else if ((e.key === 'Delete' || e.key === 'Backspace') && state.selectedNodeId) {
+      else if (e.key.toLowerCase() === 'b' || e.key.toLowerCase() === 'm') {
+        const ids = getActiveSelectionIds();
+        if (!ids.length) return;
         e.preventDefault();
-        mutate({ action: 'delete_nodes', ids: [state.selectedNodeId] }, { immediateEval: true });
+        if (ids.length > 1) mutate({ action: 'toggle_bypass_multi', ids }, { immediateEval: true });
+        else mutate({ action: 'toggle_bypass', node_id: ids[0] }, { immediateEval: true });
+      }
+      else if (e.key === 'Delete' || e.key === 'Backspace') {
+        const ids = getActiveSelectionIds();
+        if (!ids.length) return;
+        e.preventDefault();
+        mutate({ action: 'delete_nodes', ids }, { immediateEval: true });
       }
     });
   }

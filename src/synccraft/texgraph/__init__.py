@@ -218,6 +218,15 @@ from .presets import (
     build_temple_carved_stone,
 )
 from .registry import NODE_CATALOG, PORT_COLORS, PORT_COMPATIBILITY, NodeMeta, ParamSchema, PortSchema, export_node_schema_json, save_node_schema_json
+from .node_previews import generate_anim_preview_sheet, generate_node_anim_preview, generate_node_preview_catalog
+from .syncmat_and_mtlx import (
+    BUILTIN_SYNCMATS,
+    export_materialx_xml,
+    extract_syncmat_from_graph,
+    insert_syncmat_into_graph,
+    list_all_syncmats,
+    save_user_syncmat,
+)
 from .ai_copilot import BUILT_IN_STYLE_PRESETS, apply_surgical_patch, diagnose_asset, extract_style_dna
 from .syncproj import DEFAULT_CHRONO_VARIANTS, SyncProject, apply_variant_to_graph, generate_variant_pack
 from .studio_server import (
