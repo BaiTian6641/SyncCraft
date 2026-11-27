@@ -15,10 +15,12 @@
       <div class="brand">
         <div class="brand-mark">SC</div>
         <span>SyncCraft Studio</span>
-        <span class="brand-sub" id="versionBadge">v15 · 228 nodes</span>
+        <span class="brand-sub" id="versionBadge">v15.1 · 228 nodes</span>
       </div>
 
-      <select id="projectSelect" class="sel-input" title="Load Flagship Sample or Built-in Preset" style="width: 172px;"></select>
+      <select id="projectSelect" class="sel-input" title="Load Flagship Sample or Built-in Preset" style="width: 152px;"></select>
+      <button class="btn" id="btnOpenProject" title="Open 1-to-1 Project File (.syncproj, .texdsl, .texgraph.json, .bbmodel)">Open</button>
+      <input type="file" id="projectFileInput" accept=".syncproj,.texdsl,.json,.bbmodel" style="display:none" />
       <button class="btn" id="btnLoadMesh" title="Load or attach a 3D Blockbench .bbmodel for live UV-seam &amp; ray-traced PBR baking">3D Mesh ▾</button>
       <input type="file" id="bbmodelFileInput" accept=".bbmodel,.json" style="display:none" />
 
@@ -309,6 +311,14 @@
         </div>
 
         <div class="timeline-body" id="botTabConsole" style="display:none;">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:5px;padding-bottom:4px;border-bottom:1px solid var(--border-subtle);">
+            <span id="logFilePathSpan" style="font-family:var(--font-mono);font-size:10px;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">File log: ~/.synccraft/logs/synccraft_studio.log</span>
+            <div style="display:flex;gap:4px;flex-shrink:0;">
+              <button class="btn sm" id="btnRefreshFileLog" title="View tail of persistent rotating Studio log file">File Tail</button>
+              <button class="btn sm" id="btnDownloadFileLog" title="Download full synccraft_studio.log">Download .log</button>
+              <button class="btn sm" id="btnClearFileLog" title="Clear log file &amp; console">Clear</button>
+            </div>
+          </div>
           <div id="validationAlerts"></div>
           <div class="log-list" id="consoleLogList"></div>
         </div>
@@ -366,7 +376,7 @@
       <div class="palette-topbar">
         <div class="palette-search-wrap">
           <span class="palette-search-ico">⌕</span>
-          <input type="text" id="paletteInput" class="palette-search" placeholder="Search 211 TexGraph nodes by name, noise, brass, crystal, mask or anim..." autocomplete="off" />
+          <input type="text" id="paletteInput" class="palette-search" placeholder="Search 228 TexGraph nodes by name, math, noise, brass, crystal, mask or anim..." autocomplete="off" />
           <span class="palette-compat-badge" id="paletteCompatBadge" style="display:none;"></span>
         </div>
         <div class="palette-controls">
@@ -396,7 +406,7 @@
         </aside>
       </div>
       <div class="palette-footer">
-        <span id="paletteCountLabel">211 nodes</span>
+        <span id="paletteCountLabel">228 nodes</span>
         <span>↑↓←→ Navigate · Enter Add · Esc Close</span>
       </div>
     </div>

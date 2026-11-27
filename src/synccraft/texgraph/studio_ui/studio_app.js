@@ -68,6 +68,11 @@
     syncmats: [],
     img2d: null,
     img2dBuf: null,
+    img2dGen: 0,
+    workspaceEpoch: 0,
+    evalReqSeq: 0,
+    evalAppliedSeq: 0,
+    mutationRev: 0,
     lastDiagnosis: null,
     lastDna: null,
     lastPatchSummary: null,
@@ -132,6 +137,46 @@
     if (gl3d) gl3d.clearAnimFrames();
   }
 
+  function cancelPendingEval() {
+    if (evalTimer) {
+      clearTimeout(evalTimer);
+      evalTimer = null;
+    }
+    state.evalReqSeq += 1;
+    state.evalAppliedSeq = state.evalReqSeq;
+  }
+
+  function resetWorkspaceVisuals(opts) {
+    opts = opts || {};
+    cancelPendingEval();
+    stopAnimLoop();
+    invalidateAnimRing();
+    state.evalData = null;
+    state.img2d = null;
+    state.img2dBuf = null;
+    state.img2dGen += 1;
+    if (gl3d) gl3d.resetTextures();
+    const c2 = $('canvas2d');
+    if (c2) {
+      const ctx = c2.getContext('2d');
+      if (ctx) ctx.clearRect(0, 0, c2.width, c2.height);
+    }
+    if (opts.fullProjectReset) {
+      if (state.pickMode) setPickMode(false);
+      if (state.brushMode) setBrushMode(false);
+      if (state.lightDragMode) setLightDragMode(false);
+      state.channel = 'pbr_lit';
+      if ($('channelSelect')) $('channelSelect').value = 'pbr_lit';
+      state.phase = 0.0;
+      if ($('phaseSlider')) $('phaseSlider').value = '0.00';
+      if ($('phaseLabel')) $('phaseLabel').textContent = '0.00';
+      if ($('frameReadout')) $('frameReadout').textContent = `F0/${state.animFrames} · φ0.00`;
+      state.activePass = 'ALL';
+      state.selectedNodeId = null;
+      state.selectedIds = new Set();
+    }
+  }
+
   function updateBridgeBadge(bridge) {
     const el = $('bridgeBadge');
     if (!el || !bridge) return;
@@ -189,11 +234,13 @@
   }
 
   // ------------------------------------------------------------------------
-  // Core Evaluation & Synchronization Loop
+  // Core Evaluation & Synchronization Loop (Strict Epoch + Sequence Guard!)
   // ------------------------------------------------------------------------
   async function runEvaluate(opts) {
     opts = opts || {};
     const thumbsMode = opts.includeThumbsMode || (opts.includeThumbs === false ? 'none' : 'all');
+    const reqEpoch = state.workspaceEpoch;
+    const reqSeq = ++state.evalReqSeq;
     try {
       const ev = await apiPost('/api/evaluate', {
         phase: state.phase,
@@ -205,21 +252,28 @@
         include_thumbs_mode: thumbsMode,
         include_qa: opts.includeQa !== false,
       });
+      // CRITICAL ANTI-GLITCH GUARD: Discard any response from a prior project/epoch or superseded request!
+      if (reqEpoch !== state.workspaceEpoch) return;
+      if (ev.workspace_epoch != null && ev.workspace_epoch !== state.workspaceEpoch) return;
+      if (reqSeq < state.evalAppliedSeq) return;
+      state.evalAppliedSeq = reqSeq;
+
+      const sameEpochPrev = (state.evalData && state.evalData.workspace_epoch === state.workspaceEpoch) ? state.evalData : null;
       if (thumbsMode === 'dynamic') {
-        const mergedThumbs = Object.assign({}, (state.evalData && state.evalData.thumbs) || {}, ev.thumbs || {});
+        const mergedThumbs = Object.assign({}, (sameEpochPrev && sameEpochPrev.thumbs) || {}, ev.thumbs || {});
         ev.thumbs = mergedThumbs;
-        if (state.evalData && !ev.qa && state.evalData.qa) ev.qa = state.evalData.qa;
+        if (sameEpochPrev && !ev.qa && sameEpochPrev.qa) ev.qa = sameEpochPrev.qa;
         state.evalData = ev;
         updatePerfAndQaBadges();
         updateViewportTextures();
         graphCanvas.updateNodeThumbs(ev.thumbs, ev.timings_ms);
         return;
       }
-      if (state.evalData && (!ev.thumbs || !Object.keys(ev.thumbs).length)) {
-        ev.thumbs = state.evalData.thumbs || {};
+      if (sameEpochPrev && (!ev.thumbs || !Object.keys(ev.thumbs).length)) {
+        ev.thumbs = sameEpochPrev.thumbs || {};
       }
-      if (state.evalData && !ev.qa && state.evalData.qa) {
-        ev.qa = state.evalData.qa;
+      if (sameEpochPrev && !ev.qa && sameEpochPrev.qa) {
+        ev.qa = sameEpochPrev.qa;
       }
       state.evalData = ev;
       updatePerfAndQaBadges();
@@ -227,6 +281,7 @@
       graphCanvas.setData(state.serverState.recipe, state.evalData, state.selectedNodeId, state.activePass, state.selectedIds);
       renderQaPanel();
     } catch (err) {
+      if (reqEpoch !== state.workspaceEpoch) return;
       showToast(`Eval error: ${err.message}`, 'err');
       const alerts = $('validationAlerts');
       if (alerts) {
@@ -245,7 +300,25 @@
 
   function applyServerState(st, opts) {
     opts = opts || {};
+    const prevEpoch = state.workspaceEpoch;
+    const nextEpoch = (st && st.workspace_epoch != null) ? st.workspace_epoch : prevEpoch;
+    const epochChanged = nextEpoch !== prevEpoch;
+    state.workspaceEpoch = nextEpoch;
+    state.mutationRev += 1;
+    if (epochChanged) {
+      cancelPendingEval();
+      stopAnimLoop();
+      invalidateAnimRing();
+      state.evalData = null;
+      state.img2d = null;
+      state.img2dBuf = null;
+      state.img2dGen += 1;
+      if (gl3d) gl3d.resetTextures();
+    }
     state.serverState = st;
+    if (st.log_file_path && $('logFilePathSpan')) {
+      $('logFilePathSpan').textContent = `File log: ${st.log_file_path}`;
+    }
     const rec = st.recipe;
 
     // Ensure valid selected node & multi-selection set
@@ -384,8 +457,10 @@
       url2d = state.evalData.selected_preview;
     }
     if (url2d) {
+      const my2dGen = ++state.img2dGen;
       const im = new Image();
       im.onload = () => {
+        if (state.img2dGen !== my2dGen) return;
         state.img2d = im;
         const off = document.createElement('canvas');
         off.width = im.width; off.height = im.height;
@@ -1993,7 +2068,9 @@
     btn.classList.add('amber');
 
     const rec = state.serverState && state.serverState.recipe;
-    const seqKey = `${rec ? rec.name : ''}:${rec ? (rec.nodes || []).length : 0}:${state.animFrames}:${state.channel}:${state.lightAz}:${state.lightEl}:${state.selectedNodeId || ''}`;
+    const bakeEpoch = state.workspaceEpoch;
+    const bakeRev = state.mutationRev;
+    const seqKey = `e${bakeEpoch}:r${bakeRev}:${rec ? rec.name : ''}:${state.animFrames}:${state.channel}:${state.lightAz}:${state.lightEl}:${state.selectedNodeId || ''}`;
     const tileable = !!(rec && rec.tileable);
 
     if (state.animSeqKey !== seqKey || !gl3d || !gl3d.animRing.length) {
@@ -2007,8 +2084,19 @@
           preview_node: state.selectedNodeId,
           max_dim: 256,
         });
-        if (!state.animPlaying) return;
-        await gl3d.uploadAnimFrames(res.sequence || [], tileable);
+        if (!state.animPlaying || bakeEpoch !== state.workspaceEpoch || bakeRev !== state.mutationRev) {
+          stopAnimLoop();
+          return;
+        }
+        if (res.workspace_epoch != null && res.workspace_epoch !== state.workspaceEpoch) {
+          stopAnimLoop();
+          return;
+        }
+        const okUp = await gl3d.uploadAnimFrames(res.sequence || [], tileable);
+        if (!okUp || !state.animPlaying || bakeEpoch !== state.workspaceEpoch || bakeRev !== state.mutationRev) {
+          stopAnimLoop();
+          return;
+        }
         state.animSeqKey = seqKey;
         showToast(`⚡ GPU Ring Ready: ${res.frames}f baked in ${Math.round(res.bake_ms)}ms -> ${state.animFps}fps!`, 'ok');
       } catch (err) {
@@ -2139,6 +2227,9 @@
             state.channel = 'selected';
             $('channelSelect').value = 'selected';
             runEvaluate({ includeThumbs: false, includeQa: false });
+          } else if (state.channel === 'selected') {
+            // Keep 'Selected Node Output' strictly 1-to-1 with whichever node the user clicks!
+            runEvaluate({ includeThumbsMode: 'none', includeQa: false });
           }
         },
         onSelectionChange: (ids, primary) => {
@@ -2233,24 +2324,33 @@
 
     setupSplitters();
 
-    // Load Schema v4.0 + Initial Workspace State + Real Procedural Node Previews + Live Anim Swatch Sheet + .syncmat Presets!
-    const [schemaPayload, initState, prevPayload, animSheetPayload, syncmatPayload] = await Promise.all([
+    // Progressive Non-Blocking Boot: fetch Schema + State first (~10ms), evaluate immediately,
+    // and stream 228 Node Previews + Live Anim Sheet + .syncmat Presets in parallel!
+    const [schemaPayload, initState] = await Promise.all([
       apiGet('/api/schema'),
       apiGet('/api/state'),
-      apiGet('/api/schema/previews?size=40').catch(() => ({ previews: {} })),
-      apiGet('/api/schema/preview_anim_sheet?size=36&frames=6').catch(() => ({ sheet: {} })),
-      apiGet('/api/syncmat/list').catch(() => ({ presets: [] })),
     ]);
     state.schemaPayload = schemaPayload;
-    state.nodePreviews = (prevPayload && prevPayload.previews) || {};
-    state.timeAwareOps = new Set((prevPayload && prevPayload.time_aware_ops) || []);
-    state.animSheet = (animSheetPayload && animSheetPayload.sheet) || {};
-    state.syncmats = (syncmatPayload && syncmatPayload.presets) || [];
     for (const [cat, nodes] of Object.entries(schemaPayload.schema.nodes_by_category || {})) {
       for (const n of nodes) state.opMap[n.op] = Object.assign({ category: cat }, n);
     }
     graphCanvas.setSchema(schemaPayload.schema);
-    $('versionBadge').textContent = `v15 · ${schemaPayload.schema.node_count} nodes`;
+    $('versionBadge').textContent = `v15.1 · ${schemaPayload.schema.node_count} nodes`;
+
+    // Kick off non-blocking background fetch for 228 procedural swatches, anim sheet & .syncmat presets
+    const bgAssetsPromise = Promise.all([
+      apiGet('/api/schema/previews?size=40').catch(() => ({ previews: {} })),
+      apiGet('/api/schema/preview_anim_sheet?size=36&frames=6').catch(() => ({ sheet: {} })),
+      apiGet('/api/syncmat/list').catch(() => ({ presets: [] })),
+    ]).then(([prevPayload, animSheetPayload, syncmatPayload]) => {
+      state.nodePreviews = (prevPayload && prevPayload.previews) || {};
+      state.timeAwareOps = new Set((prevPayload && prevPayload.time_aware_ops) || []);
+      state.animSheet = (animSheetPayload && animSheetPayload.sheet) || {};
+      state.syncmats = (syncmatPayload && syncmatPayload.presets) || [];
+      renderNodeLibrary();
+      renderSyncmatList();
+      startLiveSwatchLoop();
+    });
 
     // Populate Project / Preset Dropdown
     const pSel = $('projectSelect');
@@ -2283,9 +2383,9 @@
 
     renderNodeLibrary();
     renderSyncmatList();
-    startLiveSwatchLoop();
     applyServerState(initState, { fitGraph: true, autoPrim: true });
     await runEvaluate({ includeThumbs: true, includeQa: true });
+    await bgAssetsPromise;
     setTimeout(() => graphCanvas.fitToView(), 80);
 
     // ----------------------------------------------------------------------
@@ -2294,23 +2394,98 @@
     pSel.onchange = async () => {
       const [kind, id] = pSel.value.split(':');
       try {
-        // Clear stale 2D/eval buffers immediately on project switch
-        state.evalData = null;
-        state.img2d = null;
-        state.img2dBuf = null;
-        const c2 = $('canvas2d');
-        if (c2) { const ctx = c2.getContext('2d'); if (ctx) ctx.clearRect(0, 0, c2.width, c2.height); }
+        // Complete visual, animation ring, GPU texture & in-flight eval reset BEFORE switching!
+        resetWorkspaceVisuals({ fullProjectReset: true });
         const st = await apiPost('/api/load', { kind, id, size: parseInt($('resSelect').value, 10) || 64 });
-        state.activePass = 'ALL';
-        state.selectedNodeId = null;
         applyServerState(st, { fitGraph: true, autoPrim: true });
         await runEvaluate({ includeThumbs: true, includeQa: true });
         requestAnimationFrame(() => graphCanvas.fitToView());
-        showToast(`Loaded ${st.recipe.name}`, 'ok');
+        showToast(`Loaded ${st.recipe.name} (${st.recipe.width}×${st.recipe.height})`, 'ok');
       } catch (err) {
         showToast(err.message, 'err');
       }
     };
+
+    // Strict 1-to-1 Project File Opener (.syncproj, .texdsl, .texgraph.json, .bbmodel)
+    if ($('btnOpenProject') && $('projectFileInput')) {
+      $('btnOpenProject').onclick = () => $('projectFileInput').click();
+      $('projectFileInput').onchange = async (e) => {
+        const f = e.target.files && e.target.files[0];
+        if (!f) return;
+        try {
+          resetWorkspaceVisuals({ fullProjectReset: true });
+          const text = await f.text();
+          const lower = f.name.toLowerCase();
+          let payload;
+          if (lower.endsWith('.texdsl')) {
+            payload = { kind: 'texdsl', code: text, filename: f.name, keep_mesh: false };
+          } else if (lower.endsWith('.bbmodel')) {
+            payload = { kind: 'bbmodel_project', bbmodel: JSON.parse(text), filename: f.name };
+          } else if (lower.endsWith('.syncproj')) {
+            payload = { kind: 'syncproj', syncproj: JSON.parse(text), filename: f.name };
+          } else {
+            const doc = JSON.parse(text);
+            if (doc.schema && String(doc.schema).startsWith('synccraft.project')) {
+              payload = { kind: 'syncproj', syncproj: doc, filename: f.name };
+            } else if (doc.elements && doc.resolution) {
+              payload = { kind: 'bbmodel_project', bbmodel: doc, filename: f.name };
+            } else {
+              payload = { kind: 'recipe', recipe: doc, filename: f.name, keep_mesh: false };
+            }
+          }
+          const st = await apiPost('/api/load', payload);
+          applyServerState(st, { fitGraph: true, autoPrim: true });
+          await runEvaluate({ includeThumbs: true, includeQa: true });
+          requestAnimationFrame(() => graphCanvas.fitToView());
+          showToast(`Opened 1-to-1 project '${f.name}' (${st.recipe.width}×${st.recipe.height})`, 'ok');
+        } catch (err) {
+          showToast(`Open failed: ${err.message}`, 'err');
+        }
+        e.target.value = '';
+      };
+    }
+
+    // Persistent File Log Controls (File Tail, Download .log, Clear)
+    if ($('btnRefreshFileLog')) {
+      $('btnRefreshFileLog').onclick = async () => {
+        try {
+          const info = await apiGet('/api/logs/file?tail=80');
+          if ($('logFilePathSpan')) {
+            $('logFilePathSpan').textContent = `${info.path} (${(info.size_bytes / 1024).toFixed(1)} KB · ${info.line_count} lines)`;
+          }
+          const list = $('consoleLogList');
+          if (list) {
+            list.innerHTML = '';
+            for (const line of info.lines.slice().reverse()) {
+              const d = document.createElement('div');
+              d.className = 'log-line' + (line.includes('"ERROR"') ? ' error' : '');
+              d.textContent = line;
+              list.appendChild(d);
+            }
+          }
+          showToast(`Loaded ${info.line_count} lines from studio file log`, 'ok');
+        } catch (err) {
+          showToast(err.message, 'err');
+        }
+      };
+    }
+    if ($('btnDownloadFileLog')) {
+      $('btnDownloadFileLog').onclick = () => {
+        window.open('/api/logs/file?tail=2000&download=1', '_blank');
+      };
+    }
+    if ($('btnClearFileLog')) {
+      $('btnClearFileLog').onclick = async () => {
+        try {
+          await apiPost('/api/logs/clear', {});
+          const st = await apiGet('/api/state');
+          applyServerState(st, { autoPrim: false });
+          showToast('Cleared persistent Studio file log', 'ok');
+        } catch (err) {
+          showToast(err.message, 'err');
+        }
+      };
+    }
 
     $('resSelect').onchange = () => {
       const sz = parseInt($('resSelect').value, 10);
@@ -2342,7 +2517,11 @@
     $('tabVp2d').onclick = () => setViewportMode('2d');
     $('channelSelect').onchange = (e) => {
       state.channel = e.target.value;
-      updateViewportTextures();
+      if (state.channel === 'selected') {
+        runEvaluate({ includeThumbsMode: 'none', includeQa: false });
+      } else {
+        updateViewportTextures();
+      }
     };
     $('primSelect').onchange = (e) => {
       gl3d.primitive = e.target.value;
@@ -2775,6 +2954,7 @@
     const loadMeshSample = async (sample) => {
       $('meshModal').classList.remove('open');
       try {
+        resetWorkspaceVisuals({ fullProjectReset: false });
         const st = await apiPost('/api/mesh/load', { sample });
         applyServerState(st, { autoPrim: true });
         await runEvaluate({ includeThumbs: true, includeQa: true });
@@ -2808,6 +2988,7 @@
       if (!f) return;
       $('meshModal').classList.remove('open');
       try {
+        resetWorkspaceVisuals({ fullProjectReset: false });
         const doc = JSON.parse(await f.text());
         const st = await apiPost('/api/mesh/load', { bbmodel: doc });
         applyServerState(st, { autoPrim: true });
@@ -2816,6 +2997,7 @@
       } catch (err) {
         showToast(`Invalid .bbmodel: ${err.message}`, 'err');
       }
+      e.target.value = '';
     };
 
     // Multi-Engine Export Modal

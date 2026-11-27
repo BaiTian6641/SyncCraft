@@ -206,6 +206,67 @@ def test_studio_v15_http_api_end_to_end() -> None:
         assert br["ok"] and br["changed"] is True and br["rev"] >= 1
         assert "albedo" in br["channels"]
         assert hdrs.get("Access-Control-Allow-Origin") == "*"
+
+        # 7. Persistent Studio File Log API
+        lg, _ = _http_json(f"{base}/api/logs/file?tail=50")
+        assert lg["ok"] and lg["path"].endswith("synccraft_studio.log") and lg["line_count"] >= 1
+        hl, _ = _http_json(f"{base}/api/health")
+        assert hl["ok"] and hl["engine_version"] == "15.1" and hl["workspace_epoch"] >= 1
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_v15_1_loading_integrity_epoch_and_cache_isolation(tmp_path: Path) -> None:
+    """Verify strict 1-to-1 project loading, zero cross-project mesh/texture bleed, monotonic workspace_epoch & mesh bake cache parity."""
+    from synccraft.texgraph.mesh_baker import bake_bbmodel_maps, clear_mesh_bake_cache
+    from synccraft.texgraph.studio_server import StudioSession, build_sample_monolith_bbmodel
+
+    # 1. Mesh bake SHA-256 fingerprint + LRU & Disk .npz cache parity
+    bb = build_sample_monolith_bbmodel()
+    clear_mesh_bake_cache(clear_disk=False)
+    mc1 = bake_bbmodel_maps(bb, use_cache=True)
+    assert len(mc1.content_fingerprint) == 32
+    mc2 = bake_bbmodel_maps(bb, use_cache=True)
+    assert mc2.bake_cache_hit is True and mc2.content_fingerprint == mc1.content_fingerprint
+    assert np.array_equal(mc1.baked_ao, mc2.baked_ao) and np.array_equal(mc1.baked_shadow, mc2.baked_shadow)
+
+    # 2. Strict 1-to-1 loading: standalone .texdsl MUST detach previous project's 3D .bbmodel unless keep_mesh=True!
+    sess = StudioSession(initial_sample="brass_crystal_workflow_3d", size=32)
+    ep0 = sess._workspace_epoch
+    assert sess.mesh_ctx is not None and sess.bbmodel_doc is not None
+
+    dsl_code = """
+@texture { name: "pure_2d_block" size: [32, 32] seed: 7 tileable: true }
+@pass main "Main" {
+  n = perlin(scale=4.0, seed=7)
+  c = multi_stop_gradient(n, stops=["#111827", "#38BDF8", "#F8FAFC"])
+}
+@output albedo(c)
+"""
+    st_2d = sess.load_project({"kind": "texdsl", "code": dsl_code, "filename": "pure_2d_block.texdsl"})
+    assert st_2d["workspace_epoch"] > ep0
+    assert st_2d["has_mesh"] is False and st_2d["mesh"] is None
+    assert st_2d["recipe"]["width"] == 32 and st_2d["recipe"]["height"] == 32
+    ev_2d = sess.evaluate({"phase": 0.0, "include_qa": False})
+    assert ev_2d["workspace_epoch"] == st_2d["workspace_epoch"]
+    assert ev_2d["width"] == 32 and ev_2d["height"] == 32
+
+    # 3. Standalone .bbmodel 1-to-1 project load preserves exact UV dims & builds clean starter graph
+    st_bb = sess.load_project({"kind": "bbmodel_project", "bbmodel": bb, "filename": "monolith.bbmodel"})
+    assert st_bb["workspace_epoch"] > st_2d["workspace_epoch"]
+    assert st_bb["has_mesh"] is True and st_bb["mesh_fingerprint"] == mc1.content_fingerprint
+    assert st_bb["recipe"]["width"] == mc1.width and st_bb["recipe"]["height"] == mc1.height
+
+    # 4. Disk file 1-to-1 sibling auto-pairing (.texdsl + sibling .bbmodel)
+    (tmp_path / "paired.bbmodel").write_text(json.dumps(bb), encoding="utf-8")
+    (tmp_path / "paired.texdsl").write_text(dsl_code, encoding="utf-8")
+    st_disk = sess.load_project({"kind": "disk_file", "path": str(tmp_path / "paired.texdsl")})
+    assert st_disk["has_mesh"] is True and st_disk["mesh_fingerprint"] == mc1.content_fingerprint
+    assert st_disk["workspace_epoch"] > st_bb["workspace_epoch"]
+
+    # 5. Evaluating twice with same state hits channel PNG cache & increments monotonic eval_seq
+    ev_a = sess.evaluate({"phase": 0.0, "include_qa": False})
+    ev_b = sess.evaluate({"phase": 0.0, "include_qa": False})
+    assert ev_b["eval_seq"] > ev_a["eval_seq"]
+    assert ev_a["channels"]["albedo"] == ev_b["channels"]["albedo"]

@@ -17,10 +17,13 @@ from __future__ import annotations
 
 import base64
 import copy
+from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import io
 import json
+import logging
+from logging.handlers import RotatingFileHandler
 import math
 import mimetypes
 from pathlib import Path
@@ -36,7 +39,7 @@ from PIL import Image
 from synccraft import __version__
 from .ai_copilot import BUILT_IN_STYLE_PRESETS, apply_surgical_patch, diagnose_asset, extract_style_dna
 from .core import GraphCycleError, NodeSpec, TexGraph, _parse_ref
-from .mesh_baker import _FACE_BASIS, _euler_xyz_mat, MeshBakeContext, bake_bbmodel_maps
+from .mesh_baker import _FACE_BASIS, _euler_xyz_mat, MeshBakeContext, bake_bbmodel_maps, mesh_bake_cache_stats
 from .node_previews import generate_anim_preview_sheet, generate_node_anim_preview, generate_node_preview_catalog
 from .pbr import BAKE_LIGHTING_PRESETS as BAKE_PRESETS, bake_pbr_to_albedo
 from .pipeline import MATERIAL_BUS_PORTS, SUBGRAPH_REGISTRY
@@ -58,6 +61,57 @@ from .syncproj import DEFAULT_CHRONO_VARIANTS, SyncProject, apply_variant_to_gra
 from .texdsl import TexDslError as TexDSLParseError, export_texdsl, parse_texdsl
 
 _STUDIO_UI_DIR = Path(__file__).resolve().parent / "studio_ui"
+_STUDIO_LOG_LOCK = threading.Lock()
+_STUDIO_FILE_LOGGER: logging.Logger | None = None
+_STUDIO_LOG_PATH: Path | None = None
+
+
+def get_studio_log_path() -> Path:
+    """Return the persistent rotating Studio diagnostic log path (`~/.synccraft/logs/synccraft_studio.log`)."""
+    global _STUDIO_LOG_PATH
+    if _STUDIO_LOG_PATH is None:
+        log_dir = Path.home() / ".synccraft" / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        _STUDIO_LOG_PATH = log_dir / "synccraft_studio.log"
+    return _STUDIO_LOG_PATH
+
+
+def _get_studio_file_logger() -> logging.Logger:
+    global _STUDIO_FILE_LOGGER
+    with _STUDIO_LOG_LOCK:
+        if _STUDIO_FILE_LOGGER is not None:
+            return _STUDIO_FILE_LOGGER
+        logger = logging.getLogger("synccraft.studio.file")
+        logger.setLevel(logging.INFO)
+        logger.propagate = False
+        if not logger.handlers:
+            try:
+                lp = get_studio_log_path()
+                handler = RotatingFileHandler(
+                    str(lp),
+                    maxBytes=2 * 1024 * 1024,
+                    backupCount=3,
+                    encoding="utf-8",
+                )
+                handler.setFormatter(logging.Formatter("%(message)s"))
+                logger.addHandler(handler)
+            except Exception:
+                logger.addHandler(logging.NullHandler())
+        _STUDIO_FILE_LOGGER = logger
+        return logger
+
+
+def _write_studio_file_log(level: str, event: str, **fields: Any) -> None:
+    """Write a structured ISO-8601 line to the persistent rotating Studio file log."""
+    try:
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+        rec = {"ts": ts, "level": str(level).upper(), "event": str(event)}
+        for k, v in fields.items():
+            if v is not None:
+                rec[k] = v
+        _get_studio_file_logger().info(json.dumps(rec, ensure_ascii=False, default=str))
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -500,26 +554,31 @@ def build_studio_sample(sample_id: str, *, size: int = 64) -> tuple[TexGraph, di
 
     if sample_id == "kaelith_dragonborn_3d":
         found = _find_kaelith_dragonborn_paths()
-        if found is not None:
-            bb_path, dsl_path = found
-            bb_doc = json.loads(bb_path.read_text(encoding="utf-8"))
-            mc = bake_bbmodel_maps(bb_doc)
-            g = parse_texdsl(dsl_path.read_text(encoding="utf-8"), mesh_context=mc)
-            g.domain = "entity"
-            g.auto_layout(col_spacing=290.0, row_spacing=195.0)
-            return g, bb_doc
-        return build_studio_sample("monolith_v10_3d", size=size)
+        if found is None:
+            raise FileNotFoundError(
+                "Could not locate kaelith_chrono_dragonborn.bbmodel & .texdsl in workspace showcase folders"
+            )
+        bb_path, dsl_path = found
+        bb_doc = json.loads(bb_path.read_text(encoding="utf-8"))
+        mc = bake_bbmodel_maps(bb_doc)
+        g = parse_texdsl(dsl_path.read_text(encoding="utf-8"), mesh_context=mc)
+        g.domain = "entity"
+        g.auto_layout(col_spacing=290.0, row_spacing=195.0)
+        return g, bb_doc
 
     if sample_id == "ironjaw_orc_3d":
         found = _find_orc_warlord_paths()
-        if found is not None:
-            bb_path, dsl_path = found
-            bb_doc = json.loads(bb_path.read_text(encoding="utf-8"))
-            mc = bake_bbmodel_maps(bb_doc)
-            g = parse_texdsl(dsl_path.read_text(encoding="utf-8"), mesh_context=mc)
-            g.auto_layout(col_spacing=290.0, row_spacing=205.0)
-            return g, bb_doc
-        return build_studio_sample("monolith_v10_3d", size=size)
+        if found is None:
+            raise FileNotFoundError(
+                "Could not locate ironjaw_orc_warlord.bbmodel & .texdsl in workspace showcase folders"
+            )
+        bb_path, dsl_path = found
+        bb_doc = json.loads(bb_path.read_text(encoding="utf-8"))
+        mc = bake_bbmodel_maps(bb_doc)
+        g = parse_texdsl(dsl_path.read_text(encoding="utf-8"), mesh_context=mc)
+        g.domain = "entity"
+        g.auto_layout(col_spacing=290.0, row_spacing=205.0)
+        return g, bb_doc
 
     if sample_id == "arcane_ember_vfx":
         g = PRESET_REGISTRY["arcane_ember_vfx"](size=size)
@@ -602,8 +661,12 @@ class StudioSession:
         self._undo_stack: list[dict[str, Any]] = []
         self._redo_stack: list[dict[str, Any]] = []
         self._thumb_cache: dict[str, str] = {}
+        self._mesh_diag_cache: dict[str, dict[str, str]] = {}
+        self._channel_png_cache: dict[str, dict[str, str]] = {}
         self._last_eval: dict[str, Any] = {}
         self._event_log: list[dict[str, Any]] = []
+        self._workspace_epoch: int = 0
+        self._eval_seq: int = 0
         self.artist_overrides: dict[str, Any] = {}
         self.active_variant: str = "chronos_prime"
         self.active_source: str = f"sample:{initial_sample}"
@@ -616,7 +679,7 @@ class StudioSession:
         g, bb = build_studio_sample(initial_sample, size=size)
         self._set_workspace(g, bb, source=self.active_source, clear_history=True)
 
-    def _log(self, level: str, msg: str) -> None:
+    def _log(self, level: str, msg: str, **meta: Any) -> None:
         self._event_log.append(
             {
                 "ts": round(time.time(), 2),
@@ -624,8 +687,9 @@ class StudioSession:
                 "message": msg,
             }
         )
-        if len(self._event_log) > 120:
-            self._event_log = self._event_log[-120:]
+        if len(self._event_log) > 150:
+            self._event_log = self._event_log[-150:]
+        _write_studio_file_log(level, msg, epoch=self._workspace_epoch, source=self.active_source, **meta)
 
     def _set_workspace(
         self,
@@ -635,17 +699,24 @@ class StudioSession:
         source: str,
         clear_history: bool = False,
     ) -> None:
+        t0 = time.perf_counter()
+        self._workspace_epoch += 1
         self.graph = graph
         self.active_source = source
+        bake_hit = False
+        bake_ms = 0.0
         if bb_doc is not None:
             self.bbmodel_doc = bb_doc
             self.mesh_ctx = graph.mesh_context or bake_bbmodel_maps(bb_doc)
+            bake_hit = bool(getattr(self.mesh_ctx, "bake_cache_hit", False))
+            bake_ms = float(getattr(self.mesh_ctx, "bake_ms", 0.0))
             self.graph.attach_mesh(self.mesh_ctx)
             self.webgl_mesh = extract_bbmodel_webgl_mesh(bb_doc)
         else:
             self.bbmodel_doc = None
             self.mesh_ctx = None
             self.webgl_mesh = None
+            self.graph.mesh_context = None
         self._ensure_positions()
         if clear_history:
             self._undo_stack.clear()
@@ -653,8 +724,28 @@ class StudioSession:
             self.artist_overrides.clear()
             self.active_variant = "chronos_prime"
             self._group_stack.clear()
+        self.graph._content_cache.clear()
+        self.graph._static_cache.clear()
         self._thumb_cache.clear()
-        self._log("info", f"Loaded workspace '{graph.name}' ({len(graph.nodes)} nodes, {graph.width}x{graph.height})")
+        self._channel_png_cache.clear()
+        self._last_eval = {}
+        load_ms = round((time.perf_counter() - t0) * 1000.0, 2)
+        mesh_note = (
+            f", mesh={self.mesh_ctx.width}x{self.mesh_ctx.height} "
+            f"{'CACHE' if bake_hit else f'baked {bake_ms:.0f}ms'}"
+            if self.mesh_ctx is not None
+            else ", 2D/primitive"
+        )
+        self._log(
+            "info",
+            f"Loaded workspace '{graph.name}' (epoch={self._workspace_epoch}, {len(graph.nodes)} nodes, {graph.width}x{graph.height}{mesh_note}) in {load_ms:.1f}ms",
+            graph=graph.name,
+            nodes=len(graph.nodes),
+            dims=f"{graph.width}x{graph.height}",
+            mesh_fp=getattr(self.mesh_ctx, "content_fingerprint", None) if self.mesh_ctx else None,
+            mesh_cache_hit=bake_hit,
+            load_ms=load_ms,
+        )
 
     def _ensure_positions(self) -> None:
         missing = [nid for nid, sp in self.graph.nodes.items() if sp.pos is None]
@@ -715,6 +806,7 @@ class StudioSession:
             except Exception as exc:
                 dsl_text = f"// TexDSL export note: {exc}\n"
             return {
+                "workspace_epoch": self._workspace_epoch,
                 "source": self.active_source,
                 "recipe": self.graph.to_recipe(),
                 "texdsl": dsl_text,
@@ -724,6 +816,7 @@ class StudioSession:
                 "artist_overrides": copy.deepcopy(self.artist_overrides),
                 "active_variant": self.active_variant,
                 "has_mesh": self.mesh_ctx is not None,
+                "mesh_fingerprint": getattr(self.mesh_ctx, "content_fingerprint", None) if self.mesh_ctx is not None else None,
                 "mesh": self.webgl_mesh,
                 "mesh_parts": (
                     {
@@ -748,7 +841,8 @@ class StudioSession:
                     if self.mesh_ctx is not None
                     else None
                 ),
-                "log": self._event_log[-30:],
+                "log": self._event_log[-40:],
+                "log_file_path": str(get_studio_log_path()),
                 "breadcrumbs": (
                     [{"level": 0, "title": self._group_stack[0]["parent_title"]}]
                     + [{"level": i + 1, "title": fr["title"]} for i, fr in enumerate(self._group_stack)]
@@ -759,10 +853,61 @@ class StudioSession:
                 "bridge": {"rev": self._bridge_rev, "clients": self._bridge_clients},
             }
 
+    @staticmethod
+    def _build_bbmodel_starter_graph(bb_doc: dict[str, Any], mc: MeshBakeContext) -> TexGraph:
+        """Build a clean 1-to-1 starter TexGraph matching a loaded `.bbmodel`'s exact UV atlas & geometry."""
+        name = str(bb_doc.get("name") or "bbmodel_asset").strip() or "bbmodel_asset"
+        g = TexGraph(mc.width, mc.height, tileable=False, seed=42, name=name, mesh_context=mc)
+        g.domain = "entity"
+        base_id = g.add(
+            "region_base_fill",
+            id="base_fill",
+            stops=["#2C3347", "#4F5D7A", "#8A9BB8", "#D7E0F0"],
+            top_boost=0.16,
+            bottom_darken=0.18,
+            side_grad=0.18,
+            roughness_base=0.52,
+            metallic_base=0.08,
+            seed=42,
+        )
+        tex_id = g.add(
+            "region_restrained_noise",
+            id="detail_noise",
+            inputs={"base": base_id},
+            pattern="organic_clump",
+            scale=1.0,
+            amplitude=0.11,
+            edge_restraint=0.88,
+            min_island_px=4.0,
+            seed=42,
+        )
+        bev_id = g.add(
+            "region_bevel_and_ao",
+            id="bevel_ao",
+            inputs={"base": tex_id},
+            highlight_strength=0.18,
+            shadow_strength=0.22,
+            ao_strength=0.28,
+            seed=42,
+        )
+        sh_id = g.precompute_shadow_pbr(
+            bev_id,
+            shadow_strength=0.52,
+            bent_normal_strength=0.40,
+            thickness_sss_strength=0.30,
+            bake_into_albedo=0.32,
+            id="shadow_pbr",
+        )
+        g.set_output_material(sh_id, normal_strength=2.4)
+        g.auto_layout(col_spacing=290.0, row_spacing=195.0)
+        return g
+
     def load_project(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Strict 1-to-1 project loader supporting samples, presets, .texdsl, .texgraph.json, .syncproj, .bbmodel & disk files."""
         with self._lock:
             kind = str(payload.get("kind", "sample"))
             size = max(16, min(256, int(payload.get("size", 64))))
+            keep_mesh = bool(payload.get("keep_mesh", False))
             if kind == "sample":
                 sid = str(payload.get("id", "monolith_v10_3d"))
                 g, bb = build_studio_sample(sid, size=size)
@@ -775,35 +920,120 @@ class StudioSession:
                 self._set_workspace(g, None, source=f"preset:{pid}", clear_history=True)
             elif kind == "texdsl":
                 code = str(payload.get("code", ""))
-                g = parse_texdsl(code, mesh_context=self.mesh_ctx)
-                self._set_workspace(g, self.bbmodel_doc, source="texdsl:custom", clear_history=True)
+                bb_doc = payload.get("bbmodel") if isinstance(payload.get("bbmodel"), dict) else (self.bbmodel_doc if keep_mesh else None)
+                mc = bake_bbmodel_maps(bb_doc) if bb_doc is not None else None
+                g = parse_texdsl(code, mesh_context=mc)
+                if mc is not None:
+                    g.domain = "entity"
+                fname = str(payload.get("filename") or "custom.texdsl")
+                self._set_workspace(g, bb_doc, source=f"file:{fname}", clear_history=True)
             elif kind == "recipe":
                 rec = payload.get("recipe")
                 if not isinstance(rec, dict):
                     raise ValueError("Expected 'recipe' JSON object")
-                g = TexGraph.from_recipe(rec, mesh_context=self.mesh_ctx)
-                self._set_workspace(g, self.bbmodel_doc, source="recipe:custom", clear_history=True)
+                bb_doc = payload.get("bbmodel") if isinstance(payload.get("bbmodel"), dict) else (self.bbmodel_doc if keep_mesh else None)
+                mc = bake_bbmodel_maps(bb_doc) if bb_doc is not None else None
+                g = TexGraph.from_recipe(rec, mesh_context=mc)
+                fname = str(payload.get("filename") or f"{g.name}.texgraph.json")
+                self._set_workspace(g, bb_doc, source=f"file:{fname}", clear_history=True)
+            elif kind == "bbmodel_project":
+                bb_doc = payload.get("bbmodel")
+                if not isinstance(bb_doc, dict):
+                    raise ValueError("Expected 'bbmodel' JSON object")
+                mc = bake_bbmodel_maps(bb_doc)
+                g = self._build_bbmodel_starter_graph(bb_doc, mc)
+                fname = str(payload.get("filename") or f"{g.name}.bbmodel")
+                self._set_workspace(g, bb_doc, source=f"bbmodel:{fname}", clear_history=True)
+            elif kind == "syncproj":
+                sp_doc = payload.get("syncproj")
+                if not isinstance(sp_doc, dict):
+                    raise ValueError("Expected 'syncproj' JSON object")
+                base_dir = Path(str(payload.get("base_dir") or ".")).expanduser()
+                bb_doc = payload.get("bbmodel") if isinstance(payload.get("bbmodel"), dict) else None
+                if bb_doc is None and sp_doc.get("bbmodel_path"):
+                    cand = (base_dir / str(sp_doc["bbmodel_path"])).expanduser()
+                    if cand.is_file():
+                        bb_doc = json.loads(cand.read_text(encoding="utf-8"))
+                mc = bake_bbmodel_maps(bb_doc) if bb_doc is not None else None
+                g = None
+                if isinstance(payload.get("texdsl_code"), str) and payload["texdsl_code"].strip():
+                    g = parse_texdsl(payload["texdsl_code"], mesh_context=mc)
+                elif sp_doc.get("texdsl_path"):
+                    cand_dsl = (base_dir / str(sp_doc["texdsl_path"])).expanduser()
+                    if cand_dsl.is_file():
+                        g = parse_texdsl(cand_dsl.read_text(encoding="utf-8"), mesh_context=mc)
+                if g is None and isinstance(sp_doc.get("recipe"), dict):
+                    g = TexGraph.from_recipe(sp_doc["recipe"], mesh_context=mc)
+                if g is None and bb_doc is not None and mc is not None:
+                    g = self._build_bbmodel_starter_graph(bb_doc, mc)
+                if g is None:
+                    raise ValueError(
+                        "SyncProject manifest references external .texdsl/.bbmodel files not found on disk; provide sibling files or open from disk path"
+                    )
+                if sp_doc.get("name"):
+                    g.name = str(sp_doc["name"])
+                self._set_workspace(g, bb_doc, source=f"syncproj:{g.name}", clear_history=True)
+                if isinstance(sp_doc.get("artist_overrides"), dict):
+                    self.artist_overrides = copy.deepcopy(sp_doc["artist_overrides"])
+            elif kind == "disk_file":
+                fpath = Path(str(payload.get("path") or "")).expanduser().resolve()
+                if not fpath.is_file():
+                    raise FileNotFoundError(f"Project file not found: {fpath}")
+                suf = fpath.suffix.lower()
+                if suf == ".syncproj":
+                    sp_doc = json.loads(fpath.read_text(encoding="utf-8"))
+                    return self.load_project({"kind": "syncproj", "syncproj": sp_doc, "base_dir": str(fpath.parent)})
+                if suf == ".bbmodel":
+                    bb_doc = json.loads(fpath.read_text(encoding="utf-8"))
+                    sib_dsl = fpath.with_suffix(".texdsl")
+                    if sib_dsl.is_file():
+                        return self.load_project(
+                            {"kind": "texdsl", "code": sib_dsl.read_text(encoding="utf-8"), "bbmodel": bb_doc, "filename": fpath.name}
+                        )
+                    return self.load_project({"kind": "bbmodel_project", "bbmodel": bb_doc, "filename": fpath.name})
+                if suf == ".texdsl":
+                    sib_bb = fpath.with_suffix(".bbmodel")
+                    bb_doc = json.loads(sib_bb.read_text(encoding="utf-8")) if sib_bb.is_file() else None
+                    return self.load_project(
+                        {"kind": "texdsl", "code": fpath.read_text(encoding="utf-8"), "bbmodel": bb_doc, "filename": fpath.name}
+                    )
+                if suf == ".json":
+                    doc = json.loads(fpath.read_text(encoding="utf-8"))
+                    if doc.get("schema", "").startswith("synccraft.project"):
+                        return self.load_project({"kind": "syncproj", "syncproj": doc, "base_dir": str(fpath.parent)})
+                    sib_bb = fpath.parent / f"{fpath.stem.replace('.texgraph', '')}.bbmodel"
+                    bb_doc = json.loads(sib_bb.read_text(encoding="utf-8")) if sib_bb.is_file() else None
+                    return self.load_project({"kind": "recipe", "recipe": doc, "bbmodel": bb_doc, "filename": fpath.name})
+                raise ValueError(f"Unsupported project file extension: {suf!r}")
             else:
                 raise ValueError(f"Unsupported load kind: {kind!r}")
             return self.get_state_payload()
 
     def load_mesh(self, payload: dict[str, Any]) -> dict[str, Any]:
         with self._lock:
+            self._workspace_epoch += 1
             preset_name = payload.get("sample")
             if preset_name == "kaelith_dragonborn":
                 found = _find_kaelith_dragonborn_paths()
-                bb_doc = json.loads(found[0].read_text(encoding="utf-8")) if found else build_sample_monolith_bbmodel()
+                if found is None:
+                    raise FileNotFoundError("Could not locate kaelith_chrono_dragonborn.bbmodel in workspace")
+                bb_doc = json.loads(found[0].read_text(encoding="utf-8"))
             elif preset_name == "temple_monolith":
                 bb_doc = build_sample_monolith_bbmodel()
             elif preset_name == "ironjaw_orc":
                 found = _find_orc_warlord_paths()
-                bb_doc = json.loads(found[0].read_text(encoding="utf-8")) if found else build_sample_monolith_bbmodel()
+                if found is None:
+                    raise FileNotFoundError("Could not locate ironjaw_orc_warlord.bbmodel in workspace")
+                bb_doc = json.loads(found[0].read_text(encoding="utf-8"))
             elif preset_name == "none":
                 self.bbmodel_doc = None
                 self.mesh_ctx = None
                 self.webgl_mesh = None
                 self.graph.mesh_context = None
                 self.graph._content_cache.clear()
+                self.graph._static_cache.clear()
+                self._thumb_cache.clear()
+                self._channel_png_cache.clear()
                 self._log("info", "Detached 3D .bbmodel mesh (using standard primitive preview)")
                 return self.get_state_payload()
             else:
@@ -817,10 +1047,15 @@ class StudioSession:
             self.webgl_mesh = extract_bbmodel_webgl_mesh(bb_doc)
             self.graph.attach_mesh(mc)
             self.graph._content_cache.clear()
+            self.graph._static_cache.clear()
             self._thumb_cache.clear()
+            self._channel_png_cache.clear()
             self._log(
                 "info",
-                f"Baked 3D .bbmodel '{bb_doc.get('name', 'mesh')}' ({mc.width}x{mc.height}, {len(mc.uv_seam_src_yx)} UV seam pairs)",
+                f"Baked 3D .bbmodel '{bb_doc.get('name', 'mesh')}' ({mc.width}x{mc.height}, {len(mc.uv_seam_src_yx)} UV seam pairs, {'CACHE' if mc.bake_cache_hit else f'{mc.bake_ms:.0f}ms'})",
+                mesh_fp=mc.content_fingerprint,
+                mesh_cache_hit=mc.bake_cache_hit,
+                bake_ms=mc.bake_ms,
             )
             return self.get_state_payload()
 
@@ -1161,6 +1396,8 @@ class StudioSession:
                 sub_rec["height"] = g.height
                 sub_rec["tileable"] = g.tileable
                 sub_g = TexGraph.from_recipe(sub_rec, mesh_context=self.mesh_ctx)
+                self._workspace_epoch += 1
+                self._channel_png_cache.clear()
                 self.graph = sub_g
                 self._ensure_positions()
                 self._log("info", f"Entered Compound Subgraph '{self._group_stack[-1]['title']}'")
@@ -1169,6 +1406,8 @@ class StudioSession:
             if action == "exit_group":
                 if not self._group_stack:
                     return self.get_state_payload()
+                self._workspace_epoch += 1
+                self._channel_png_cache.clear()
                 target_level = int(payload.get("level", len(self._group_stack) - 1))
                 target_level = max(0, min(len(self._group_stack) - 1, target_level))
                 while len(self._group_stack) > target_level:
@@ -1402,10 +1641,15 @@ class StudioSession:
             include_qa = bool(payload.get("include_qa", True))
 
             t_start = time.perf_counter()
+            self._eval_seq += 1
+            cur_epoch = self._workspace_epoch
+            cur_eval_seq = self._eval_seq
             val = self.graph.validate_graph()
             if not val.ok:
                 return {
                     "ok": False,
+                    "workspace_epoch": cur_epoch,
+                    "eval_seq": cur_eval_seq,
                     "validation": val.to_dict(),
                     "error": "; ".join(val.errors),
                 }
@@ -1436,7 +1680,7 @@ class StudioSession:
                     arr = _arr_to_u8_rgba(ev.intermediates[nid])
                     node_shapes[nid] = [int(arr.shape[1]), int(arr.shape[0])]
                     ck = self.graph._content_cache.get(nid)
-                    cache_key = f"{nid}:{ck[0]}" if ck is not None else f"{nid}:{phase:.4f}"
+                    cache_key = f"{cur_epoch}:{nid}:{ck[0]}" if ck is not None else f"{cur_epoch}:{nid}:{phase:.4f}"
                     if cache_key not in self._thumb_cache:
                         self._thumb_cache[cache_key] = _u8_to_data_url(arr, max_dim=128, min_dim=64)
                         if len(self._thumb_cache) > 512:
@@ -1444,65 +1688,85 @@ class StudioSession:
                                 self._thumb_cache.pop(k_old, None)
                     thumbs[nid] = self._thumb_cache[cache_key]
 
-            # Encode all 12+ PBR channels & diagnostic maps
-            channels: dict[str, str] = {}
+            # Encode all 12+ PBR channels with epoch + output-hash caching (skips redundant 16x PNG encode!)
             out_u8 = _arr_to_u8_rgba(ev.output)
-            channels["albedo"] = _u8_to_data_url(out_u8, max_dim=512)
-            if ev.pbr_preview is not None:
-                channels["pbr_lit"] = _u8_to_data_url(_arr_to_u8_rgba(ev.pbr_preview), max_dim=512)
+            out_base_id = _parse_ref(self.graph.output_material_node or self.graph.output_node or self.graph.node_order[-1])[0]
+            out_ck = self.graph._content_cache.get(out_base_id)
+            em_ck = self.graph._content_cache.get(_parse_ref(self.graph.emissive_node)[0]) if self.graph.emissive_node else None
+            out_tag = out_ck[0] if out_ck else f"{phase:.4f}"
+            em_tag = em_ck[0] if em_ck else ""
+            chan_cache_key = f"{cur_epoch}:{out_tag}:{em_tag}:{lighting_preset}:{light_az:.1f}:{light_el:.1f}"
+            cached_ch = self._channel_png_cache.get(chan_cache_key)
+            if cached_ch is not None:
+                channels = dict(cached_ch)
             else:
-                channels["pbr_lit"] = channels["albedo"]
+                channels = {}
+                channels["albedo"] = _u8_to_data_url(out_u8, max_dim=512)
+                if ev.pbr_preview is not None:
+                    channels["pbr_lit"] = _u8_to_data_url(_arr_to_u8_rgba(ev.pbr_preview), max_dim=512)
+                else:
+                    channels["pbr_lit"] = channels["albedo"]
 
-            if ev.pbr_maps is not None:
-                # Baked Studio Albedo (incorporates 3D ray-traced shadow + bent normal + thickness!)
-                baked_u8 = bake_pbr_to_albedo(
-                    ev.pbr_maps,
-                    preset=lighting_preset,
-                    key_az_deg=light_az,
-                    key_el_deg=light_el,
-                    emissive_rgba=ev.emissive,
-                )
-                channels["baked"] = _u8_to_data_url(_arr_to_u8_rgba(baked_u8), max_dim=512)
-                for key_src, key_dst in (
-                    ("normal_rgb", "normal"),
-                    ("height_u8", "height"),
-                    ("roughness_u8", "roughness"),
-                    ("metallic_u8", "metallic"),
-                    ("ao_u8", "ao"),
-                    ("shadow_u8", "shadow"),
-                    ("bent_normal_u8", "bent_normal"),
-                    ("thickness_u8", "thickness"),
-                    ("orm_u8", "orm"),
-                    ("unity_maskmap", "maskmap"),
-                    ("labpbr_n", "labpbr_n"),
-                    ("labpbr_s", "labpbr_s"),
-                    ("bedrock_mer", "bedrock_mer"),
-                ):
-                    if key_src in ev.pbr_maps:
-                        channels[key_dst] = _u8_to_data_url(_arr_to_u8_rgba(ev.pbr_maps[key_src]), max_dim=512)
+                if ev.pbr_maps is not None:
+                    baked_u8 = bake_pbr_to_albedo(
+                        ev.pbr_maps,
+                        preset=lighting_preset,
+                        key_az_deg=light_az,
+                        key_el_deg=light_el,
+                        emissive_rgba=ev.emissive,
+                    )
+                    channels["baked"] = _u8_to_data_url(_arr_to_u8_rgba(baked_u8), max_dim=512)
+                    for key_src, key_dst in (
+                        ("normal_rgb", "normal"),
+                        ("height_u8", "height"),
+                        ("roughness_u8", "roughness"),
+                        ("metallic_u8", "metallic"),
+                        ("ao_u8", "ao"),
+                        ("shadow_u8", "shadow"),
+                        ("bent_normal_u8", "bent_normal"),
+                        ("thickness_u8", "thickness"),
+                        ("orm_u8", "orm"),
+                        ("unity_maskmap", "maskmap"),
+                        ("labpbr_n", "labpbr_n"),
+                        ("labpbr_s", "labpbr_s"),
+                        ("bedrock_mer", "bedrock_mer"),
+                    ):
+                        if key_src in ev.pbr_maps:
+                            channels[key_dst] = _u8_to_data_url(_arr_to_u8_rgba(ev.pbr_maps[key_src]), max_dim=512)
 
-            if ev.emissive is not None:
-                channels["emissive"] = _u8_to_data_url(_arr_to_u8_rgba(ev.emissive), max_dim=512)
-            else:
-                black = np.zeros((out_u8.shape[0], out_u8.shape[1], 4), dtype=np.uint8)
-                black[..., 3] = 255
-                channels["emissive"] = _u8_to_data_url(black, max_dim=256)
+                if ev.emissive is not None:
+                    channels["emissive"] = _u8_to_data_url(_arr_to_u8_rgba(ev.emissive), max_dim=512)
+                else:
+                    black = np.zeros((out_u8.shape[0], out_u8.shape[1], 4), dtype=np.uint8)
+                    black[..., 3] = 255
+                    channels["emissive"] = _u8_to_data_url(black, max_dim=256)
 
-            if self.mesh_ctx is not None:
-                mc = self.mesh_ctx
-                # Combined UV Seam (cyan) + Thinness (warm orange) diagnostic view!
-                diag = _scalar_to_heatmap_u8(mc.thickness, warm=True)
-                seam_m = mc.uv_seam_mask > 0.05
-                diag[seam_m, 0] = 40
-                diag[seam_m, 1] = 232
-                diag[seam_m, 2] = 255
-                diag[~mc.island_mask, :3] = 20
-                channels["uv_seams"] = _u8_to_data_url(diag, max_dim=512)
-                # Per-UV Island & Body-Part Region Map + Pixel Composer Inner Area Map!
-                channels["uv_regions"] = _u8_to_data_url(build_uv_region_overlay(mc), max_dim=512)
-                ia_u8 = _scalar_to_heatmap_u8(mc.island_inner_area, warm=False)
-                ia_u8[~mc.island_mask, :3] = 16
-                channels["inner_area"] = _u8_to_data_url(ia_u8, max_dim=512)
+                if self.mesh_ctx is not None:
+                    mc = self.mesh_ctx
+                    mfp = mc.content_fingerprint or f"{mc.width}x{mc.height}:{id(mc)}"
+                    diag_cached = self._mesh_diag_cache.get(mfp)
+                    if diag_cached is None:
+                        diag = _scalar_to_heatmap_u8(mc.thickness, warm=True)
+                        seam_m = mc.uv_seam_mask > 0.05
+                        diag[seam_m, 0] = 40
+                        diag[seam_m, 1] = 232
+                        diag[seam_m, 2] = 255
+                        diag[~mc.island_mask, :3] = 20
+                        ia_u8 = _scalar_to_heatmap_u8(mc.island_inner_area, warm=False)
+                        ia_u8[~mc.island_mask, :3] = 16
+                        diag_cached = {
+                            "uv_seams": _u8_to_data_url(diag, max_dim=512),
+                            "uv_regions": _u8_to_data_url(build_uv_region_overlay(mc), max_dim=512),
+                            "inner_area": _u8_to_data_url(ia_u8, max_dim=512),
+                        }
+                        if len(self._mesh_diag_cache) > 12:
+                            self._mesh_diag_cache.pop(next(iter(self._mesh_diag_cache)), None)
+                        self._mesh_diag_cache[mfp] = diag_cached
+                    channels.update(diag_cached)
+
+                if len(self._channel_png_cache) > 24:
+                    self._channel_png_cache.pop(next(iter(self._channel_png_cache)), None)
+                self._channel_png_cache[chan_cache_key] = dict(channels)
 
             # Optional pinned node preview
             selected_preview = None
@@ -1528,6 +1792,21 @@ class StudioSession:
 
             total_ms = round((time.perf_counter() - t_start) * 1000.0, 2)
             eval_ms = round(sum(ev.timings_ms.values()), 2)
+            _write_studio_file_log(
+                "info",
+                "evaluate",
+                epoch=cur_epoch,
+                eval_seq=cur_eval_seq,
+                graph=self.graph.name,
+                dims=f"{out_u8.shape[1]}x{out_u8.shape[0]}",
+                phase=round(phase, 4),
+                eval_ms=eval_ms,
+                total_ms=total_ms,
+                cache_hits=ev.cache_hits,
+                cache_misses=ev.cache_misses,
+                ch_cache_hit=cached_ch is not None,
+                qa=round(qa_dict["score"], 1) if isinstance(qa_dict, dict) and isinstance(qa_dict.get("score"), (int, float)) else None,
+            )
 
             # Broadcast live evaluated textures to any connected Blockbench 5 Live Link clients!
             with self._bridge_cond:
@@ -1535,6 +1814,7 @@ class StudioSession:
                 self._bridge_payload = {
                     "ok": True,
                     "rev": self._bridge_rev,
+                    "workspace_epoch": cur_epoch,
                     "graph_name": self.graph.name,
                     "width": int(out_u8.shape[1]),
                     "height": int(out_u8.shape[0]),
@@ -1549,6 +1829,8 @@ class StudioSession:
 
             return {
                 "ok": True,
+                "workspace_epoch": cur_epoch,
+                "eval_seq": cur_eval_seq,
                 "width": int(out_u8.shape[1]),
                 "height": int(out_u8.shape[0]),
                 "phase": round(phase, 4),
@@ -1889,6 +2171,7 @@ class StudioSession:
 
             return {
                 "ok": True,
+                "workspace_epoch": self._workspace_epoch,
                 "frames": n_frames,
                 "width": w_out,
                 "height": h_out,
@@ -2044,6 +2327,26 @@ class StudioSession:
         self._log("info", f"Encoded 360° Turntable GIF ({len(pil_frames)} frames @ {fps}fps)")
         return {"ok": True, "filename": f"{stem}_turntable.gif", "frame_count": len(pil_frames), "gif_data_url": gif_url}
 
+    def get_file_logs(self, *, tail: int = 200) -> dict[str, Any]:
+        lp = get_studio_log_path()
+        lines: list[str] = []
+        size_bytes = 0
+        if lp.is_file():
+            size_bytes = lp.stat().st_size
+            raw_lines = lp.read_text(encoding="utf-8", errors="replace").splitlines()
+            lines = raw_lines[-max(1, min(2000, int(tail))) :]
+        return {"ok": True, "path": str(lp), "size_bytes": size_bytes, "line_count": len(lines), "lines": lines}
+
+    def clear_file_logs(self) -> dict[str, Any]:
+        lp = get_studio_log_path()
+        try:
+            lp.write_text("", encoding="utf-8")
+        except Exception:
+            pass
+        self._event_log.clear()
+        self._log("info", "Cleared Studio file log")
+        return {"ok": True, "path": str(lp)}
+
     def get_bridge_latest(self, since_rev: int = -1) -> dict[str, Any]:
         with self._bridge_cond:
             if not self._bridge_payload or self._bridge_rev <= since_rev:
@@ -2120,12 +2423,31 @@ def create_studio_server(
                         "ok": True,
                         "app": "SyncCraft Studio",
                         "synccraft_version": __version__,
-                        "engine_version": "10.0",
+                        "engine_version": "15.1",
                         "schema_version": "4.0",
                         "node_count": len(NODE_REGISTRY),
                         "active_graph": sess.graph.name,
+                        "workspace_epoch": sess._workspace_epoch,
+                        "log_file": str(get_studio_log_path()),
+                        "mesh_cache": mesh_bake_cache_stats(),
                     }
                 )
+                return
+
+            if path == "/api/logs/file":
+                qs = urllib.parse.parse_qs(parsed.query)
+                tail = int((qs.get("tail") or ["200"])[0])
+                info = sess.get_file_logs(tail=tail)
+                if (qs.get("download") or ["0"])[0] == "1":
+                    body = ("\n".join(info["lines"]) + "\n").encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/plain; charset=utf-8")
+                    self.send_header("Content-Disposition", 'attachment; filename="synccraft_studio.log"')
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+                self._send_json(info)
                 return
 
             if path == "/api/schema":
@@ -2316,10 +2638,15 @@ def create_studio_server(
                 if path == "/api/export/turntable_gif":
                     self._send_json(sess.export_turntable_gif(body))
                     return
+                if path == "/api/logs/clear":
+                    self._send_json(sess.clear_file_logs())
+                    return
                 self._send_json({"error": f"Unknown API endpoint: {path}"}, status=404)
-            except (ValueError, KeyError, TypeError, TexDSLParseError, GraphCycleError) as exc:
+            except (ValueError, KeyError, TypeError, FileNotFoundError, TexDSLParseError, GraphCycleError) as exc:
+                _write_studio_file_log("error", f"POST {path} -> 400", error=type(exc).__name__, detail=str(exc))
                 self._send_json({"ok": False, "error": type(exc).__name__, "message": str(exc)}, status=400)
             except Exception as exc:  # pragma: no cover
+                _write_studio_file_log("error", f"POST {path} -> 500", error=type(exc).__name__, detail=str(exc))
                 self._send_json({"ok": False, "error": type(exc).__name__, "message": str(exc)}, status=500)
 
     server = ThreadingHTTPServer((host, int(port)), StudioHTTPHandler)

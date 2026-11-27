@@ -15,9 +15,15 @@ bevels, joint-crease cavities, directional lighting normals, and anatomical zone
 """
 from __future__ import annotations
 
+from collections import OrderedDict
 from dataclasses import dataclass, field
+import hashlib
+import json
 import math
+from pathlib import Path
 import re
+import threading
+import time
 from typing import Any
 
 import numpy as np
@@ -114,6 +120,10 @@ class MeshBakeContext:
     island_inner_area: np.ndarray = field(default_factory=lambda: np.ones((1, 1), dtype=np.float32))
     face_is_up: np.ndarray = field(default_factory=lambda: np.zeros((1, 1), dtype=np.float32))
     face_is_side: np.ndarray = field(default_factory=lambda: np.ones((1, 1), dtype=np.float32))
+    # TexGraph v15.1: Content-addressed SHA-256 geometry fingerprint & bake telemetry!
+    content_fingerprint: str = ""
+    bake_cache_hit: bool = False
+    bake_ms: float = 0.0
 
     def match_elements_mask(self, pattern: str) -> np.ndarray:
         """Return a float32 (H, W) mask matching elements whose bone/name OR mirrored short-name matches ``pattern``."""
@@ -257,6 +267,22 @@ def _obb_signed_distance(pts: np.ndarray, obb: dict[str, Any]) -> np.ndarray:
     return out_d + in_d
 
 
+def _obb_signed_distance_batch(
+    pts: np.ndarray,
+    centers: np.ndarray,
+    Rs: np.ndarray,
+    halfs: np.ndarray,
+) -> np.ndarray:
+    """Vectorized signed distance from (N, 3) world points to K OBBs simultaneously -> (N, K) float32."""
+    diff = pts[:, None, :] - centers[None, :, :]  # (N, K, 3)
+    local = np.einsum("nki,kij->nkj", diff, Rs)
+    q = np.abs(local) - halfs[None, :, :]
+    pos = np.maximum(q, 0.0)
+    out_d = np.sqrt(np.sum(pos * pos, axis=-1))
+    in_d = np.minimum(np.max(q, axis=-1), 0.0)
+    return out_d + in_d
+
+
 def _ray_obb_hits(
     origins: np.ndarray,
     ray_dir: np.ndarray,
@@ -292,6 +318,53 @@ def _ray_obb_hits(
     return valid & (t_exit >= t_enter) & (t_exit >= t_min)
 
 
+def _ray_obb_hits_batch(
+    origins: np.ndarray,
+    ray_dir: np.ndarray,
+    centers: np.ndarray,
+    Rs: np.ndarray,
+    RTs: np.ndarray,
+    halfs: np.ndarray,
+    *,
+    t_min: float = 0.12,
+    t_max: float = 180.0,
+) -> np.ndarray:
+    """Vectorized Kay-Kajiya slab Ray-vs-K-OBBs test for (N, 3) rays -> (N,) bool any-hit mask!"""
+    n_pts = origins.shape[0]
+    k_box = centers.shape[0]
+    if n_pts == 0 or k_box == 0:
+        return np.zeros(n_pts, dtype=bool)
+    diff = origins[:, None, :] - centers[None, :, :]  # (N, K, 3)
+    loc_o = np.einsum("nki,kij->nkj", diff, Rs)  # (N, K, 3)
+    loc_d = np.einsum("kij,j->ki", RTs, ray_dir)  # (K, 3)
+
+    t_enter = np.full((n_pts, k_box), float(t_min), dtype=np.float32)
+    t_exit = np.full((n_pts, k_box), float(t_max), dtype=np.float32)
+    valid = np.ones((n_pts, k_box), dtype=bool)
+    for ax in range(3):
+        da = loc_d[:, ax]  # (K,)
+        ha = halfs[:, ax]  # (K,)
+        oa = loc_o[:, :, ax]  # (N, K)
+        par = np.abs(da) < 1e-7
+        if np.any(par):
+            p_in = (oa >= -ha[None, :]) & (oa <= ha[None, :])
+            valid &= np.where(par[None, :], p_in, True)
+        safe_d = np.where(par, 1.0, da)
+        inv_d = (1.0 / safe_d).astype(np.float32)
+        t0 = (-ha[None, :] - oa) * inv_d[None, :]
+        t1 = (ha[None, :] - oa) * inv_d[None, :]
+        lo = np.minimum(t0, t1)
+        hi = np.maximum(t0, t1)
+        if np.any(par):
+            t_enter = np.where(par[None, :], t_enter, np.maximum(t_enter, lo))
+            t_exit = np.where(par[None, :], t_exit, np.minimum(t_exit, hi))
+        else:
+            t_enter = np.maximum(t_enter, lo)
+            t_exit = np.minimum(t_exit, hi)
+    hits_nk = valid & (t_exit >= t_enter) & (t_exit >= float(t_min))
+    return np.any(hits_nk, axis=1)
+
+
 def _solve_uv_edge_adjacency(
     islands: list[BakedIsland],
     world_pos: np.ndarray,
@@ -301,7 +374,7 @@ def _solve_uv_edge_adjacency(
     *,
     seam_tol: float = 0.85,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Solve 3D Geometric UV-Edge Adjacency across distinct UV islands via spatial grid hashing!
+    """Solve 3D Geometric UV-Edge Adjacency across distinct UV islands via vectorized spatial cell batching!
 
     Pairs every border texel `(y, x)` on island A with its nearest 3D-coincident border texel
     on a DIFFERENT island B (`north<->up`, `south<->east`, contacting parent/child boxes!).
@@ -325,7 +398,7 @@ def _solve_uv_edge_adjacency(
             continue
         if w <= 2 or h <= 2:
             yy, xx = np.mgrid[y0 : y0 + h, x0 : x0 + w]
-            ys, xs = yy.ravel(), xx.ravel()
+            ys, xs = yy.ravel().astype(np.int32), xx.ravel().astype(np.int32)
         else:
             top_x = np.arange(x0, x0 + w, dtype=np.int32)
             top_y = np.full(w, y0, dtype=np.int32)
@@ -354,47 +427,64 @@ def _solve_uv_edge_adjacency(
     bpos = world_pos[by, bx].astype(np.float32)  # (M, 3)
 
     cell = max(0.35, float(seam_tol))
-    tol2 = float(seam_tol) * float(seam_tol)
+    tol = max(1e-4, float(seam_tol))
+    tol2 = tol * tol
     cells = np.floor(bpos / cell).astype(np.int32)
-    grid: dict[tuple[int, int, int], list[int]] = {}
+    grid_lists: dict[tuple[int, int, int], list[int]] = {}
+    cx_col = cells[:, 0].tolist()
+    cy_col = cells[:, 1].tolist()
+    cz_col = cells[:, 2].tolist()
     for idx_b in range(by.size):
-        key = (int(cells[idx_b, 0]), int(cells[idx_b, 1]), int(cells[idx_b, 2]))
-        grid.setdefault(key, []).append(idx_b)
+        key = (cx_col[idx_b], cy_col[idx_b], cz_col[idx_b])
+        lst = grid_lists.get(key)
+        if lst is None:
+            grid_lists[key] = [idx_b]
+        else:
+            lst.append(idx_b)
+    grid_arr: dict[tuple[int, int, int], np.ndarray] = {k: np.asarray(v, dtype=np.int32) for k, v in grid_lists.items()}
 
-    src_pairs: list[tuple[int, int]] = []
-    dst_pairs: list[tuple[int, int]] = []
-    weights: list[float] = []
+    src_chunks: list[np.ndarray] = []
+    dst_chunks: list[np.ndarray] = []
+    w_chunks: list[np.ndarray] = []
+    offsets = [(ox, oy, oz) for ox in (-1, 0, 1) for oy in (-1, 0, 1) for oz in (-1, 0, 1)]
 
-    for idx_b in range(by.size):
-        cx, cy, cz = int(cells[idx_b, 0]), int(cells[idx_b, 1]), int(cells[idx_b, 2])
-        p0 = bpos[idx_b]
-        i0 = int(bi[idx_b])
-        best_j = -1
-        best_d2 = tol2
-        for ox in (-1, 0, 1):
-            for oy in (-1, 0, 1):
-                for oz in (-1, 0, 1):
-                    bucket = grid.get((cx + ox, cy + oy, cz + oz))
-                    if not bucket:
-                        continue
-                    for j in bucket:
-                        if int(bi[j]) == i0:
-                            continue
-                        dp = bpos[j] - p0
-                        d2 = float(dp[0] * dp[0] + dp[1] * dp[1] + dp[2] * dp[2])
-                        if d2 < best_d2:
-                            best_d2 = d2
-                            best_j = j
-        if best_j >= 0:
-            y_s, x_s = int(by[idx_b]), int(bx[idx_b])
-            y_d, x_d = int(by[best_j]), int(bx[best_j])
-            w_val = float(max(0.15, 1.0 - math.sqrt(best_d2) / max(1e-4, float(seam_tol))))
-            src_pairs.append((y_s, x_s))
-            dst_pairs.append((y_d, x_d))
-            weights.append(w_val)
-            seam_mask[y_s, x_s] = max(seam_mask[y_s, x_s], w_val)
+    for (cx, cy, cz), idx_a in grid_arr.items():
+        nb_parts = []
+        for ox, oy, oz in offsets:
+            b = grid_arr.get((cx + ox, cy + oy, cz + oz))
+            if b is not None:
+                nb_parts.append(b)
+        if not nb_parts:
+            continue
+        idx_b = nb_parts[0] if len(nb_parts) == 1 else np.concatenate(nb_parts)
+        ia = bi[idx_a]
+        ib = bi[idx_b]
+        if ia.size == 0 or ib.size == 0:
+            continue
+        # Fast exit if all points in this 3x3x3 neighborhood belong to a single island
+        if int(ia.min()) == int(ia.max()) and int(ib.min()) == int(ib.max()) and int(ia[0]) == int(ib[0]):
+            continue
+        pa = bpos[idx_a]  # (Na, 3)
+        pb = bpos[idx_b]  # (Nb, 3)
+        diff = pa[:, None, :] - pb[None, :, :]
+        d2 = np.sum(diff * diff, axis=-1)  # (Na, Nb)
+        d2[ia[:, None] == ib[None, :]] = 1e9
+        best_col = np.argmin(d2, axis=1)
+        best_d2 = d2[np.arange(idx_a.size), best_col]
+        hit = best_d2 < tol2
+        if not np.any(hit):
+            continue
+        hit_a = idx_a[hit]
+        hit_b = idx_b[best_col[hit]]
+        w_vals = np.maximum(0.15, 1.0 - np.sqrt(best_d2[hit]) / tol).astype(np.float32)
+        src_yx = np.stack((by[hit_a], bx[hit_a]), axis=-1)
+        dst_yx = np.stack((by[hit_b], bx[hit_b]), axis=-1)
+        src_chunks.append(src_yx)
+        dst_chunks.append(dst_yx)
+        w_chunks.append(w_vals)
+        np.maximum.at(seam_mask, (src_yx[:, 0], src_yx[:, 1]), w_vals)
 
-    if not src_pairs:
+    if not src_chunks:
         return (
             np.zeros((0, 2), dtype=np.int32),
             np.zeros((0, 2), dtype=np.int32),
@@ -402,11 +492,234 @@ def _solve_uv_edge_adjacency(
             seam_mask,
         )
     return (
-        np.asarray(src_pairs, dtype=np.int32),
-        np.asarray(dst_pairs, dtype=np.int32),
-        np.asarray(weights, dtype=np.float32),
+        np.concatenate(src_chunks, axis=0).astype(np.int32),
+        np.concatenate(dst_chunks, axis=0).astype(np.int32),
+        np.concatenate(w_chunks, axis=0).astype(np.float32),
         seam_mask,
     )
+
+
+# ---------------------------------------------------------------------------
+# Content-Addressed SHA-256 Mesh Bake Cache (In-Memory LRU + Disk `.npz`)
+# ---------------------------------------------------------------------------
+_MESH_BAKE_CACHE_VERSION = "mesh_bake_v15_1"
+_MESH_BAKE_LOCK = threading.RLock()
+_MESH_BAKE_LRU: "OrderedDict[str, MeshBakeContext]" = OrderedDict()
+_MESH_BAKE_LRU_MAX = 16
+
+
+def _mesh_cache_dir() -> Path:
+    return Path.home() / ".synccraft" / "cache" / "mesh_bakes"
+
+
+def clear_mesh_bake_cache(*, clear_disk: bool = False) -> None:
+    """Clear in-memory (and optionally disk) content-addressed mesh bake caches."""
+    with _MESH_BAKE_LOCK:
+        _MESH_BAKE_LRU.clear()
+        if clear_disk:
+            cdir = _mesh_cache_dir()
+            if cdir.is_dir():
+                for fp in cdir.glob("*.npz"):
+                    fp.unlink(missing_ok=True)
+                for fp in cdir.glob("*.meta.json"):
+                    fp.unlink(missing_ok=True)
+
+
+def mesh_bake_cache_stats() -> dict[str, Any]:
+    with _MESH_BAKE_LOCK:
+        cdir = _mesh_cache_dir()
+        disk_n = len(list(cdir.glob("*.npz"))) if cdir.is_dir() else 0
+        return {"memory_entries": len(_MESH_BAKE_LRU), "disk_entries": disk_n, "cache_dir": str(cdir)}
+
+
+def compute_bbmodel_fingerprint(
+    bbmodel_doc: dict[str, Any],
+    *,
+    padding: int,
+    ao_radius: float,
+    ao_samples: int,
+    zone_overrides: dict[str, str] | None,
+    shadow_light_dir: tuple[float, float, float],
+    bake_shadows: bool,
+    solve_uv_seams: bool,
+) -> str:
+    """Cryptographic SHA-256 geometry+UV+bake-parameter fingerprint for 1-to-1 cache integrity."""
+    res = bbmodel_doc.get("resolution") or {}
+    elems_sig = []
+    for el in bbmodel_doc.get("elements") or []:
+        faces = el.get("faces") or {}
+        f_uvs = {k: faces[k].get("uv") for k in FACES if isinstance(faces.get(k), dict) and faces[k].get("uv")}
+        elems_sig.append(
+            [
+                el.get("uuid"),
+                el.get("name"),
+                el.get("from"),
+                el.get("to"),
+                el.get("origin"),
+                el.get("rotation"),
+                el.get("inflate", 0.0),
+                f_uvs,
+            ]
+        )
+    groups_sig = [
+        [g.get("uuid"), g.get("name"), g.get("origin"), g.get("rotation")]
+        for g in (bbmodel_doc.get("groups") or [])
+        if isinstance(g, dict)
+    ]
+    payload = {
+        "v": _MESH_BAKE_CACHE_VERSION,
+        "w": int(res.get("width", 1)),
+        "h": int(res.get("height", 1)),
+        "elements": elems_sig,
+        "groups": groups_sig,
+        "outliner": bbmodel_doc.get("outliner") or [],
+        "pad": int(padding),
+        "ao_r": round(float(ao_radius), 4),
+        "ao_s": int(ao_samples),
+        "zov": sorted((zone_overrides or {}).items()),
+        "sdir": [round(float(c), 4) for c in shadow_light_dir],
+        "bsh": bool(bake_shadows),
+        "suv": bool(solve_uv_seams),
+    }
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()[:32]
+
+
+def _save_mesh_bake_disk(fp: str, ctx: MeshBakeContext) -> None:
+    try:
+        cdir = _mesh_cache_dir()
+        cdir.mkdir(parents=True, exist_ok=True)
+        npz_path = cdir / f"{fp}.npz"
+        meta_path = cdir / f"{fp}.meta.json"
+        arrays: dict[str, np.ndarray] = {
+            "island_mask": ctx.island_mask,
+            "world_pos": ctx.world_pos,
+            "world_pos_norm": ctx.world_pos_norm,
+            "world_normal": ctx.world_normal,
+            "baked_ao": ctx.baked_ao,
+            "edge_bevel": ctx.edge_bevel,
+            "joint_cavity": ctx.joint_cavity,
+            "local_uv": ctx.local_uv,
+            "elem_id_map": ctx.elem_id_map,
+            "face_id_map": ctx.face_id_map,
+            "elem_center_x_map": ctx.elem_center_x_map,
+            "wing_span_u": ctx.wing_span_u,
+            "wing_trail_v": ctx.wing_trail_v,
+            "face_is_down": ctx.face_is_down,
+            "wing_bay_u": ctx.wing_bay_u,
+            "wing_bay_v": ctx.wing_bay_v,
+            "wing_bay_mask": ctx.wing_bay_mask,
+            "baked_shadow": ctx.baked_shadow,
+            "bent_normal": ctx.bent_normal,
+            "thickness": ctx.thickness,
+            "curvature_3d": ctx.curvature_3d,
+            "world_tangent": ctx.world_tangent,
+            "world_bitangent": ctx.world_bitangent,
+            "uv_seam_mask": ctx.uv_seam_mask,
+            "uv_seam_src_yx": ctx.uv_seam_src_yx,
+            "uv_seam_dst_yx": ctx.uv_seam_dst_yx,
+            "uv_seam_weight": ctx.uv_seam_weight,
+            "island_edge_px": ctx.island_edge_px,
+            "island_size_min": ctx.island_size_min,
+            "island_size_wh": ctx.island_size_wh,
+            "island_inner_area": ctx.island_inner_area,
+            "face_is_up": ctx.face_is_up,
+            "face_is_side": ctx.face_is_side,
+        }
+        for z, arr in ctx.zone_masks.items():
+            arrays[f"zone__{z}"] = arr
+        tmp_npz = cdir / f".{fp}.{threading.get_ident()}.tmp.npz"
+        np.savez(tmp_npz, **arrays)
+        tmp_npz.replace(npz_path)
+        meta = {
+            "v": _MESH_BAKE_CACHE_VERSION,
+            "fp": fp,
+            "width": ctx.width,
+            "height": ctx.height,
+            "padding": ctx.padding,
+            "islands": [
+                [isl.elem_idx, isl.elem_name, isl.bone_name, isl.zone, isl.face, isl.x0, isl.y0, isl.w, isl.h]
+                for isl in ctx.islands
+            ],
+            "elem_names": ctx.elem_names,
+            "elem_bones": ctx.elem_bones,
+            "elem_zones": ctx.elem_zones,
+            "elem_centers_x": ctx.elem_centers_x,
+        }
+        tmp_meta = cdir / f".{fp}.{threading.get_ident()}.meta.tmp"
+        tmp_meta.write_text(json.dumps(meta, separators=(",", ":")), encoding="utf-8")
+        tmp_meta.replace(meta_path)
+    except Exception:
+        pass
+
+
+def _load_mesh_bake_disk(fp: str) -> MeshBakeContext | None:
+    try:
+        cdir = _mesh_cache_dir()
+        npz_path = cdir / f"{fp}.npz"
+        meta_path = cdir / f"{fp}.meta.json"
+        if not npz_path.is_file() or not meta_path.is_file():
+            return None
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        if meta.get("v") != _MESH_BAKE_CACHE_VERSION or meta.get("fp") != fp:
+            return None
+        t0 = time.perf_counter()
+        with np.load(npz_path) as data:
+            zone_masks = {z: data[f"zone__{z}"].copy() for z in ANATOMICAL_ZONES if f"zone__{z}" in data}
+            islands = [
+                BakedIsland(int(r[0]), str(r[1]), str(r[2]), str(r[3]), str(r[4]), int(r[5]), int(r[6]), int(r[7]), int(r[8]))
+                for r in (meta.get("islands") or [])
+            ]
+            ctx = MeshBakeContext(
+                width=int(meta["width"]),
+                height=int(meta["height"]),
+                padding=int(meta["padding"]),
+                island_mask=data["island_mask"].copy(),
+                world_pos=data["world_pos"].copy(),
+                world_pos_norm=data["world_pos_norm"].copy(),
+                world_normal=data["world_normal"].copy(),
+                baked_ao=data["baked_ao"].copy(),
+                edge_bevel=data["edge_bevel"].copy(),
+                joint_cavity=data["joint_cavity"].copy(),
+                local_uv=data["local_uv"].copy(),
+                elem_id_map=data["elem_id_map"].copy(),
+                zone_masks=zone_masks,
+                face_id_map=data["face_id_map"].copy(),
+                elem_center_x_map=data["elem_center_x_map"].copy(),
+                wing_span_u=data["wing_span_u"].copy(),
+                wing_trail_v=data["wing_trail_v"].copy(),
+                face_is_down=data["face_is_down"].copy(),
+                wing_bay_u=data["wing_bay_u"].copy(),
+                wing_bay_v=data["wing_bay_v"].copy(),
+                wing_bay_mask=data["wing_bay_mask"].copy(),
+                islands=islands,
+                elem_names=list(meta.get("elem_names") or []),
+                elem_bones=list(meta.get("elem_bones") or []),
+                elem_zones=list(meta.get("elem_zones") or []),
+                elem_centers_x=[float(x) for x in (meta.get("elem_centers_x") or [])],
+                baked_shadow=data["baked_shadow"].copy(),
+                bent_normal=data["bent_normal"].copy(),
+                thickness=data["thickness"].copy(),
+                curvature_3d=data["curvature_3d"].copy(),
+                world_tangent=data["world_tangent"].copy(),
+                world_bitangent=data["world_bitangent"].copy(),
+                uv_seam_mask=data["uv_seam_mask"].copy(),
+                uv_seam_src_yx=data["uv_seam_src_yx"].copy(),
+                uv_seam_dst_yx=data["uv_seam_dst_yx"].copy(),
+                uv_seam_weight=data["uv_seam_weight"].copy(),
+                island_edge_px=data["island_edge_px"].copy(),
+                island_size_min=data["island_size_min"].copy(),
+                island_size_wh=data["island_size_wh"].copy(),
+                island_inner_area=data["island_inner_area"].copy(),
+                face_is_up=data["face_is_up"].copy(),
+                face_is_side=data["face_is_side"].copy(),
+                content_fingerprint=fp,
+                bake_cache_hit=True,
+                bake_ms=round((time.perf_counter() - t0) * 1000.0, 2),
+            )
+            return ctx
+    except Exception:
+        return None
 
 
 def bake_bbmodel_maps(
@@ -419,8 +732,35 @@ def bake_bbmodel_maps(
     shadow_light_dir: tuple[float, float, float] = (-0.42, 0.80, 0.42),
     bake_shadows: bool = True,
     solve_uv_seams: bool = True,
+    use_cache: bool = True,
 ) -> MeshBakeContext:
     """Bake 3D world position, normal, tangent frame, multi-box AO, ray-traced shadow, bent normal, thickness, curvature & UV-edge adjacency."""
+    t_bake_start = time.perf_counter()
+    fp = compute_bbmodel_fingerprint(
+        bbmodel_doc,
+        padding=padding,
+        ao_radius=ao_radius,
+        ao_samples=ao_samples,
+        zone_overrides=zone_overrides,
+        shadow_light_dir=shadow_light_dir,
+        bake_shadows=bake_shadows,
+        solve_uv_seams=solve_uv_seams,
+    )
+    if use_cache:
+        with _MESH_BAKE_LOCK:
+            hit = _MESH_BAKE_LRU.get(fp)
+            if hit is not None:
+                _MESH_BAKE_LRU.move_to_end(fp)
+                hit.bake_cache_hit = True
+                return hit
+        disk_hit = _load_mesh_bake_disk(fp)
+        if disk_hit is not None:
+            with _MESH_BAKE_LOCK:
+                _MESH_BAKE_LRU[fp] = disk_hit
+                while len(_MESH_BAKE_LRU) > _MESH_BAKE_LRU_MAX:
+                    _MESH_BAKE_LRU.popitem(last=False)
+            return disk_hit
+
     res = bbmodel_doc.get("resolution") or {}
     W = max(1, int(res.get("width", 1)))
     H = max(1, int(res.get("height", 1)))
@@ -476,25 +816,40 @@ def bake_bbmodel_maps(
     elem_zones: list[str] = []
     elem_centers_x: list[float] = []
 
-    # Pre-stack OBB AABBs for rapid neighbor lookup per box
+    # Pre-stack OBB arrays in float32 once for fully vectorized AO, cavity, shadow & thickness!
     if obbs:
-        all_aabb_min = np.stack([o["aabb_min"] for o in obbs], axis=0)
-        all_aabb_max = np.stack([o["aabb_max"] for o in obbs], axis=0)
-        scene_min = all_aabb_min.min(axis=0)
-        scene_max = all_aabb_max.max(axis=0)
+        all_aabb_min = np.stack([o["aabb_min"] for o in obbs], axis=0).astype(np.float32)
+        all_aabb_max = np.stack([o["aabb_max"] for o in obbs], axis=0).astype(np.float32)
+        all_centers = np.stack([o["center"] for o in obbs], axis=0).astype(np.float32)
+        all_Rs = np.stack([o["R"] for o in obbs], axis=0).astype(np.float32)
+        all_RTs = np.stack([o["RT"] for o in obbs], axis=0).astype(np.float32)
+        all_halfs = np.stack([o["half"] for o in obbs], axis=0).astype(np.float32)
+        all_radii = (np.linalg.norm(all_aabb_max - all_aabb_min, axis=1) * 0.5).astype(np.float32)
+        all_half_spans = (np.linalg.norm(all_halfs, axis=1) * 1.4).astype(np.float32)
+        scene_min = all_aabb_min.min(axis=0).astype(np.float64)
+        scene_max = all_aabb_max.max(axis=0).astype(np.float64)
         scene_span = np.maximum(1e-4, scene_max - scene_min)
-        # Scale AO probe radius adaptively to model size so tiny endemic life & giant dragons both look grounded!
         diag = float(np.linalg.norm(scene_span))
         eff_ao_r = float(np.clip(ao_radius * (diag / 65.0), 1.4, 7.5))
     else:
-        all_aabb_min = np.zeros((0, 3))
-        all_aabb_max = np.zeros((0, 3))
+        all_aabb_min = np.zeros((0, 3), dtype=np.float32)
+        all_aabb_max = np.zeros((0, 3), dtype=np.float32)
+        all_centers = np.zeros((0, 3), dtype=np.float32)
+        all_Rs = np.zeros((0, 3, 3), dtype=np.float32)
+        all_RTs = np.zeros((0, 3, 3), dtype=np.float32)
+        all_halfs = np.zeros((0, 3), dtype=np.float32)
+        all_radii = np.zeros((0,), dtype=np.float32)
+        all_half_spans = np.zeros((0,), dtype=np.float32)
         scene_min = np.zeros(3)
         scene_span = np.ones(3)
         eff_ao_r = float(ao_radius)
 
+    l_main_f32 = l_main.astype(np.float32)
+    shadow_rays_f32 = tuple(r.astype(np.float32) for r in shadow_rays)
+    all_idx_arr = np.arange(len(obbs), dtype=np.int32)
+
     # Probe distances along outward normal & grazing directions for soft multi-scale AO
-    probe_dists = np.linspace(0.28 * eff_ao_r, eff_ao_r, max(2, int(ao_samples)), dtype=np.float64)
+    probe_dists = np.linspace(0.28 * eff_ao_r, eff_ao_r, max(2, int(ao_samples)), dtype=np.float32)
     cav_r = max(0.6, 0.35 * eff_ao_r)
 
     for obb in obbs:
@@ -509,11 +864,19 @@ def bake_bbmodel_maps(
         elem_centers_x.append(float(obb["center"][0]))
 
         # Broad-phase neighbor OBB indices within eff_ao_r of this element
-        pad_min = obb["aabb_min"] - eff_ao_r - 0.5
-        pad_max = obb["aabb_max"] + eff_ao_r + 0.5
+        pad_min = (obb["aabb_min"] - eff_ao_r - 0.5).astype(np.float32)
+        pad_max = (obb["aabb_max"] + eff_ao_r + 0.5).astype(np.float32)
         nb_mask = np.all((all_aabb_max >= pad_min) & (all_aabb_min <= pad_max), axis=1)
         nb_mask[idx] = False
-        neighbors = [obbs[j] for j in np.nonzero(nb_mask)[0].tolist()]
+        nb_indices = np.nonzero(nb_mask)[0]
+        has_nb = nb_indices.size > 0
+        if has_nb:
+            nb_centers = all_centers[nb_indices]
+            nb_Rs = all_Rs[nb_indices]
+            nb_halfs = all_halfs[nb_indices]
+            nb_aabb_min = all_aabb_min[nb_indices]
+            nb_aabb_max = all_aabb_max[nb_indices]
+            nb_spans = all_half_spans[nb_indices]
 
         half = obb["half"]
         R = obb["R"]
@@ -564,94 +927,109 @@ def bake_bbmodel_maps(
             bevel_raw = np.clip(1.0 - d_border / 1.8, 0.0, 1.0)
 
             # Vectorized multi-box Ambient Occlusion, Bent Normal, Ray-Traced Shadow, Thickness & Cavity!
-            pts_flat = w_pts.reshape(-1, 3)
+            pts_flat = w_pts.reshape(-1, 3).astype(np.float32)
             n_pts = pts_flat.shape[0]
-            ao_flat = np.ones(n_pts, dtype=np.float64)
-            cav_flat = np.zeros(n_pts, dtype=np.float64)
-            bn_flat = np.broadcast_to(w_nrm[None, :], (n_pts, 3)).astype(np.float64).copy()
+            ao_flat = np.ones(n_pts, dtype=np.float32)
+            cav_flat = np.zeros(n_pts, dtype=np.float32)
+            w_nrm_f32 = w_nrm.astype(np.float32)
+            bn_flat = np.broadcast_to(w_nrm_f32[None, :], (n_pts, 3)).copy()
             w_tr = R @ tr_b
             w_tr = w_tr / max(1e-12, float(np.linalg.norm(w_tr)))
             w_td = R @ td_b
             w_td = w_td / max(1e-12, float(np.linalg.norm(w_td)))
+            w_tr_f32 = w_tr.astype(np.float32)
+            w_td_f32 = w_td.astype(np.float32)
 
-            if neighbors:
-                # 1. Surface proximity cavity (detects buried overlap & tight joint creases!)
-                min_sdf = np.full(n_pts, 1e6, dtype=np.float64)
-                for nb in neighbors:
-                    d_s = _obb_signed_distance(pts_flat, nb)
-                    min_sdf = np.minimum(min_sdf, d_s)
-                cav_flat = np.clip(1.0 - min_sdf / cav_r, 0.0, 1.0)
+            face_min = pts_flat.min(axis=0)
+            face_max = pts_flat.max(axis=0)
 
-                # 2. Multi-step hemisphere AO + true 3D Bent Normal (average unoccluded sky direction!)
-                dirs = (
-                    w_nrm,
-                    (w_nrm + 0.55 * w_tr) / np.linalg.norm(w_nrm + 0.55 * w_tr),
-                    (w_nrm - 0.55 * w_tr) / np.linalg.norm(w_nrm - 0.55 * w_tr),
-                    (w_nrm + 0.55 * w_td) / np.linalg.norm(w_nrm + 0.55 * w_td),
-                    (w_nrm - 0.55 * w_td) / np.linalg.norm(w_nrm - 0.55 * w_td),
+            if has_nb:
+                # 1. Surface proximity cavity (batched across all close neighbors in 1 NumPy op!)
+                c_mask = np.all((nb_aabb_max >= face_min - cav_r) & (nb_aabb_min <= face_max + cav_r), axis=1)
+                if np.any(c_mask):
+                    d_mat = _obb_signed_distance_batch(pts_flat, nb_centers[c_mask], nb_Rs[c_mask], nb_halfs[c_mask])
+                    min_sdf = d_mat.min(axis=1)
+                    cav_flat = np.clip(1.0 - min_sdf / float(cav_r), 0.0, 1.0)
+
+                # 2. Multi-step hemisphere AO + true 3D Bent Normal (batched per-probe AABB-culled!)
+                dirs_f32 = (
+                    w_nrm_f32,
+                    ((w_nrm + 0.55 * w_tr) / np.linalg.norm(w_nrm + 0.55 * w_tr)).astype(np.float32),
+                    ((w_nrm - 0.55 * w_tr) / np.linalg.norm(w_nrm - 0.55 * w_tr)).astype(np.float32),
+                    ((w_nrm + 0.55 * w_td) / np.linalg.norm(w_nrm + 0.55 * w_td)).astype(np.float32),
+                    ((w_nrm - 0.55 * w_td) / np.linalg.norm(w_nrm - 0.55 * w_td)).astype(np.float32),
                 )
-                occ_sum = np.zeros(n_pts, dtype=np.float64)
-                bn_acc = np.zeros((n_pts, 3), dtype=np.float64)
+                occ_sum = np.zeros(n_pts, dtype=np.float32)
+                bn_acc = np.zeros((n_pts, 3), dtype=np.float32)
                 tot_w = 0.0
-                for d_idx, dist in enumerate(probe_dists):
+                for d_idx, dist_f in enumerate(probe_dists):
+                    dist = float(dist_f)
                     step_w = 1.0 / float(d_idx + 1)
-                    for d_vec in dirs:
-                        probe = pts_flat + d_vec[None, :] * dist
-                        min_d = np.full(n_pts, dist, dtype=np.float64)
-                        for nb in neighbors:
-                            if np.any(nb["aabb_max"] < probe.min(axis=0) - dist) or np.any(nb["aabb_min"] > probe.max(axis=0) + dist):
-                                continue
-                            min_d = np.minimum(min_d, _obb_signed_distance(probe, nb))
-                        occ_i = np.clip(1.0 - min_d / max(1e-4, dist), 0.0, 1.0)
-                        occ_sum += step_w * occ_i
-                        bn_acc += (step_w * (1.0 - occ_i))[:, None] * d_vec[None, :]
+                    inv_dist = 1.0 / max(1e-4, dist)
+                    for d_vec in dirs_f32:
+                        shift = d_vec * dist
+                        p_min = face_min + shift - dist
+                        p_max = face_max + shift + dist
+                        sub_m = np.all((nb_aabb_max >= p_min) & (nb_aabb_min <= p_max), axis=1)
+                        if np.any(sub_m):
+                            probe = pts_flat + shift[None, :]
+                            d_mat = _obb_signed_distance_batch(probe, nb_centers[sub_m], nb_Rs[sub_m], nb_halfs[sub_m])
+                            min_d = np.minimum(dist, d_mat.min(axis=1))
+                            occ_i = np.clip(1.0 - min_d * inv_dist, 0.0, 1.0)
+                            occ_sum += step_w * occ_i
+                            bn_acc += (step_w * (1.0 - occ_i))[:, None] * d_vec[None, :]
+                        else:
+                            bn_acc += step_w * d_vec[None, :]
                         tot_w += step_w
                 ao_flat = np.clip(1.0 - 0.88 * (occ_sum / max(1e-6, tot_w)), 0.14, 1.0)
-                bn_acc += 0.20 * w_nrm[None, :]
+                bn_acc += 0.20 * w_nrm_f32[None, :]
                 bn_len = np.maximum(1e-6, np.linalg.norm(bn_acc, axis=-1, keepdims=True))
                 bn_flat = bn_acc / bn_len
 
-            # 3. True 3D Ray-vs-OBB Directional Self-Shadowing (3-ray soft penumbra cone across scene!)
+            # 3. True 3D Ray-vs-OBB Directional Self-Shadowing (vectorized broad-phase + batched slab test!)
             ndotl_face = float(np.dot(w_nrm, l_main))
             self_shade = float(np.clip(ndotl_face * 0.55 + 0.45, 0.12, 1.0))
-            sh_flat = np.full(n_pts, self_shade, dtype=np.float64)
+            sh_flat = np.full(n_pts, self_shade, dtype=np.float32)
             if bake_shadows and ndotl_face > -0.15 and len(obbs) > 1:
-                face_min = pts_flat.min(axis=0)
-                face_max = pts_flat.max(axis=0)
-                # Fast broad-phase filter: only test other OBBs lying in the +l_main half-space!
-                cast_cands = []
-                for cand in obbs:
-                    if cand["idx"] == idx:
-                        continue
-                    # Project vector from face bounds center to cand center along l_main
-                    rel_c = cand["center"] - 0.5 * (face_min + face_max)
-                    cand_r = float(np.linalg.norm(cand["aabb_max"] - cand["aabb_min"]) * 0.5)
-                    face_r = float(np.linalg.norm(face_max - face_min) * 0.5)
-                    if float(np.dot(rel_c, l_main)) > -(cand_r + face_r):
-                        cast_cands.append(cand)
-                if cast_cands:
-                    ray_orig = pts_flat + w_nrm[None, :] * 0.14
-                    lit_acc = np.zeros(n_pts, dtype=np.float64)
-                    for r_dir in shadow_rays:
-                        hit_any = np.zeros(n_pts, dtype=bool)
-                        for cand in cast_cands:
-                            if np.all(hit_any):
-                                break
-                            hit_any |= _ray_obb_hits(ray_orig, r_dir, cand, t_min=0.12, t_max=180.0)
-                        lit_acc += (~hit_any).astype(np.float64)
-                    cast_vis = 0.22 + 0.78 * (lit_acc / float(len(shadow_rays)))
+                face_c = 0.5 * (face_min + face_max)
+                face_r = float(np.linalg.norm(face_max - face_min) * 0.5)
+                rel_c = all_centers - face_c[None, :]
+                along = rel_c @ l_main_f32
+                perp_vec = rel_c - along[:, None] * l_main_f32[None, :]
+                perp_d = np.linalg.norm(perp_vec, axis=1)
+                # Conservative penumbra-cone cylinder cull (zero false negatives!)
+                cone_r = face_r + all_radii + 0.14 * np.maximum(0.0, along) + 0.5
+                cand_mask = (all_idx_arr != idx) & (along > -(all_radii + face_r)) & (perp_d <= cone_r)
+                cand_idx = np.nonzero(cand_mask)[0]
+                if cand_idx.size > 0:
+                    c_centers = all_centers[cand_idx]
+                    c_Rs = all_Rs[cand_idx]
+                    c_RTs = all_RTs[cand_idx]
+                    c_halfs = all_halfs[cand_idx]
+                    ray_orig = pts_flat + w_nrm_f32 * 0.14
+                    lit_acc = np.zeros(n_pts, dtype=np.float32)
+                    for r_dir in shadow_rays_f32:
+                        hit_any = _ray_obb_hits_batch(ray_orig, r_dir, c_centers, c_Rs, c_RTs, c_halfs, t_min=0.12, t_max=180.0)
+                        lit_acc += (~hit_any).astype(np.float32)
+                    cast_vis = 0.22 + 0.78 * (lit_acc / float(len(shadow_rays_f32)))
                     sh_flat = np.clip(self_shade * cast_vis, 0.08, 1.0)
 
-            # 4. Ray-traced internal volume thickness along -w_nrm (drives physically grounded SSS on wings/ears/fins!)
+            # 4. Ray-traced internal volume thickness along -w_nrm (vectorized!)
             own_thick = 2.0 * float(half_n)
-            thick_flat = np.full(n_pts, own_thick, dtype=np.float64)
-            if neighbors:
-                in_probe = pts_flat - w_nrm[None, :] * max(0.5, own_thick)
-                for nb in neighbors:
-                    inside_nb = _obb_signed_distance(in_probe, nb) < 0.0
-                    if np.any(inside_nb):
-                        nb_span = float(np.linalg.norm(nb["half"])) * 1.4
-                        thick_flat = np.where(inside_nb, np.maximum(thick_flat, own_thick + nb_span * 0.5), thick_flat)
+            thick_flat = np.full(n_pts, own_thick, dtype=np.float32)
+            if has_nb:
+                in_shift = -w_nrm_f32 * max(0.5, own_thick)
+                in_min = face_min + in_shift
+                in_max = face_max + in_shift
+                t_mask = np.all((nb_aabb_max >= in_min) & (nb_aabb_min <= in_max), axis=1)
+                if np.any(t_mask):
+                    in_probe = pts_flat + in_shift[None, :]
+                    d_in = _obb_signed_distance_batch(in_probe, nb_centers[t_mask], nb_Rs[t_mask], nb_halfs[t_mask])
+                    inside_mat = d_in < 0.0
+                    if np.any(inside_mat):
+                        spans_sel = nb_spans[t_mask]
+                        contrib = np.where(inside_mat, own_thick + spans_sel[None, :] * 0.5, own_thick)
+                        thick_flat = np.maximum(thick_flat, contrib.max(axis=1))
             thick_ref = max(2.0, float(np.median(scene_span)) * 0.35) if obbs else 8.0
             thick_norm = np.clip(thick_flat / thick_ref, 0.02, 1.0)
 
@@ -922,7 +1300,7 @@ def bake_bbmodel_maps(
         uv_seam_weight = np.zeros((0,), dtype=np.float32)
         uv_seam_mask = np.zeros((H, W), dtype=np.float32)
 
-    return MeshBakeContext(
+    ctx = MeshBakeContext(
         width=W,
         height=H,
         padding=padding,
@@ -965,4 +1343,14 @@ def bake_bbmodel_maps(
         island_inner_area=island_inner_area,
         face_is_up=face_is_up,
         face_is_side=face_is_side,
+        content_fingerprint=fp,
+        bake_cache_hit=False,
+        bake_ms=round((time.perf_counter() - t_bake_start) * 1000.0, 2),
     )
+    if use_cache:
+        with _MESH_BAKE_LOCK:
+            _MESH_BAKE_LRU[fp] = ctx
+            while len(_MESH_BAKE_LRU) > _MESH_BAKE_LRU_MAX:
+                _MESH_BAKE_LRU.popitem(last=False)
+        _save_mesh_bake_disk(fp, ctx)
+    return ctx

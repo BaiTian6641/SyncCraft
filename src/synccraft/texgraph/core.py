@@ -588,13 +588,18 @@ class TexGraph:
         return ValidationReport(ok=len(errors) == 0, errors=errors, warnings=warnings, topo_order=topo)
 
     def _node_content_hash(self, sp: NodeSpec, eff_params: dict[str, Any], dep_hashes: dict[str, str], phase_tag: str) -> str:
+        mesh_sig = ""
+        if self.mesh_context is not None:
+            mesh_sig = str(getattr(self.mesh_context, "content_fingerprint", "") or "")
+            if not mesh_sig:
+                mesh_sig = f"{self.mesh_context.width}x{self.mesh_context.height}:{len(self.mesh_context.islands)}:{id(self.mesh_context)}"
         payload = {
             "op": sp.op,
             "w": self.width,
             "h": self.height,
             "tile": self.tileable,
             "seed": self.seed,
-            "mesh": id(self.mesh_context) if self.mesh_context is not None else 0,
+            "mesh": mesh_sig,
             "bypassed": bool(sp.bypassed),
             "params": eff_params,
             "deps": dep_hashes,
@@ -899,10 +904,14 @@ class TexGraph:
         )
 
     def attach_mesh(self, mesh_context: MeshBakeContext) -> "TexGraph":
+        prev_fp = getattr(self.mesh_context, "content_fingerprint", None) if self.mesh_context is not None else None
+        new_fp = getattr(mesh_context, "content_fingerprint", None)
         self.mesh_context = mesh_context
         self.width = mesh_context.width
         self.height = mesh_context.height
         self._static_cache.clear()
+        if prev_fp != new_fp or not new_fp:
+            self._content_cache.clear()
         return self
 
     # ------------------------------------------------------------------

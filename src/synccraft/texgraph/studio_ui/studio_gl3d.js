@@ -690,6 +690,18 @@
         thickness: this._makeSolidTex([140, 140, 140, 255]),
         splitRight: this._makeSolidTex([128, 128, 255, 255]),
       };
+      this._texDefaults = {
+        albedo: [180, 180, 180, 255],
+        normal: [128, 128, 255, 255],
+        orm: [255, 165, 10, 255],
+        shadow: [255, 255, 255, 255],
+        emissive: [0, 0, 0, 255],
+        display: [180, 180, 180, 255],
+        thickness: [140, 140, 140, 255],
+        splitRight: [128, 128, 255, 255],
+      };
+      this._texSlotGen = {};
+      this._animUploadGen = 0;
       this.hasNormalTex = false;
 
       this.geoms = {
@@ -758,10 +770,39 @@
       return false;
     }
 
+    _resetSlotToDefault(slot) {
+      this._texSlotGen[slot] = (this._texSlotGen[slot] || 0) + 1;
+      if (slot === 'normal') this.hasNormalTex = false;
+      if (slot === 'albedo') this.hasTransparency = false;
+      if (slot === 'display') this.fallbackImg = null;
+      if (!this.isWebGL || !this.textures || !this.textures[slot]) return;
+      const rgba = (this._texDefaults && this._texDefaults[slot]) || [180, 180, 180, 255];
+      const gl = this.gl;
+      gl.bindTexture(gl.TEXTURE_2D, this.textures[slot]);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(rgba));
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    }
+
+    /** Immediately clear ALL GPU texture slots + animRing on project/mesh switch (prevents cross-project texture glitching!). */
+    resetTextures() {
+      this.clearAnimFrames();
+      const slots = ['albedo', 'normal', 'orm', 'shadow', 'emissive', 'display', 'thickness', 'splitRight'];
+      for (const s of slots) this._resetSlotToDefault(s);
+    }
+
     _loadTexFromUrl(slot, url, wrapRepeat) {
-      if (!url) return;
+      if (!url) {
+        this._resetSlotToDefault(slot);
+        return;
+      }
+      const gen = (this._texSlotGen[slot] = (this._texSlotGen[slot] || 0) + 1);
       const img = new Image();
       img.onload = () => {
+        // Strict generation guard: discard stale out-of-order async image decodes!
+        if (this._texSlotGen[slot] !== gen) return;
         if (slot === 'display') this.fallbackImg = img;
         if (slot === 'albedo') this.hasTransparency = this._detectTransparency(img);
         if (!this.isWebGL) return;
@@ -774,23 +815,24 @@
     updateChannels(channels, selectedPreview, tileable) {
       if (!channels) return;
       const rep = !!tileable && this.primitive !== 'bbmodel';
-      this._loadTexFromUrl('albedo', channels.albedo || channels.pbr_lit, rep);
-      if (channels.normal) this._loadTexFromUrl('normal', channels.normal, rep);
-      if (channels.orm) this._loadTexFromUrl('orm', channels.orm, rep);
-      if (channels.shadow) this._loadTexFromUrl('shadow', channels.shadow, rep);
-      if (channels.emissive) this._loadTexFromUrl('emissive', channels.emissive, rep);
-      if (channels.thickness) this._loadTexFromUrl('thickness', channels.thickness, rep);
+      this._loadTexFromUrl('albedo', channels.albedo || channels.pbr_lit || null, rep);
+      this._loadTexFromUrl('normal', channels.normal || null, rep);
+      this._loadTexFromUrl('orm', channels.orm || null, rep);
+      this._loadTexFromUrl('shadow', channels.shadow || null, rep);
+      this._loadTexFromUrl('emissive', channels.emissive || null, rep);
+      this._loadTexFromUrl('thickness', channels.thickness || null, rep);
 
-      let dispUrl = channels[this.channel] || channels.pbr_lit || channels.albedo;
+      let dispUrl = channels[this.channel] || channels.pbr_lit || channels.albedo || null;
       if (this.channel === 'selected' && selectedPreview) dispUrl = selectedPreview;
       this._loadTexFromUrl('display', dispUrl, rep);
 
-      const splitUrl = channels[this.splitRightChannel] || channels.normal || channels.albedo;
-      if (splitUrl) this._loadTexFromUrl('splitRight', splitUrl, rep);
+      const splitUrl = channels[this.splitRightChannel] || channels.normal || channels.albedo || null;
+      this._loadTexFromUrl('splitRight', splitUrl, rep);
     }
 
     /** Pre-upload N animation frames into GPU WebGLTextures for silky-smooth locked 30-60 FPS playback! */
     clearAnimFrames() {
+      this._animUploadGen = (this._animUploadGen || 0) + 1;
       if (this.isWebGL && this.animRing.length) {
         const gl = this.gl;
         for (const f of this.animRing) {
@@ -805,7 +847,8 @@
 
     async uploadAnimFrames(seqFrames, tileable) {
       this.clearAnimFrames();
-      if (!Array.isArray(seqFrames) || !seqFrames.length) return;
+      const myGen = this._animUploadGen;
+      if (!Array.isArray(seqFrames) || !seqFrames.length) return false;
       const rep = !!tileable && this.primitive !== 'bbmodel';
       const loadImg = (url) => new Promise((resolve) => {
         if (!url) { resolve(null); return; }
@@ -821,6 +864,18 @@
           loadImg(fr.emissive),
           loadImg(fr.display || fr.pbr_lit || fr.albedo),
         ]);
+        // Abort & free GPU textures immediately if project switched or ring invalidated mid-upload!
+        if (this._animUploadGen !== myGen) {
+          if (this.isWebGL) {
+            const gl = this.gl;
+            for (const f of ring) {
+              if (f.albedoTex) gl.deleteTexture(f.albedoTex);
+              if (f.emissiveTex) gl.deleteTexture(f.emissiveTex);
+              if (f.displayTex) gl.deleteTexture(f.displayTex);
+            }
+          }
+          return false;
+        }
         const entry = {
           phase: fr.phase,
           thumbs: fr.thumbs || {},
@@ -845,7 +900,19 @@
         }
         ring.push(entry);
       }
+      if (this._animUploadGen !== myGen) {
+        if (this.isWebGL) {
+          const gl = this.gl;
+          for (const f of ring) {
+            if (f.albedoTex) gl.deleteTexture(f.albedoTex);
+            if (f.emissiveTex) gl.deleteTexture(f.emissiveTex);
+            if (f.displayTex) gl.deleteTexture(f.displayTex);
+          }
+        }
+        return false;
+      }
       this.animRing = ring;
+      return true;
     }
 
     setAnimFrameIdx(idx) {
