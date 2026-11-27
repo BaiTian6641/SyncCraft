@@ -231,9 +231,10 @@
           <div class="pane-tabs">
             <button class="pane-tab active" data-right-tab="inspector" id="tabInspector">Inspector</button>
             <button class="pane-tab" data-right-tab="texdsl" id="tabTexdsl">TexDSL</button>
-            <button class="pane-tab" data-right-tab="qa" id="tabQa">QA &amp; Profile</button>
+            <button class="pane-tab" data-right-tab="qa" id="tabQa">QA</button>
+            <button class="pane-tab" data-right-tab="ai" id="tabAi">AI &amp; Var</button>
           </div>
-          <button class="btn sm" id="btnSetOutputSel" title="Set Selected Node as Final Graph Output">Set Output</button>
+          <button class="btn sm" id="btnSetOutputSel" title="Set Selected Node as Final Graph Output">Set Out</button>
         </div>
 
         <div class="right-body" id="rightTabInspector"></div>
@@ -254,6 +255,11 @@
 
         <div class="right-body" id="rightTabQa" style="display:none;">
           <div id="qaPanelBody"></div>
+        </div>
+
+        <div class="right-body" id="rightTabAi" style="display:none;">
+          <div id="aiPanelBody"></div>
+          <input type="file" id="styleRefFileInput" accept="image/png,image/jpeg,image/webp" style="display:none" />
         </div>
       </div>
     </section>
@@ -323,8 +329,8 @@
           Attaching a <code>.bbmodel</code> runs SyncCraft's vectorized 3D ray-vs-OBB baker (<code>baked_shadow</code>, <code>bent_normal</code>, <code>thickness</code>, <code>baked_ao</code>, <code>uv_seam_pairs</code>) and loads live geometry into the 3D WebGL PBR viewport.
         </div>
         <div style="display:flex;flex-direction:column;gap:6px;">
+          <button class="btn" id="btnMeshDragonborn">Load Kaelith Chrono-Dragonborn 3D (.bbmodel)</button>
           <button class="btn" id="btnMeshMonolith">Load Built-in Sculpted Temple Monolith (.bbmodel)</button>
-          <button class="btn" id="btnMeshOrc">Load Ironjaw Orc Warlord 84-Box Boss (.bbmodel)</button>
           <button class="btn primary" id="btnMeshUpload">Upload Custom .bbmodel From Disk...</button>
           <button class="btn" id="btnMeshDetach">Detach Mesh (Standard Block/Item Primitives)</button>
         </div>

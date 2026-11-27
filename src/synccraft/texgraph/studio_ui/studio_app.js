@@ -34,6 +34,10 @@
     paletteIdx: 0,
     img2d: null,
     img2dBuf: null,
+    lastDiagnosis: null,
+    lastDna: null,
+    lastPatchSummary: null,
+    selectedStylePreset: 'preset:chronos_amethyst',
   };
 
   let gl3d = null;
@@ -155,6 +159,7 @@
     renderTimelineDrivers();
     renderExposedParams();
     renderConsoleLog();
+    renderAiVariantsPanel();
     graphCanvas.setData(rec, state.evalData, state.selectedNodeId, state.activePass);
     if (opts.fitGraph) {
       setTimeout(() => graphCanvas.fitToView(), 30);
@@ -276,8 +281,9 @@
     const res = ev ? `${ev.width}×${ev.height}` : '—';
     const ms = state.serverState && state.serverState.mesh_stats;
     if (state.vpMode === '3d') {
-      const mText = ms ? ` · ${ms.elements} boxes · ${ms.seam_pairs} 3D UV seams` : ` · ${$('primSelect').value}`;
-      hud.textContent = `3D WebGL PBR · ${state.channel} · ${res}${mText}`;
+      const seams = ms ? (ms.seam_pairs >= 1000 ? `${(ms.seam_pairs / 1000).toFixed(1)}k` : `${ms.seam_pairs}`) : '';
+      const mText = ms ? ` · ${ms.elements}b · ${seams} seams` : ` · ${$('primSelect').value}`;
+      hud.textContent = `3D PBR · ${state.channel} · ${res}${mText}`;
     } else {
       hud.textContent = `2D Pixel · ${state.channel} · ${res}${state.tile3x3 ? ' · 3×3 Wrap' : ''}${pixelInfo ? ' · ' + pixelInfo : ''}`;
     }
@@ -382,6 +388,14 @@
         lbl.textContent = p.name;
         if (p.tooltip) lbl.title = p.tooltip;
         lblRow.appendChild(lbl);
+        const locks = (state.serverState && state.serverState.artist_overrides) || {};
+        if (`${node.id}.${p.name}` in locks) {
+          const lk = document.createElement('span');
+          lk.className = 'param-lock-badge';
+          lk.textContent = 'LOCK';
+          lk.title = 'Artist Override Locked — preserved during AI Patch & Variant Morph';
+          lblRow.appendChild(lk);
+        }
 
         const acts = document.createElement('div');
         acts.className = 'param-actions';
@@ -565,10 +579,11 @@
     bar.innerHTML = '';
     const passes = (state.serverState && state.serverState.recipe && state.serverState.recipe.passes) || [];
     if (!passes.length) return;
-    const mk = (id, label) => {
+    const mk = (id, label, tip) => {
       const b = document.createElement('button');
       b.className = 'btn sm' + (state.activePass === id ? ' active' : '');
       b.textContent = label;
+      if (tip) b.title = tip;
       b.onclick = () => {
         state.activePass = id;
         renderPassFilterBar();
@@ -576,11 +591,10 @@
       };
       bar.appendChild(b);
     };
-    mk('ALL', 'All');
+    mk('ALL', 'All', 'Show all passes');
     passes.forEach((p, idx) => {
-      const clean = String(p.title || p.name).replace(/^Pass\s*\d+\s*:\s*/i, '');
-      const short = clean.length > 22 ? clean.slice(0, 20) + '…' : clean;
-      mk(p.name, `P${idx + 1}: ${short}`);
+      const fullTitle = String(p.title || p.name);
+      mk(p.name, `P${idx + 1}`, fullTitle);
     });
   }
 
@@ -881,6 +895,233 @@
   }
 
   // ------------------------------------------------------------------------
+  // Milestone v12: AI Co-Pilot, Style-DNA Extractor & Live 3D Variant Factory
+  // ------------------------------------------------------------------------
+  function renderAiVariantsPanel() {
+    const root = $('aiPanelBody');
+    if (!root) return;
+    root.innerHTML = '';
+
+    const st = state.serverState || {};
+    const locks = st.artist_overrides || {};
+    const lockKeys = Object.keys(locks);
+    const variants = (state.schemaPayload && state.schemaPayload.variants) || [];
+    const stylePresets = (state.schemaPayload && state.schemaPayload.style_presets) || [];
+    const activeVar = st.active_variant || 'chronos_prime';
+
+    // 1. AI Co-Pilot Diagnosis + Human-in-the-Loop Safe Surgical Patching
+    const allSuggestedOps = [];
+    if (state.lastDiagnosis && Array.isArray(state.lastDiagnosis.findings)) {
+      for (const f of state.lastDiagnosis.findings) {
+        if (Array.isArray(f.patch_ops)) allSuggestedOps.push(...f.patch_ops);
+      }
+    }
+    const secAi = document.createElement('div');
+    secAi.className = 'ai-section';
+    secAi.innerHTML = `
+      <div class="ai-section-head">
+        <span>AI Co-Pilot (Pure Algorithmic)</span>
+        <span class="pill-badge ${lockKeys.length ? 'warn' : ''}" id="artistLocksBadge">${lockKeys.length} Lock${lockKeys.length === 1 ? '' : 's'}</span>
+      </div>
+      <div style="font-size:10.5px;color:var(--text-secondary);">
+        Audits QA, 3D ray-traced shadows &amp; UV seam hygiene, proposing surgical node patches while strictly protecting human artist overrides.
+      </div>
+      <div style="display:flex;gap:5px;flex-wrap:wrap;">
+        <button class="btn sm primary" id="btnAiDiagnose">Run AI Diagnosis</button>
+        <button class="btn sm amber" id="btnAiApplyPatch" ${!allSuggestedOps.length ? 'disabled' : ''}>Apply Safe Patch (${allSuggestedOps.length})</button>
+        <button class="btn sm" id="btnClearLocks" ${!lockKeys.length ? 'disabled' : ''}>Clear Locks</button>
+      </div>
+    `;
+    if (lockKeys.length) {
+      const chipWrap = document.createElement('div');
+      chipWrap.className = 'lock-chip-list';
+      for (const k of lockKeys.slice(0, 8)) {
+        const c = document.createElement('span');
+        c.className = 'lock-chip';
+        const v = locks[k];
+        c.textContent = `LOCK ${k}=${typeof v === 'number' ? Number(v.toFixed(2)) : String(v).slice(0, 14)}`;
+        chipWrap.appendChild(c);
+      }
+      secAi.appendChild(chipWrap);
+    }
+    if (state.lastPatchSummary) {
+      const ps = document.createElement('div');
+      ps.className = 'ai-finding ok';
+      const presNames = (state.lastPatchSummary.preserved_overrides || []).map((o) => (typeof o === 'string' ? o : `${o.node_id}.${o.param}`));
+      const lockStatus = lockKeys.length
+        ? `${lockKeys.length} lock(s) safe${presNames.length ? ` (${presNames.length} conflict blocked)` : ''}`
+        : '0 locks active';
+      ps.innerHTML = `<div class="ai-finding-title"><span>Last Patch Applied</span><span>QA ${state.lastPatchSummary.qa_before} → ${state.lastPatchSummary.qa_after}</span></div><div>Applied ${state.lastPatchSummary.applied_count} op(s) · ${lockStatus}</div>`;
+      secAi.appendChild(ps);
+    }
+    if (state.lastDiagnosis) {
+      const d = state.lastDiagnosis;
+      if (!d.findings || !d.findings.length) {
+        const okBox = document.createElement('div');
+        okBox.className = 'ai-finding ok';
+        okBox.innerHTML = `<div class="ai-finding-title"><span>Studio Asset Healthy</span><span>QA ${Math.round(d.qa.score)}/100</span></div><div>Zero QA, shadow or UV-seam issues detected.</div>`;
+        secAi.appendChild(okBox);
+      } else {
+        for (const f of d.findings.slice(0, 6)) {
+          const sev = f.severity || 'ok';
+          const box = document.createElement('div');
+          box.className = 'ai-finding ' + (sev === 'error' ? 'error' : ((sev === 'warning' || sev === 'warn') ? 'warn' : 'ok'));
+          box.innerHTML = `<div class="ai-finding-title"><span>${f.title || f.id || 'Finding'}</span><span>${sev}</span></div><div>${f.detail || f.message || ''}</div>`;
+          secAi.appendChild(box);
+        }
+      }
+    }
+    root.appendChild(secAi);
+
+    // 2. Pure-Algorithmic Style-DNA Extractor (Presets or Reference PNG/JPG)
+    const secDna = document.createElement('div');
+    secDna.className = 'ai-section';
+    const presetOpts = stylePresets
+      .map((p) => {
+        const val = `preset:${p.id}`;
+        const short = (p.title || p.id).split('(')[0].trim();
+        return `<option value="${val}"${state.selectedStylePreset === val ? ' selected' : ''}>${short}</option>`;
+      })
+      .join('');
+    secDna.innerHTML = `
+      <div class="ai-section-head">
+        <span>Style-DNA Palette Extractor</span>
+        <span style="font-size:10px;color:var(--text-muted);font-family:var(--font-mono);">OKLCH</span>
+      </div>
+      <div style="display:flex;gap:5px;align-items:center;">
+        <select id="stylePresetSelect" class="sel-input" style="flex:1;height:24px;">${presetOpts}</select>
+        <button class="btn sm" id="btnExtractPresetDna">Extract</button>
+      </div>
+      <div style="display:flex;gap:5px;flex-wrap:wrap;">
+        <button class="btn sm" id="btnUploadStyleRef">From Ref Image...</button>
+        <button class="btn sm primary" id="btnApplyDna" ${!state.lastDna ? 'disabled' : ''}>Inject Palette (Safe)</button>
+      </div>
+    `;
+    if (state.lastDna && state.lastDna.stops && state.lastDna.stops.length) {
+      const dna = state.lastDna;
+      const bar = document.createElement('div');
+      bar.className = 'dna-swatch-bar';
+      bar.style.background = `linear-gradient(90deg, ${dna.stops.join(', ')})`;
+      const info = document.createElement('div');
+      info.style.cssText = 'font-family:var(--font-mono);font-size:10px;color:var(--text-secondary);';
+      const hueInfo = dna.stats && dna.stats.hue_shift_deg != null ? `ΔH ${Math.round(dna.stats.hue_shift_deg)}°` : 'OKLCH';
+      info.textContent = `${dna.name} · ${hueInfo} · ${dna.stops.join(' ')}`;
+      secDna.appendChild(bar);
+      secDna.appendChild(info);
+    }
+    root.appendChild(secDna);
+
+    // 3. Live 3D Chronal Variant Factory + Unified .syncproj Export
+    const secVar = document.createElement('div');
+    secVar.className = 'ai-section';
+    secVar.innerHTML = `
+      <div class="ai-section-head">
+        <span>Live 3D Chronal Variants</span>
+        <span style="font-size:10px;color:var(--text-muted);font-family:var(--font-mono);">${activeVar}</span>
+      </div>
+      <div class="variant-grid" id="variantGrid"></div>
+      <div style="display:flex;gap:5px;margin-top:2px;">
+        <button class="btn sm primary" id="btnExportSyncproj" style="flex:1;">Export Unified .syncproj</button>
+      </div>
+    `;
+    const vGrid = secVar.querySelector('#variantGrid');
+    for (const v of variants) {
+      const b = document.createElement('button');
+      b.className = 'variant-btn' + (activeVar === v.id ? ' active' : '');
+      b.dataset.variantId = v.id;
+      const shortTitle = (v.title || v.id).split('(')[0].trim();
+      b.innerHTML = `
+        <div class="variant-dots">
+          <span class="variant-dot" style="background:${v.eye_iris || '#a855f7'};"></span>
+          <span class="variant-dot" style="background:${v.rune_color || '#38f2ff'};"></span>
+          <span style="font-size:11px;font-weight:600;">${shortTitle}</span>
+        </div>
+        <span style="font-size:9.5px;color:var(--text-muted);font-family:var(--font-mono);">${v.id}</span>
+      `;
+      b.onclick = async () => {
+        try {
+          const res = await apiPost('/api/variants/apply', { variant_id: v.id });
+          if (res.state) applyServerState(res.state, { autoPrim: false });
+          await runEvaluate({ includeThumbs: true, includeQa: true });
+          showToast(`Morphed live 3D variant -> ${shortTitle}`, 'ok');
+        } catch (err) {
+          showToast(err.message, 'err');
+        }
+      };
+      vGrid.appendChild(b);
+    }
+    root.appendChild(secVar);
+
+    // Bind AI & DNA buttons
+    $('btnAiDiagnose').onclick = async () => {
+      try {
+        const rep = await apiPost('/api/ai/diagnose', { phase: state.phase });
+        state.lastDiagnosis = rep;
+        renderAiVariantsPanel();
+        showToast(`AI Co-Pilot: ${rep.finding_count} finding(s) · QA ${Math.round(rep.qa.score)}/100`, 'ok');
+      } catch (err) {
+        showToast(err.message, 'err');
+      }
+    };
+    $('btnAiApplyPatch').onclick = async () => {
+      if (!allSuggestedOps.length) return;
+      try {
+        const res = await apiPost('/api/ai/patch', { patch_ops: allSuggestedOps, preserve_artist_overrides: true });
+        state.lastPatchSummary = res.patch_result;
+        if (res.state) applyServerState(res.state, { autoPrim: false });
+        await runEvaluate({ includeThumbs: true, includeQa: true });
+        showToast(`Safe Patch applied (${res.patch_result.preserved_overrides.length} artist lock(s) kept!)`, 'ok');
+      } catch (err) {
+        showToast(err.message, 'err');
+      }
+    };
+    $('btnClearLocks').onclick = () => {
+      mutate({ action: 'clear_artist_overrides' }, { skipEval: true });
+      showToast('Cleared artist override locks', 'ok');
+    };
+    $('stylePresetSelect').onchange = (e) => { state.selectedStylePreset = e.target.value; };
+    $('btnExtractPresetDna').onclick = async () => {
+      const src = $('stylePresetSelect').value;
+      state.selectedStylePreset = src;
+      try {
+        const res = await apiPost('/api/style/extract', { source: src, name: src.replace('preset:', ''), apply: false });
+        state.lastDna = res.dna;
+        renderAiVariantsPanel();
+        showToast(`Extracted OKLCH Style-DNA (${res.dna.stops.length} stops)`, 'ok');
+      } catch (err) {
+        showToast(err.message, 'err');
+      }
+    };
+    $('btnUploadStyleRef').onclick = () => $('styleRefFileInput').click();
+    $('btnApplyDna').onclick = async () => {
+      if (!state.lastDna) return;
+      try {
+        const src = $('stylePresetSelect') ? $('stylePresetSelect').value : 'preset:chronos_amethyst';
+        const res = await apiPost('/api/ai/patch', {
+          patch_ops: [{ op: 'replace_palette', stops: state.lastDna.stops }],
+          preserve_artist_overrides: true,
+        });
+        state.lastPatchSummary = res.patch_result;
+        if (res.state) applyServerState(res.state, { autoPrim: false });
+        await runEvaluate({ includeThumbs: true, includeQa: true });
+        showToast(`Injected Style-DNA '${state.lastDna.name}' (locks preserved)`, 'ok');
+      } catch (err) {
+        showToast(err.message, 'err');
+      }
+    };
+    $('btnExportSyncproj').onclick = async () => {
+      try {
+        const stem = (state.serverState && state.serverState.recipe && state.serverState.recipe.name) || 'kaelith_chrono_dragonborn';
+        const res = await apiPost('/api/syncproj/export', { stem, preset: state.lightingPreset });
+        triggerDownload(res.filename || `${stem}.syncproj`, JSON.stringify(res.manifest, null, 2));
+        showToast(`Exported unified ${res.filename || stem + '.syncproj'}`, 'ok');
+      } catch (err) {
+        showToast(err.message, 'err');
+      }
+    };
+  }
+
+  // ------------------------------------------------------------------------
   // Resizable Splitters & Docking Layout Presets
   // ------------------------------------------------------------------------
   function setupSplitters() {
@@ -940,6 +1181,8 @@
     $('rightTabInspector').style.display = tab === 'inspector' ? 'flex' : 'none';
     $('rightTabTexdsl').style.display = tab === 'texdsl' ? 'flex' : 'none';
     $('rightTabQa').style.display = tab === 'qa' ? 'flex' : 'none';
+    $('rightTabAi').style.display = tab === 'ai' ? 'flex' : 'none';
+    if (tab === 'ai') renderAiVariantsPanel();
   }
 
   function switchBottomTab(tab) {
@@ -1039,12 +1282,12 @@
       for (const n of nodes) state.opMap[n.op] = Object.assign({ category: cat }, n);
     }
     graphCanvas.setSchema(schemaPayload.schema);
-    $('versionBadge').textContent = `v${schemaPayload.schema.engine_version} · ${schemaPayload.schema.node_count} nodes`;
+    $('versionBadge').textContent = `v12 · ${schemaPayload.schema.node_count} nodes`;
 
     // Populate Project / Preset Dropdown
     const pSel = $('projectSelect');
     const ogSamples = document.createElement('optgroup');
-    ogSamples.label = 'Flagship Studio Projects (v10)';
+    ogSamples.label = 'Flagship 3D Studio Projects (v12)';
     for (const s of schemaPayload.samples) {
       const o = document.createElement('option');
       o.value = `sample:${s.id}`;
@@ -1256,10 +1499,26 @@
         showToast(err.message, 'err');
       }
     };
+    $('btnMeshDragonborn').onclick = () => loadMeshSample('kaelith_dragonborn');
     $('btnMeshMonolith').onclick = () => loadMeshSample('temple_monolith');
-    $('btnMeshOrc').onclick = () => loadMeshSample('ironjaw_orc');
     $('btnMeshDetach').onclick = () => loadMeshSample('none');
     $('btnMeshUpload').onclick = () => $('bbmodelFileInput').click();
+    $('styleRefFileInput').onchange = async (e) => {
+      const f = e.target.files && e.target.files[0];
+      if (!f) return;
+      const reader = new FileReader();
+      reader.onload = async () => {
+        try {
+          const res = await apiPost('/api/style/extract', { source: reader.result, name: f.name.replace(/\.[^.]+$/, ''), apply: false });
+          state.lastDna = res.dna;
+          renderAiVariantsPanel();
+          showToast(`Extracted Style-DNA from ${f.name}`, 'ok');
+        } catch (err) {
+          showToast(`Style-DNA error: ${err.message}`, 'err');
+        }
+      };
+      reader.readAsDataURL(f);
+    };
     $('bbmodelFileInput').onchange = async (e) => {
       const f = e.target.files && e.target.files[0];
       if (!f) return;

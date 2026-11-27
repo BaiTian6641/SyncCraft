@@ -121,7 +121,7 @@ def main(argv=None):
     )
     studio_cmd.add_argument("--host", default="127.0.0.1")
     studio_cmd.add_argument("--port", type=int, default=18790)
-    studio_cmd.add_argument("--sample", default="monolith_v10_3d", help="initial Studio project sample or preset name")
+    studio_cmd.add_argument("--sample", default="kaelith_dragonborn_3d", help="initial Studio project sample or preset name")
     studio_cmd.add_argument("--size", type=int, default=64, help="default canvas resolution for procedural blocks/items")
     studio_cmd.add_argument("--open", action="store_true", help="open default browser automatically")
 

@@ -33,6 +33,7 @@ import numpy as np
 from PIL import Image
 
 from synccraft import __version__
+from .ai_copilot import BUILT_IN_STYLE_PRESETS, apply_surgical_patch, diagnose_asset, extract_style_dna
 from .core import GraphCycleError, NodeSpec, TexGraph, _parse_ref
 from .mesh_baker import _FACE_BASIS, _euler_xyz_mat, MeshBakeContext, bake_bbmodel_maps
 from .pbr import BAKE_LIGHTING_PRESETS as BAKE_PRESETS, bake_pbr_to_albedo
@@ -42,6 +43,7 @@ from .presets import PRESET_REGISTRY
 from .production import PALETTE_BANK
 from .quality import evaluate_texture_quality
 from .registry import NODE_CATALOG as NODE_REGISTRY, PORT_COMPATIBILITY, export_node_schema_json
+from .syncproj import DEFAULT_CHRONO_VARIANTS, SyncProject, apply_variant_to_graph, generate_variant_pack
 from .texdsl import TexDslError as TexDSLParseError, export_texdsl, parse_texdsl
 
 _STUDIO_UI_DIR = Path(__file__).resolve().parent / "studio_ui"
@@ -313,6 +315,21 @@ def build_sample_monolith_bbmodel() -> dict[str, Any]:
     return packed
 
 
+def _find_kaelith_dragonborn_paths() -> tuple[Path, Path] | None:
+    """Locate the sculpted Chrono-Amethyst Artificer Dragonborn `.bbmodel` & `.texdsl` if present in workspace."""
+    here = Path(__file__).resolve()
+    for anc in list(here.parents)[:6]:
+        for sub in (
+            anc / "test_flights" / "texgraph_showcase" / "kaelith_chrono_dragonborn",
+            anc / "MH-blockbench-assets" / "texgraph_showcase" / "kaelith_chrono_dragonborn",
+        ):
+            bb = sub / "kaelith_chrono_dragonborn.bbmodel"
+            dsl = sub / "kaelith_chrono_dragonborn.texdsl"
+            if bb.is_file() and dsl.is_file():
+                return bb, dsl
+    return None
+
+
 def _find_orc_warlord_paths() -> tuple[Path, Path] | None:
     """Locate the sculpted 84-box Ironjaw Orc Warlord `.bbmodel` & `.texdsl` if present in workspace."""
     here = Path(__file__).resolve()
@@ -428,6 +445,18 @@ def build_studio_sample(sample_id: str, *, size: int = 64) -> tuple[TexGraph, di
         g.auto_layout(col_spacing=290.0, row_spacing=205.0)
         return g, None
 
+    if sample_id == "kaelith_dragonborn_3d":
+        found = _find_kaelith_dragonborn_paths()
+        if found is not None:
+            bb_path, dsl_path = found
+            bb_doc = json.loads(bb_path.read_text(encoding="utf-8"))
+            mc = bake_bbmodel_maps(bb_doc)
+            g = parse_texdsl(dsl_path.read_text(encoding="utf-8"), mesh_context=mc)
+            g.domain = "entity"
+            g.auto_layout(col_spacing=290.0, row_spacing=195.0)
+            return g, bb_doc
+        return build_studio_sample("monolith_v10_3d", size=size)
+
     if sample_id == "ironjaw_orc_3d":
         found = _find_orc_warlord_paths()
         if found is not None:
@@ -459,15 +488,15 @@ def build_studio_sample(sample_id: str, *, size: int = 64) -> tuple[TexGraph, di
 
 STUDIO_SAMPLES: list[dict[str, Any]] = [
     {
-        "id": "monolith_v10_3d",
-        "title": "Temple Monolith 3D (v10)",
+        "id": "kaelith_dragonborn_3d",
+        "title": "Kaelith Chrono-Dragonborn 3D",
         "category": "Flagship 3D Studio",
         "has_3d": True,
         "animated": True,
     },
     {
-        "id": "ironjaw_orc_3d",
-        "title": "Ironjaw Orc Warlord 3D",
+        "id": "monolith_v10_3d",
+        "title": "Temple Monolith 3D (v10)",
         "category": "Flagship 3D Studio",
         "has_3d": True,
         "animated": True,
@@ -515,6 +544,8 @@ class StudioSession:
         self._thumb_cache: dict[str, str] = {}
         self._last_eval: dict[str, Any] = {}
         self._event_log: list[dict[str, Any]] = []
+        self.artist_overrides: dict[str, Any] = {}
+        self.active_variant: str = "chronos_prime"
         self.active_source: str = f"sample:{initial_sample}"
 
         g, bb = build_studio_sample(initial_sample, size=size)
@@ -554,6 +585,8 @@ class StudioSession:
         if clear_history:
             self._undo_stack.clear()
             self._redo_stack.clear()
+            self.artist_overrides.clear()
+            self.active_variant = "chronos_prime"
         self._thumb_cache.clear()
         self._log("info", f"Loaded workspace '{graph.name}' ({len(graph.nodes)} nodes, {graph.width}x{graph.height})")
 
@@ -597,6 +630,14 @@ class StudioSession:
             "subgraphs": sorted(SUBGRAPH_REGISTRY.keys()),
             "bake_presets": sorted(BAKE_PRESETS.keys()),
             "palettes": sorted(PALETTE_BANK.keys()),
+            "style_presets": [
+                {"id": k, "title": v["title"], "stops": v["stops"], "mood": v["mood"]}
+                for k, v in BUILT_IN_STYLE_PRESETS.items()
+            ],
+            "variants": [
+                {"id": k, "title": v["title"], "style_preset": v["style_preset"], "eye_iris": v["eye_iris"], "rune_color": v["rune_color"]}
+                for k, v in DEFAULT_CHRONO_VARIANTS.items()
+            ],
         }
 
     def get_state_payload(self) -> dict[str, Any]:
@@ -614,6 +655,8 @@ class StudioSession:
                 "validation": val.to_dict(),
                 "undo_depth": len(self._undo_stack),
                 "redo_depth": len(self._redo_stack),
+                "artist_overrides": copy.deepcopy(self.artist_overrides),
+                "active_variant": self.active_variant,
                 "has_mesh": self.mesh_ctx is not None,
                 "mesh": self.webgl_mesh,
                 "mesh_stats": (
@@ -664,7 +707,10 @@ class StudioSession:
     def load_mesh(self, payload: dict[str, Any]) -> dict[str, Any]:
         with self._lock:
             preset_name = payload.get("sample")
-            if preset_name == "temple_monolith":
+            if preset_name == "kaelith_dragonborn":
+                found = _find_kaelith_dragonborn_paths()
+                bb_doc = json.loads(found[0].read_text(encoding="utf-8")) if found else build_sample_monolith_bbmodel()
+            elif preset_name == "temple_monolith":
                 bb_doc = build_sample_monolith_bbmodel()
             elif preset_name == "ironjaw_orc":
                 found = _find_orc_warlord_paths()
@@ -821,8 +867,15 @@ class StudioSession:
                     raise ValueError(f"Unknown node {nid!r}")
                 if payload.get("undoable", True):
                     self._push_undo()
+                    # Track artist slider edits so AI Co-Pilot strictly preserves human choices!
+                    self.artist_overrides[f"{nid}.{pkey}"] = copy.deepcopy(val)
                 g.nodes[nid].params[pkey] = val
                 g._static_cache.clear()
+                return self.get_state_payload()
+
+            if action == "clear_artist_overrides":
+                self.artist_overrides.clear()
+                self._log("info", "Cleared human artist override locks")
                 return self.get_state_payload()
 
             if action == "connect":
@@ -1220,6 +1273,101 @@ class StudioSession:
                     "file_keys": sorted(pkg["files"].keys()),
                 }
 
+    # -----------------------------------------------------------------------
+    # Milestone v12: AI Co-Pilot, Style-DNA Extractor & Batch Variant Factory
+    # -----------------------------------------------------------------------
+
+    def ai_diagnose(self, payload: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            rep = diagnose_asset(self.graph, self.mesh_ctx, phase=float(payload.get("phase", 0.0)))
+            rep["artist_overrides"] = copy.deepcopy(self.artist_overrides)
+            self._log("info", f"AI Co-Pilot diagnosed {rep['finding_count']} item(s) (QA {round(rep['qa']['score'])}/100)")
+            return rep
+
+    def ai_patch(self, payload: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            ops = payload.get("patch_ops") or []
+            if not isinstance(ops, list):
+                raise ValueError("Expected 'patch_ops' list")
+            preserve = bool(payload.get("preserve_artist_overrides", True))
+            self._push_undo()
+            res = apply_surgical_patch(
+                self.graph,
+                ops,
+                artist_overrides=self.artist_overrides,
+                preserve_artist_overrides=preserve,
+            )
+            self._ensure_positions()
+            self._log(
+                "info",
+                f"AI Patch applied {res['applied_count']} op(s), preserved {len(res['preserved_overrides'])} artist lock(s) (QA {res['qa_before']} -> {res['qa_after']})",
+            )
+            return {"ok": res["ok"], "patch_result": res, "state": self.get_state_payload()}
+
+    def style_extract(self, payload: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            src = payload.get("source") or "preset:chronos_amethyst"
+            name = str(payload.get("name") or "reference_dna")
+            dna = extract_style_dna(src, num_stops=int(payload.get("num_stops", 6)), name=name)
+            applied_state = None
+            patch_res = None
+            if payload.get("apply"):
+                self._push_undo()
+                patch_res = apply_surgical_patch(
+                    self.graph,
+                    [{"op": "replace_palette", "stops": dna["stops"]}],
+                    artist_overrides=self.artist_overrides,
+                    preserve_artist_overrides=True,
+                )
+                applied_state = self.get_state_payload()
+                self._log("info", f"Injected Style-DNA '{dna['name']}' palette into active graph")
+            return {"ok": True, "dna": dna, "patch_result": patch_res, "state": applied_state}
+
+    def variant_apply(self, payload: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            vid = str(payload.get("variant_id", "chronos_prime"))
+            if vid not in DEFAULT_CHRONO_VARIANTS:
+                raise ValueError(f"Unknown variant {vid!r}; choices: {sorted(DEFAULT_CHRONO_VARIANTS)}")
+            self._push_undo()
+            v_spec = DEFAULT_CHRONO_VARIANTS[vid]
+            g_var = apply_variant_to_graph(self.graph, v_spec, artist_overrides=self.artist_overrides)
+            g_var._content_cache = dict(self.graph._content_cache)
+            self.graph = g_var
+            self.active_variant = vid
+            self._ensure_positions()
+            self._log("info", f"Switched live workspace to variant '{v_spec['title']}'")
+            return {"ok": True, "variant": vid, "state": self.get_state_payload()}
+
+    def export_syncproj(self, payload: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            stem = str(payload.get("stem") or self.graph.name or "synccraft_project")
+            proj = SyncProject(
+                name=stem,
+                blockdsl_path=f"{stem}.blockdsl",
+                bbmodel_path=f"{stem}.bbmodel" if self.bbmodel_doc is not None else None,
+                texdsl_path=f"{stem}.texdsl",
+                pbr_preset=str(payload.get("preset", "studio_hero")),
+                artist_overrides=copy.deepcopy(self.artist_overrides),
+                variants=copy.deepcopy(DEFAULT_CHRONO_VARIANTS),
+            )
+            out_dir_raw = payload.get("out_dir")
+            if out_dir_raw:
+                out_dir = Path(str(out_dir_raw)).expanduser().resolve()
+                p_path = proj.save(out_dir / f"{stem}.syncproj")
+                vpack = None
+                if payload.get("build_variants"):
+                    vpack = generate_variant_pack(
+                        self.graph,
+                        DEFAULT_CHRONO_VARIANTS,
+                        out_dir / "variants",
+                        bbmodel_doc=self.bbmodel_doc,
+                        artist_overrides=self.artist_overrides,
+                        pbr_preset=proj.pbr_preset,
+                    )
+                self._log("info", f"Exported unified .syncproj -> {p_path}")
+                return {"ok": True, "path": str(p_path), "manifest": proj.to_dict(), "variant_pack": vpack}
+            return {"ok": True, "manifest": proj.to_dict(), "filename": f"{stem}.syncproj"}
+
 
 # ---------------------------------------------------------------------------
 # HTTP Server & Handler
@@ -1333,6 +1481,21 @@ def create_studio_server(
                     return
                 if path == "/api/export":
                     self._send_json(sess.export_package(body))
+                    return
+                if path == "/api/ai/diagnose":
+                    self._send_json(sess.ai_diagnose(body))
+                    return
+                if path == "/api/ai/patch":
+                    self._send_json(sess.ai_patch(body))
+                    return
+                if path == "/api/style/extract":
+                    self._send_json(sess.style_extract(body))
+                    return
+                if path == "/api/variants/apply":
+                    self._send_json(sess.variant_apply(body))
+                    return
+                if path == "/api/syncproj/export":
+                    self._send_json(sess.export_syncproj(body))
                     return
                 self._send_json({"error": f"Unknown API endpoint: {path}"}, status=404)
             except (ValueError, KeyError, TypeError, TexDSLParseError, GraphCycleError) as exc:

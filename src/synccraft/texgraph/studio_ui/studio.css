@@ -1212,3 +1212,117 @@ html, body {
 .toast.show { opacity: 1; transform: translateY(0); }
 .toast.err { border-left-color: var(--err-red); }
 .toast.ok { border-left-color: var(--ok-green); }
+
+/* ==========================================================================
+   Milestone v12 — AI Co-Pilot, Style-DNA Extractor & Live Variant Factory
+   ========================================================================== */
+.ai-section {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 5px;
+  padding: 9px;
+  margin-bottom: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.ai-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.ai-finding {
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-left: 3px solid var(--accent);
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-size: 10.5px;
+  color: var(--text-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.ai-finding.warn { border-left-color: var(--focus-amber); }
+.ai-finding.error { border-left-color: var(--err-red); }
+.ai-finding.ok { border-left-color: var(--ok-green); }
+.ai-finding-title {
+  color: var(--text-primary);
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.lock-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.lock-chip {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: var(--focus-amber-soft);
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  color: #fbbf24;
+}
+.variant-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+.variant-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 7px 8px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  color: var(--text-primary);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.12s, background 0.12s;
+}
+.variant-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+.variant-btn.active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+.variant-dots {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+.variant-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+}
+.dna-swatch-bar {
+  height: 14px;
+  border-radius: 3px;
+  border: 1px solid var(--border-med);
+  width: 100%;
+}
+.param-lock-badge {
+  font-size: 9.5px;
+  font-family: var(--font-mono);
+  color: #fbbf24;
+  background: var(--focus-amber-soft);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  border-radius: 3px;
+  padding: 0 4px;
+  margin-left: 4px;
+}

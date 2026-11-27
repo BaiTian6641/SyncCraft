@@ -209,6 +209,8 @@ from .presets import (
     build_temple_carved_stone,
 )
 from .registry import NODE_CATALOG, PORT_COLORS, PORT_COMPATIBILITY, NodeMeta, ParamSchema, PortSchema, export_node_schema_json, save_node_schema_json
+from .ai_copilot import BUILT_IN_STYLE_PRESETS, apply_surgical_patch, diagnose_asset, extract_style_dna
+from .syncproj import DEFAULT_CHRONO_VARIANTS, SyncProject, apply_variant_to_graph, generate_variant_pack
 from .studio_server import (
     STUDIO_SAMPLES,
     StudioSession,
