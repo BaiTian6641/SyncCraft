@@ -125,6 +125,17 @@ def main(argv=None):
     studio_cmd.add_argument("--size", type=int, default=64, help="default canvas resolution for procedural blocks/items")
     studio_cmd.add_argument("--open", action="store_true", help="open default browser automatically")
 
+    batch_cmd = subs.add_parser(
+        "batch-bake",
+        help="Multi-Asset Batch Bakery CLI — batch-bake a folder of .bbmodel / .texdsl assets into PBR v2.0 + MaterialX bundles",
+    )
+    batch_cmd.add_argument("input_dir", type=Path, help="folder (or single .bbmodel) to scan & batch-bake")
+    batch_cmd.add_argument("-o", "--out", type=Path, required=True, help="output directory for per-asset PBR bundles & batch_bakery_report.json")
+    batch_cmd.add_argument("--preset", default="studio_hero", choices=["studio_hero", "dramatic_rim", "high_noon", "moonlit_obsidian"])
+    batch_cmd.add_argument("--template", type=Path, default=None, help="optional fallback .texdsl template for .bbmodel files without a sibling .texdsl")
+    batch_cmd.add_argument("--max-assets", type=int, default=24)
+    batch_cmd.add_argument("--no-embed", action="store_true", help="do not embed PNG data URLs inside .synccraft.pbr.json")
+
     # Parametric Pixel Composer & Semantic UV v2 CLI
     tg = subs.add_parser(
         "texgraph",
@@ -215,6 +226,18 @@ def main(argv=None):
                 open_browser=bool(args.open),
             )
             return 0
+        elif args.command == "batch-bake":
+            from synccraft.texgraph.v16_pro_ops import run_batch_bakery
+            rep = run_batch_bakery(
+                args.input_dir,
+                args.out,
+                preset=args.preset,
+                template_texdsl=args.template,
+                max_assets=int(args.max_assets),
+                embed_manifest=not bool(args.no_embed),
+            )
+            print(_json(rep))
+            return 0 if rep.get("ok") else 2
         elif args.command == "texgraph":
             from synccraft.shading.uv_packer import repack_bbmodel_uvs
             from synccraft.texgraph import (

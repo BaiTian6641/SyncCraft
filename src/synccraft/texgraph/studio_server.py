@@ -59,6 +59,18 @@ from .syncmat_and_mtlx import (
 from .ctm_tileset import generate_ctm_tileset
 from .syncproj import DEFAULT_CHRONO_VARIANTS, SyncProject, apply_variant_to_graph, generate_variant_pack
 from .texdsl import TexDslError as TexDSLParseError, export_texdsl, parse_texdsl
+from .v16_pro_ops import (
+    PBR_BRUSH_PRESETS,
+    ScriptSecurityError,
+    apply_pbr_brush_strokes_to_layer,
+    list_all_syncpacks,
+    make_empty_paint_layer,
+    parse_layers_json,
+    run_batch_bakery,
+    save_user_syncpack,
+    scan_batch_folder,
+    spawn_syncpack_macro_into_graph,
+)
 
 _STUDIO_UI_DIR = Path(__file__).resolve().parent / "studio_ui"
 _STUDIO_LOG_LOCK = threading.Lock()
@@ -675,6 +687,17 @@ class StudioSession:
         self._bridge_payload: dict[str, Any] = {}
         self._bridge_clients: int = 0
         self._bridge_cond = threading.Condition()
+        self._batch_lock = threading.Lock()
+        self._batch_state: dict[str, Any] = {
+            "running": False,
+            "total": 0,
+            "completed": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "out_dir": "",
+            "items": [],
+            "report": None,
+        }
 
         g, bb = build_studio_sample(initial_sample, size=size)
         self._set_workspace(g, bb, source=self.active_source, clear_history=True)
@@ -795,6 +818,8 @@ class StudioSession:
                 {"id": k, "title": v["title"], "style_preset": v["style_preset"], "eye_iris": v["eye_iris"], "rune_color": v["rune_color"]}
                 for k, v in DEFAULT_CHRONO_VARIANTS.items()
             ],
+            "brush_presets": PBR_BRUSH_PRESETS,
+            "syncpacks": list_all_syncpacks(),
         }
 
     def get_state_payload(self) -> dict[str, Any]:
@@ -1430,6 +1455,11 @@ class StudioSession:
                 val = payload.get("value")
                 if nid not in g.nodes:
                     raise ValueError(f"Unknown node {nid!r}")
+                if g.nodes[nid].op == "script_expr" and pkey in ("expr", "expr_g", "expr_b"):
+                    s_val = str(val or "").strip()
+                    if s_val:
+                        from .v16_pro_ops import validate_safe_script_ast
+                        validate_safe_script_ast(s_val)
                 if payload.get("undoable", True):
                     self._push_undo()
                     # Track artist slider edits so AI Co-Pilot strictly preserves human choices!
@@ -1586,6 +1616,7 @@ class StudioSession:
                 g.param_drivers = [
                     d for d in g.param_drivers if not (d.get("node_id") == nid and d.get("param_key") == pkey)
                 ]
+                kfs = payload.get("keyframes")
                 g.bind_driver(
                     nid,
                     pkey,
@@ -1595,8 +1626,42 @@ class StudioSession:
                     freq=float(payload.get("freq", 1.0)),
                     phase_offset=float(payload.get("phase_offset", 0.0)),
                     octaves=int(payload.get("octaves", 3)),
+                    keyframes=kfs if isinstance(kfs, list) else None,
                 )
                 self._log("info", f"Bound animation driver ({payload.get('kind', 'sine')}) to {nid}.{pkey}")
+                return self.get_state_payload()
+
+            if action == "update_driver":
+                idx = int(payload.get("index", -1))
+                if not (0 <= idx < len(g.param_drivers)):
+                    raise ValueError(f"Driver index out of range: {idx}")
+                if payload.get("undoable", True):
+                    self._push_undo()
+                d = g.param_drivers[idx]
+                if "kind" in payload:
+                    d["kind"] = str(payload["kind"])
+                if "keyframes" in payload and isinstance(payload["keyframes"], list):
+                    clean_kfs = []
+                    for pt in payload["keyframes"]:
+                        if isinstance(pt, (list, tuple)) and len(pt) >= 2:
+                            t_k = round(max(0.0, min(1.0, float(pt[0]))), 4)
+                            v_k = round(float(pt[1]), 4)
+                            if len(pt) >= 3 and str(pt[2]).strip():
+                                clean_kfs.append([t_k, v_k, str(pt[2])])
+                            else:
+                                clean_kfs.append([t_k, v_k])
+                    clean_kfs.sort(key=lambda r: r[0])
+                    if clean_kfs:
+                        d["keyframes"] = clean_kfs
+                        vals_k = [r[1] for r in clean_kfs]
+                        d["min_val"] = float(min(vals_k))
+                        d["max_val"] = float(max(vals_k))
+                for k_f in ("min_val", "max_val", "freq", "phase_offset"):
+                    if k_f in payload and payload[k_f] is not None:
+                        d[k_f] = float(payload[k_f])
+                g._static_cache.clear()
+                self._channel_png_cache.clear()
+                self._log("info", f"Updated curve driver {d.get('node_id')}.{d.get('param_key')} ({d.get('kind')})")
                 return self.get_state_payload()
 
             if action == "remove_driver":
@@ -2347,6 +2412,262 @@ class StudioSession:
         self._log("info", "Cleared Studio file log")
         return {"ok": True, "path": str(lp)}
 
+    # -----------------------------------------------------------------------
+    # Milestone v16: 3D Multi-Channel PBR Paint Stack, .syncpack Marketplace
+    # & Multi-Asset Batch Bakery Queue
+    # -----------------------------------------------------------------------
+
+    def paint_stack_stroke(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Paint multi-channel PBR strokes (Albedo/Roughness/Metallic/Height/Emissive) or edit layers on `paint_layer_stack`."""
+        with self._lock:
+            g = self.graph
+            nid = payload.get("node_id")
+            created_id = None
+            if not nid or str(nid) not in g.nodes or g.nodes[str(nid)].op != "paint_layer_stack":
+                # Reuse existing paint_layer_stack if one is already in the graph, else auto-spawn & wire at graph output!
+                existing = next((n_id for n_id in reversed(g.node_order) if g.nodes[n_id].op == "paint_layer_stack"), None)
+                if existing and not payload.get("force_new"):
+                    nid = existing
+                else:
+                    self._push_undo()
+                    base_id = "pbr_paint_stack"
+                    nid_s = base_id
+                    idx = 1
+                    while nid_s in g.nodes:
+                        nid_s = f"{base_id}_{idx}"
+                        idx += 1
+                    cur_out = g.output_material_node or (
+                        _parse_ref(g.output_node)[0] if g.output_node else (g.node_order[-1] if g.node_order else None)
+                    )
+                    pos = payload.get("pos")
+                    if not pos and cur_out and cur_out in g.nodes and g.nodes[cur_out].pos:
+                        pos = [g.nodes[cur_out].pos[0] + 290.0, g.nodes[cur_out].pos[1]]
+                    pos = pos or [380.0, 160.0]
+                    init_layers = [make_empty_paint_layer("layer_1", "Hero Detail Paint")]
+                    sp = NodeSpec(
+                        id=nid_s,
+                        op="paint_layer_stack",
+                        inputs={"base": cur_out} if cur_out and cur_out in g.nodes else {},
+                        params={
+                            "active_layer_id": "layer_1",
+                            "height_normal_strength": 2.6,
+                            "layers_json": json.dumps(init_layers),
+                        },
+                        pos=(float(pos[0]), float(pos[1])),
+                    )
+                    g.nodes[nid_s] = sp
+                    g.node_order.append(nid_s)
+                    if payload.get("wire_output", True):
+                        g.set_output_material(nid_s, normal_strength=float(g.pbr_config.get("normal_strength", 2.4)))
+                    nid = nid_s
+                    created_id = nid_s
+                    self._log("info", f"Auto-wired 3D PBR Paint Layer Stack '{nid_s}' at graph output")
+
+            sp = g.nodes[str(nid)]
+            layers = parse_layers_json(sp.params.get("layers_json"))
+            active_lid = str(payload.get("layer_id") or sp.params.get("active_layer_id") or layers[0]["id"])
+            if not any(l["id"] == active_lid for l in layers):
+                active_lid = layers[-1]["id"]
+
+            layer_action = str(payload.get("layer_action") or "").strip().lower()
+            if layer_action:
+                self._push_undo()
+                if layer_action == "add_layer":
+                    n_idx = len(layers) + 1
+                    new_id = f"layer_{n_idx}"
+                    while any(l["id"] == new_id for l in layers):
+                        n_idx += 1
+                        new_id = f"layer_{n_idx}"
+                    lname = str(payload.get("name") or f"PBR Layer {n_idx}")
+                    layers.append(make_empty_paint_layer(new_id, lname))
+                    active_lid = new_id
+                    self._log("info", f"Added PBR paint layer '{lname}' on '{nid}'")
+                elif layer_action == "delete_layer" and len(layers) > 1:
+                    layers = [l for l in layers if l["id"] != active_lid]
+                    active_lid = layers[-1]["id"]
+                elif layer_action == "toggle_visible":
+                    for l in layers:
+                        if l["id"] == active_lid:
+                            l["visible"] = not bool(l.get("visible", True))
+                elif layer_action == "set_opacity":
+                    for l in layers:
+                        if l["id"] == active_lid:
+                            l["opacity"] = round(float(np.clip(payload.get("opacity", 1.0), 0.0, 1.0)), 2)
+                elif layer_action == "set_blend":
+                    for l in layers:
+                        if l["id"] == active_lid:
+                            l["blend_mode"] = str(payload.get("blend_mode") or "normal")
+                elif layer_action == "clear_layer":
+                    for l in layers:
+                        if l["id"] == active_lid:
+                            l["albedo_url"] = ""
+                            l["pbr_url"] = ""
+                            l["emissive_url"] = ""
+                elif layer_action == "select_layer":
+                    pass
+                elif layer_action == "rename_layer":
+                    for l in layers:
+                        if l["id"] == active_lid and payload.get("name"):
+                            l["name"] = str(payload["name"]).strip()
+            else:
+                strokes = payload.get("strokes") or []
+                if strokes:
+                    if payload.get("undoable"):
+                        self._push_undo()
+                    brush = payload.get("brush") or {}
+                    for i, l in enumerate(layers):
+                        if l["id"] == active_lid:
+                            layers[i] = apply_pbr_brush_strokes_to_layer(l, g.width, g.height, strokes, brush=brush)
+                            break
+
+            sp.params["active_layer_id"] = active_lid
+            sp.params["layers_json"] = json.dumps(layers)
+            g._static_cache.clear()
+            self._channel_png_cache.clear()
+            st = self.get_state_payload()
+            st["painted_node_id"] = str(nid)
+            st["active_layer_id"] = active_lid
+            st["paint_layers"] = [
+                {k: v for k, v in l.items() if not k.endswith("_url")}
+                | {"has_paint": bool(l.get("albedo_url") or l.get("pbr_url") or l.get("emissive_url"))}
+                for l in layers
+            ]
+            if created_id:
+                st["created_node_id"] = created_id
+            return st
+
+    def list_syncpacks(self) -> dict[str, Any]:
+        return {"ok": True, "packs": list_all_syncpacks()}
+
+    def save_syncpack(self, payload: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            node_ids = payload.get("node_ids")
+            name = str(payload.get("name") or f"{self.graph.name} Pack").strip()
+            author = str(payload.get("author") or "SyncCraft Artist").strip()
+            desc = str(payload.get("description") or f"Custom .syncpack exported from {self.graph.name}").strip()
+            macro = extract_syncmat_from_graph(
+                self.graph,
+                node_ids=list(node_ids) if isinstance(node_ids, list) and node_ids else None,
+                name=str(payload.get("macro_name") or name),
+                category="Custom Pack",
+                description=desc,
+                frame_color=str(payload.get("color") or "#0284C7"),
+            )
+            pack = {
+                "schema": "synccraft.syncpack/1.0",
+                "id": payload.get("id") or name.lower().replace(" ", "_"),
+                "name": name,
+                "author": author,
+                "version": "1.0.0",
+                "color": str(payload.get("color") or "#0284C7"),
+                "tags": list(payload.get("tags") or ["custom", "macro"]),
+                "description": desc,
+                "macros": [
+                    {
+                        "id": macro["id"],
+                        "name": macro["name"],
+                        "description": macro.get("description", ""),
+                        "frame_color": macro.get("frame_color", "#0284C7"),
+                        "nodes": macro["nodes"],
+                        "output_node": macro.get("output_node"),
+                    }
+                ],
+            }
+            saved_p = save_user_syncpack(pack)
+            self._log("info", f"Saved .syncpack '{name}' -> {saved_p.name}")
+            return {"ok": True, "pack": pack, "path": str(saved_p), "packs": list_all_syncpacks()}
+
+    def import_syncpack(self, payload: dict[str, Any]) -> dict[str, Any]:
+        pack = payload.get("pack")
+        if not isinstance(pack, dict) or not isinstance(pack.get("macros"), list):
+            raise ValueError("Expected valid .syncpack JSON with 'macros' list")
+        saved_p = save_user_syncpack(pack)
+        self._log("info", f"Imported .syncpack '{pack.get('name', saved_p.stem)}' ({len(pack['macros'])} macros)")
+        return {"ok": True, "path": str(saved_p), "packs": list_all_syncpacks()}
+
+    def spawn_syncpack(self, payload: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            pack_id = str(payload.get("pack_id") or "")
+            macro_id = str(payload.get("macro_id") or "")
+            pos = payload.get("pos") or [240.0, 140.0]
+            self._push_undo()
+            created, out_id, frame_obj = spawn_syncpack_macro_into_graph(
+                self.graph,
+                pack_id,
+                macro_id,
+                pos=(float(pos[0]), float(pos[1])),
+                wrap_frame=bool(payload.get("wrap_frame", True)),
+            )
+            self._log("info", f"Spawned .syncpack macro '{pack_id}/{macro_id}' ({len(created)} nodes)")
+            st = self.get_state_payload()
+            st["created_node_id"] = out_id
+            st["created_node_ids"] = created
+            st["created_frame"] = frame_obj
+            return st
+
+    def batch_scan(self, payload: dict[str, Any]) -> dict[str, Any]:
+        in_dir = str(payload.get("input_dir") or "").strip()
+        if not in_dir:
+            found = _find_kaelith_dragonborn_paths()
+            in_dir = str(found[0].parent) if found else str(Path.cwd())
+        max_a = max(1, min(64, int(payload.get("max_assets", 24))))
+        assets = scan_batch_folder(in_dir, max_assets=max_a)
+        return {"ok": True, "input_dir": str(Path(in_dir).expanduser().resolve()), "count": len(assets), "assets": assets}
+
+    def batch_start(self, payload: dict[str, Any]) -> dict[str, Any]:
+        in_dir = str(payload.get("input_dir") or "").strip()
+        if not in_dir:
+            found = _find_kaelith_dragonborn_paths()
+            if found is None:
+                raise ValueError("Specify an input_dir containing .bbmodel / .texdsl files")
+            in_dir = str(found[0].parent)
+        out_dir = str(payload.get("out_dir") or (Path.home() / ".synccraft" / "batch_exports" / f"run_{int(time.time())}")).strip()
+        preset = str(payload.get("preset") or "studio_hero")
+        max_a = max(1, min(64, int(payload.get("max_assets", 16))))
+
+        with self._batch_lock:
+            if self._batch_state.get("running"):
+                return {"ok": False, "error": "A batch bakery job is already running", "status": copy.deepcopy(self._batch_state)}
+            self._batch_state = {
+                "running": True,
+                "total": 0,
+                "completed": 0,
+                "succeeded": 0,
+                "failed": 0,
+                "input_dir": in_dir,
+                "out_dir": out_dir,
+                "items": [],
+                "report": None,
+                "error": None,
+            }
+
+        def _on_prog(st_d: dict[str, Any]) -> None:
+            with self._batch_lock:
+                self._batch_state.update(st_d)
+
+        def _worker() -> None:
+            try:
+                rep = run_batch_bakery(in_dir, out_dir, preset=preset, max_assets=max_a, on_progress=_on_prog)
+                with self._batch_lock:
+                    self._batch_state["running"] = False
+                    self._batch_state["report"] = rep
+                self._log("info", f"Batch Bakery finished: {rep['succeeded']}/{rep['total']} succeeded (mean QA {rep.get('mean_qa')}) -> {out_dir}")
+            except Exception as exc:
+                with self._batch_lock:
+                    self._batch_state["running"] = False
+                    self._batch_state["error"] = f"{type(exc).__name__}: {exc}"
+                self._log("error", f"Batch Bakery failed: {exc}")
+
+        if payload.get("sync"):
+            _worker()
+        else:
+            threading.Thread(target=_worker, daemon=True).start()
+        return {"ok": True, "status": self.batch_status()}
+
+    def batch_status(self) -> dict[str, Any]:
+        with self._batch_lock:
+            return {"ok": True, **copy.deepcopy(self._batch_state)}
+
     def get_bridge_latest(self, since_rev: int = -1) -> dict[str, Any]:
         with self._bridge_cond:
             if not self._bridge_payload or self._bridge_rev <= since_rev:
@@ -2360,6 +2681,12 @@ class StudioSession:
 # ---------------------------------------------------------------------------
 # HTTP Server & Handler
 # ---------------------------------------------------------------------------
+
+
+class _StudioThreadingHTTPServer(ThreadingHTTPServer):
+    allow_reuse_address = True
+    daemon_threads = True
+    request_queue_size = 64
 
 
 def create_studio_server(
@@ -2392,10 +2719,15 @@ def create_studio_server(
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
+            if status >= 400:
+                self.send_header("Connection", "close")
             if cors:
                 self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
-            self.wfile.write(body)
+            try:
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
 
         def _send_json(self, obj: dict[str, Any], *, status: int = 200, cors: bool = False) -> None:
             raw = json.dumps(obj, ensure_ascii=False, allow_nan=False).encode("utf-8")
@@ -2423,7 +2755,7 @@ def create_studio_server(
                         "ok": True,
                         "app": "SyncCraft Studio",
                         "synccraft_version": __version__,
-                        "engine_version": "15.1",
+                        "engine_version": "16.0",
                         "schema_version": "4.0",
                         "node_count": len(NODE_REGISTRY),
                         "active_graph": sess.graph.name,
@@ -2432,6 +2764,14 @@ def create_studio_server(
                         "mesh_cache": mesh_bake_cache_stats(),
                     }
                 )
+                return
+
+            if path == "/api/syncpack/list":
+                self._send_json(sess.list_syncpacks())
+                return
+
+            if path == "/api/batch/status":
+                self._send_json(sess.batch_status())
                 return
 
             if path == "/api/logs/file":
@@ -2641,15 +2981,33 @@ def create_studio_server(
                 if path == "/api/logs/clear":
                     self._send_json(sess.clear_file_logs())
                     return
+                if path == "/api/paint_stack/stroke":
+                    self._send_json(sess.paint_stack_stroke(body))
+                    return
+                if path == "/api/syncpack/save":
+                    self._send_json(sess.save_syncpack(body))
+                    return
+                if path == "/api/syncpack/import":
+                    self._send_json(sess.import_syncpack(body))
+                    return
+                if path == "/api/syncpack/spawn":
+                    self._send_json(sess.spawn_syncpack(body))
+                    return
+                if path == "/api/batch/scan":
+                    self._send_json(sess.batch_scan(body))
+                    return
+                if path == "/api/batch/start":
+                    self._send_json(sess.batch_start(body))
+                    return
                 self._send_json({"error": f"Unknown API endpoint: {path}"}, status=404)
-            except (ValueError, KeyError, TypeError, FileNotFoundError, TexDSLParseError, GraphCycleError) as exc:
+            except (ValueError, KeyError, TypeError, FileNotFoundError, ScriptSecurityError, TexDSLParseError, GraphCycleError) as exc:
                 _write_studio_file_log("error", f"POST {path} -> 400", error=type(exc).__name__, detail=str(exc))
                 self._send_json({"ok": False, "error": type(exc).__name__, "message": str(exc)}, status=400)
             except Exception as exc:  # pragma: no cover
                 _write_studio_file_log("error", f"POST {path} -> 500", error=type(exc).__name__, detail=str(exc))
                 self._send_json({"ok": False, "error": type(exc).__name__, "message": str(exc)}, status=500)
 
-    server = ThreadingHTTPServer((host, int(port)), StudioHTTPHandler)
+    server = _StudioThreadingHTTPServer((host, int(port)), StudioHTTPHandler)
     return server, sess
 
 
@@ -2665,7 +3023,7 @@ def serve_studio(
     server, _ = create_studio_server(host=host, port=port, initial_sample=initial_sample, size=size)
     actual_port = server.server_address[1]
     url = f"http://{host}:{actual_port}/"
-    print(f"SyncCraft Studio v{__version__} (TexGraph v15 / Schema v4.0 · {len(NODE_REGISTRY)} nodes)")
+    print(f"SyncCraft Studio v{__version__} (TexGraph v16 / Schema v4.0 · {len(NODE_REGISTRY)} nodes)")
     print(f"  Listening on {url}  (Press Ctrl+C to stop)")
     if open_browser:
         threading.Timer(0.4, lambda: webbrowser.open(url)).start()

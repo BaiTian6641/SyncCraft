@@ -211,7 +211,7 @@ def test_studio_v15_http_api_end_to_end() -> None:
         lg, _ = _http_json(f"{base}/api/logs/file?tail=50")
         assert lg["ok"] and lg["path"].endswith("synccraft_studio.log") and lg["line_count"] >= 1
         hl, _ = _http_json(f"{base}/api/health")
-        assert hl["ok"] and hl["engine_version"] == "15.1" and hl["workspace_epoch"] >= 1
+        assert hl["ok"] and float(hl["engine_version"]) >= 15.1 and hl["workspace_epoch"] >= 1
     finally:
         server.shutdown()
         server.server_close()

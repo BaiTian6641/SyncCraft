@@ -15,13 +15,13 @@
       <div class="brand">
         <div class="brand-mark">SC</div>
         <span>SyncCraft Studio</span>
-        <span class="brand-sub" id="versionBadge">v15.1 · 228 nodes</span>
+        <span class="brand-sub" id="versionBadge">v16 · 230</span>
       </div>
 
-      <select id="projectSelect" class="sel-input" title="Load Flagship Sample or Built-in Preset" style="width: 152px;"></select>
+      <select id="projectSelect" class="sel-input" title="Load Flagship Sample or Built-in Preset" style="width: 132px;"></select>
       <button class="btn" id="btnOpenProject" title="Open 1-to-1 Project File (.syncproj, .texdsl, .texgraph.json, .bbmodel)">Open</button>
       <input type="file" id="projectFileInput" accept=".syncproj,.texdsl,.json,.bbmodel" style="display:none" />
-      <button class="btn" id="btnLoadMesh" title="Load or attach a 3D Blockbench .bbmodel for live UV-seam &amp; ray-traced PBR baking">3D Mesh ▾</button>
+      <button class="btn" id="btnLoadMesh" title="Load or attach a 3D Blockbench .bbmodel for live UV-seam &amp; ray-traced PBR baking">Mesh ▾</button>
       <input type="file" id="bbmodelFileInput" accept=".bbmodel,.json" style="display:none" />
 
       <div class="sep"></div>
@@ -31,7 +31,7 @@
         <option value="64" selected>64×64</option>
         <option value="128">128×128</option>
       </select>
-      <span class="pill-badge" id="meshResBadge" style="display:none;" title="Active 3D .bbmodel UV Atlas Resolution">256×192 UV</span>
+      <span class="pill-badge" id="meshResBadge" style="display:none;" title="Active 3D .bbmodel UV Atlas Resolution">256×192</span>
       <button class="btn" id="btnTileable" title="Toggle seamless toroidal tiling">Tileable</button>
       <div class="seed-top-wrap" title="Master Graph Seed — click dice to randomize all unpinned generators">
         <span class="seed-top-lbl">Seed</span>
@@ -44,16 +44,17 @@
       <button class="btn icon-only" id="btnUndo" title="Undo (Ctrl/Cmd+Z)" disabled>↶</button>
       <button class="btn icon-only" id="btnRedo" title="Redo (Ctrl/Cmd+Shift+Z)" disabled>↷</button>
       <div class="sep"></div>
-      <select id="layoutPresetSelect" class="sel-input" title="Workspace Docking Layout" style="width: 98px;">
+      <select id="layoutPresetSelect" class="sel-input" title="Workspace Docking Layout" style="width: 72px;">
         <option value="default">5-Pane</option>
         <option value="lookdev">3D Lookdev</option>
         <option value="graph">Graph</option>
         <option value="code">TexDSL</option>
       </select>
-      <span class="pill-badge" id="bridgeBadge" title="Blockbench 5 Live Link SSE Bridge (127.0.0.1:18790/api/bridge/events)" style="cursor:pointer;">BB5 Link</span>
-      <span class="pill-badge" id="perfBadge" title="Evaluation Time &amp; Content-Addressed Cache Hit Rate">0.0 ms</span>
+      <span class="pill-badge" id="bridgeBadge" title="Blockbench 5 Live Link SSE Bridge (127.0.0.1:18790/api/bridge/events)" style="cursor:pointer;">BB5</span>
+      <span class="pill-badge" id="perfBadge" title="Evaluation Time &amp; Content-Addressed Cache Hit Rate">0ms</span>
       <span class="pill-badge ok" id="qaBadge" title="Automated Multi-Domain Texture QA Score">QA —</span>
-      <button class="btn primary" id="btnOpenExport" title="Export Commercial PBR v2.0 Bundle">Export PBR</button>
+      <button class="btn" id="btnOpenBatch" title="Multi-Asset Batch Bakery Queue (batch-bake folder of .bbmodel / .texdsl assets)">Batch</button>
+      <button class="btn primary" id="btnOpenExport" title="Export Commercial PBR v2.0 Bundle">Export</button>
     </div>
   </header>
 
@@ -135,12 +136,40 @@
         </div>
 
         <div class="brush-subbar" id="brushToolbar" style="display:none;">
-          <span class="vp-lbl">Brush</span>
-          <input type="range" id="brushSizeSlider" min="2" max="24" value="6" style="width:66px;" />
-          <span class="vp-val" id="brushSizeVal">6px</span>
-          <button class="btn sm active" id="btnBrushAdd" title="Paint White (Mask Include)">+ Add</button>
-          <button class="btn sm" id="btnBrushErase" title="Erase Black (Mask Exclude)">− Erase</button>
-          <button class="btn sm danger-hover" id="btnBrushClear" title="Clear Mask Buffer">Clear</button>
+          <div class="brush-row">
+            <div class="seg-group" title="Switch between Grayscale Mask Brush and Multi-Channel 3D PBR Paint Stack">
+              <button class="seg-btn active" id="btnBrushModeMask">Mask</button>
+              <button class="seg-btn" id="btnBrushModePbr">PBR Layers</button>
+            </div>
+            <input type="range" id="brushSizeSlider" min="2" max="24" value="6" style="width:58px;" />
+            <span class="vp-val" id="brushSizeVal">6px</span>
+            <span id="brushMaskControls" style="display:inline-flex;gap:3px;align-items:center;">
+              <button class="btn sm active" id="btnBrushAdd" title="Paint White (Mask Include)">+ Add</button>
+              <button class="btn sm" id="btnBrushErase" title="Erase Black (Mask Exclude)">− Erase</button>
+              <button class="btn sm danger-hover" id="btnBrushClear" title="Clear Mask Buffer">Clear</button>
+            </span>
+            <span id="brushPbrControls" style="display:none;gap:3px;align-items:center;">
+              <select id="pbrBrushPresetSelect" class="sel-input" style="height:20px;font-size:10px;max-width:86px;padding:0 3px;" title="Multi-Channel PBR Brush Preset">
+                <option value="gold_trim">Gold Trim</option>
+                <option value="chipped_steel">Forged Steel</option>
+                <option value="arcane_glow">Arcane Glow</option>
+                <option value="amethyst_rune">Amethyst Rune</option>
+                <option value="worn_rust">Worn Rust</option>
+                <option value="matte_ink">Shadow Ink</option>
+                <option value="eraser">Eraser</option>
+              </select>
+              <input type="color" id="pbrBrushColor" value="#F0C85A" style="width:22px;height:20px;border:1px solid var(--border-subtle);background:none;padding:0;cursor:pointer;" title="Albedo Brush Color" />
+              <button class="btn sm" id="btnPbrAddLayer" title="Add New PBR Paint Layer">+ Lyr</button>
+              <button class="btn sm danger-hover" id="btnPbrClearLayer" title="Clear Active PBR Paint Layer">Clear</button>
+            </span>
+          </div>
+          <div class="brush-pbr-channels" id="brushPbrChannels" style="display:none;">
+            <span class="vp-lbl">R</span><input type="range" id="pbrBrushRough" min="0.05" max="0.98" step="0.02" value="0.18" />
+            <span class="vp-lbl">M</span><input type="range" id="pbrBrushMetal" min="0" max="1" step="0.02" value="0.95" />
+            <span class="vp-lbl">H</span><input type="range" id="pbrBrushHeight" min="0" max="1" step="0.02" value="0.78" />
+            <span class="vp-lbl">E</span><input type="range" id="pbrBrushEmissive" min="0" max="1" step="0.05" value="0.0" />
+            <div class="pbr-layer-pills" id="pbrLayerPills"></div>
+          </div>
         </div>
 
         <div class="viewport-stage" id="viewportStage">
@@ -185,14 +214,15 @@
 
       <div class="splitter-h" id="splitLeftH"></div>
 
-      <!-- PANE 2: NODE LIBRARY & REUSABLE .SYNCMAT PRESETS -->
+      <!-- PANE 2: NODE LIBRARY, .SYNCMAT PRESETS & .SYNCPACK MARKETPLACE -->
       <div class="pane pane-library" id="paneLibrary" data-pane="library">
         <div class="pane-header">
           <div class="pane-tabs">
-            <button class="pane-tab active" data-lib-tab="nodes" id="tabLibNodes">Nodes (<span id="libCount">228</span>)</button>
-            <button class="pane-tab" data-lib-tab="syncmat" id="tabLibSyncmat">.syncmat (<span id="syncmatCount">6</span>)</button>
+            <button class="pane-tab active" data-lib-tab="nodes" id="tabLibNodes">Nodes (<span id="libCount">230</span>)</button>
+            <button class="pane-tab" data-lib-tab="syncmat" id="tabLibSyncmat">.syncmat</button>
+            <button class="pane-tab" data-lib-tab="syncpack" id="tabLibSyncpack">Packs (<span id="syncpackCount">4</span>)</button>
           </div>
-          <div class="topbar-group">
+          <div class="topbar-group" style="gap:3px;">
             <button class="btn sm active" id="btnLiveSwatches" title="Toggle Live Animated Procedural Swatches in Grid">▶ Live</button>
             <div class="seg-group" title="Toggle Node Library List / Visual Grid View">
               <button class="seg-btn" id="btnLibList" title="Compact List View">☰</button>
@@ -202,7 +232,7 @@
           </div>
         </div>
         <div class="lib-search-row" id="libNodesSearchRow">
-          <input type="text" id="libSearch" class="txt-input" placeholder="Filter 228 nodes (math, map_range, paint_mask, noise, brass, crystal)..." />
+          <input type="text" id="libSearch" class="txt-input" placeholder="Filter 230 nodes (script_expr, paint_layer_stack, math, noise, brass)..." />
         </div>
         <div class="lib-body" id="libBody"></div>
         <div class="lib-body" id="syncmatBody" style="display:none;">
@@ -212,6 +242,14 @@
             <input type="file" id="syncmatFileInput" accept=".json,.syncmat" style="display:none" />
           </div>
           <div class="syncmat-list" id="syncmatList"></div>
+        </div>
+        <div class="lib-body" id="syncpackBody" style="display:none;">
+          <div class="syncmat-toolbar">
+            <button class="btn sm primary" id="btnSaveSyncpack" title="Package selected nodes as a distributable .syncpack.json">+ Save .syncpack</button>
+            <button class="btn sm" id="btnUploadSyncpack" title="Import a .syncpack.json macro package from disk">Import Pack...</button>
+            <input type="file" id="syncpackFileInput" accept=".json,.syncpack" style="display:none" />
+          </div>
+          <div class="syncmat-list" id="syncpackList"></div>
         </div>
       </div>
     </section>
@@ -274,25 +312,26 @@
         <div class="pane-header">
           <div class="pane-tabs">
             <button class="pane-tab active" data-bot-tab="timeline" id="tabTimeline">Timeline</button>
+            <button class="pane-tab" data-bot-tab="curves" id="tabCurves">Curves</button>
             <button class="pane-tab" data-bot-tab="exposed" id="tabExposed">Exposed (<span id="exposedCount">0</span>)</button>
             <button class="pane-tab" data-bot-tab="console" id="tabConsole">Log</button>
           </div>
-          <div class="topbar-group" style="gap:4px;">
-            <button class="btn sm" id="btnPlayAnim" title="Play / Pause Live Animation (Space)">▶ Play</button>
+          <div class="topbar-group" style="gap:3px;">
+            <button class="btn sm" id="btnPlayAnim" title="Play / Pause Live Animation (Space)">▶</button>
             <button class="btn sm icon-only" id="btnStepPrev" title="Previous Frame">⏮</button>
             <button class="btn sm icon-only" id="btnStepNext" title="Next Frame">⏭</button>
             <button class="btn sm" id="btnAnimPingPong" title="Toggle Loop / Ping-Pong Playback">⇄</button>
-            <select id="animFpsSelect" class="sel-input" style="height:22px;font-size:10px;width:58px;padding:0 4px;" title="Real-Time GPU Ring-Buffer Playback FPS (30-60 FPS zero-lag!)">
+            <select id="animFpsSelect" class="sel-input" style="height:22px;font-size:10px;width:50px;padding:0 3px;" title="Real-Time GPU Ring-Buffer Playback FPS (30-60 FPS zero-lag!)">
               <option value="8">8fps</option>
               <option value="12">12fps</option>
               <option value="24">24fps</option>
               <option value="30" selected>30fps</option>
               <option value="60">60fps</option>
             </select>
-            <span class="pill-badge" id="frameReadout" style="font-size:9.5px;padding:1px 5px;white-space:nowrap;">F0/12 · φ0.00</span>
-            <label style="font-size:10px;color:var(--text-secondary);display:flex;align-items:center;gap:3px;white-space:nowrap;flex-shrink:0;">
+            <span class="pill-badge" id="frameReadout" style="font-size:9.5px;padding:1px 5px;white-space:nowrap;">F0/12</span>
+            <label style="font-size:10px;color:var(--text-secondary);display:flex;align-items:center;gap:2px;white-space:nowrap;flex-shrink:0;">
               N
-              <input type="number" id="animFramesInput" class="num-input" value="12" min="2" max="32" style="width:44px;height:22px;padding:0 4px;text-align:center;" />
+              <input type="number" id="animFramesInput" class="num-input" value="12" min="2" max="32" style="width:38px;height:22px;padding:0 3px;text-align:center;" />
             </label>
           </div>
         </div>
@@ -304,6 +343,20 @@
             <span id="phaseLabel" style="font-family:var(--font-mono);font-size:10.5px;color:var(--focus-amber);min-width:42px;text-align:right;">0.00</span>
           </div>
           <div id="driversList"></div>
+        </div>
+
+        <div class="timeline-body" id="botTabCurves" style="display:none;gap:5px;">
+          <div class="curve-toolbar">
+            <select id="curveDriverSelect" class="sel-input" style="height:21px;font-size:10.5px;max-width:210px;" title="Select @animate Track to Edit Curve"></select>
+            <select id="curveInterpSelect" class="sel-input" style="height:21px;font-size:10px;width:82px;" title="Keyframe Curve Interpolation">
+              <option value="spline">Spline</option>
+              <option value="linear">Linear</option>
+              <option value="step">Step</option>
+            </select>
+            <button class="btn sm" id="btnCurveAddKf" title="Insert Keyframe at current Playhead Phase">+ Keyframe</button>
+            <span id="curveInfoBadge" title="Click empty: Add · Drag: Move · Right-Click: Del" style="font-family:var(--font-mono);font-size:10px;color:var(--text-muted);margin-left:auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;">Click: Add · Drag: Move · R-Click: Del</span>
+          </div>
+          <canvas id="curveEditorCanvas" class="curve-canvas" width="600" height="92"></canvas>
         </div>
 
         <div class="timeline-body" id="botTabExposed" style="display:none;">
@@ -376,7 +429,7 @@
       <div class="palette-topbar">
         <div class="palette-search-wrap">
           <span class="palette-search-ico">⌕</span>
-          <input type="text" id="paletteInput" class="palette-search" placeholder="Search 228 TexGraph nodes by name, math, noise, brass, crystal, mask or anim..." autocomplete="off" />
+          <input type="text" id="paletteInput" class="palette-search" placeholder="Search 230 TexGraph nodes by name, script, paint, math, noise, brass, crystal..." autocomplete="off" />
           <span class="palette-compat-badge" id="paletteCompatBadge" style="display:none;"></span>
         </div>
         <div class="palette-controls">
@@ -406,7 +459,7 @@
         </aside>
       </div>
       <div class="palette-footer">
-        <span id="paletteCountLabel">228 nodes</span>
+        <span id="paletteCountLabel">230 nodes</span>
         <span>↑↓←→ Navigate · Enter Add · Esc Close</span>
       </div>
     </div>
@@ -486,6 +539,48 @@
           <button class="btn primary" id="btnMeshUpload">Upload Custom .bbmodel From Disk...</button>
           <button class="btn" id="btnMeshDetach">Detach Mesh (Standard Block/Item Primitives)</button>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- =================================================================== -->
+  <!-- MULTI-ASSET BATCH BAKERY QUEUE MODAL (`v16`)                        -->
+  <!-- =================================================================== -->
+  <div class="modal-backdrop" id="batchModal">
+    <div class="modal-card" style="width:620px;max-width:94vw;">
+      <div class="modal-head">
+        <span>Multi-Asset Batch Bakery Queue (<code>synccraft batch-bake</code>)</span>
+        <button class="btn sm" id="btnCloseBatch">✕</button>
+      </div>
+      <div class="modal-body">
+        <div style="font-size:11px;color:var(--text-secondary);">
+          Scan any folder of <code>.bbmodel</code> / <code>.texdsl</code> creatures &amp; blocks, auto-pair sibling graphs, bake 3D ray-traced maps with SHA-256 caching, run QA audits, and export full <code>PBR v2.0 + MaterialX (.mtlx)</code> bundles!
+        </div>
+        <div class="param-row">
+          <div class="param-label-row"><span>Input Asset Folder (leave blank to scan flagship Kaelith showcase folder)</span></div>
+          <input type="text" id="batchInputDir" class="txt-input" placeholder="/path/to/bbmodels_or_showcase_folder" />
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 150px;gap:8px;">
+          <div class="param-row">
+            <div class="param-label-row"><span>Output Directory (optional — defaults to ~/.synccraft/batch_exports)</span></div>
+            <input type="text" id="batchOutDir" class="txt-input" placeholder="~/.synccraft/batch_exports/run_..." />
+          </div>
+          <div class="param-row">
+            <div class="param-label-row"><span>Lighting Preset</span></div>
+            <select id="batchPresetSelect" class="sel-input">
+              <option value="studio_hero">studio_hero</option>
+              <option value="dramatic_rim">dramatic_rim</option>
+              <option value="high_noon">high_noon</option>
+              <option value="moonlit_obsidian">moonlit_obsidian</option>
+            </select>
+          </div>
+        </div>
+        <div id="batchSummaryLine" style="font-family:var(--font-mono);font-size:10.5px;color:#93c5fd;">Ready to scan folder or run batch bakery.</div>
+        <div class="batch-queue-list" id="batchQueueList"></div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn" id="btnBatchScan">Scan Folder</button>
+        <button class="btn primary" id="btnBatchRun">Run Batch Bakery</button>
       </div>
     </div>
   </div>

@@ -37,11 +37,13 @@ from .simulation_filters import anisotropic_kuwahara, iterate_process
 
 def _ease_val(t: float, mode: str) -> float:
     t = max(0.0, min(1.0, float(t)))
+    if mode == "step":
+        return 0.0 if t < 1.0 else 1.0
     if mode == "ease_in":
         return t * t
     if mode == "ease_out":
         return 1.0 - (1.0 - t) * (1.0 - t)
-    if mode in ("ease_in_out", "smoothstep"):
+    if mode in ("ease_in_out", "smoothstep", "smooth"):
         return t * t * (3.0 - 2.0 * t)
     if mode == "smootherstep":
         return t * t * t * (t * (t * 6.0 - 15.0) + 10.0)
@@ -59,6 +61,51 @@ def _ease_val(t: float, mode: str) -> float:
     return t
 
 
+def _eval_monotone_cubic_spline(pts: list[tuple[float, float]], ph: float) -> float:
+    """Fritsch-Carlson monotone cubic Hermite spline (overshoot-free smooth animation curve!)."""
+    n = len(pts)
+    if n == 1:
+        return pts[0][1]
+    if ph <= pts[0][0]:
+        return pts[0][1]
+    if ph >= pts[-1][0]:
+        return pts[-1][1]
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    ds = [(ys[i + 1] - ys[i]) / max(1e-6, xs[i + 1] - xs[i]) for i in range(n - 1)]
+    ms = [0.0] * n
+    ms[0] = ds[0]
+    ms[-1] = ds[-1]
+    for i in range(1, n - 1):
+        if ds[i - 1] * ds[i] <= 0.0:
+            ms[i] = 0.0
+        else:
+            ms[i] = 0.5 * (ds[i - 1] + ds[i])
+    for i in range(n - 1):
+        if abs(ds[i]) < 1e-8:
+            ms[i] = 0.0
+            ms[i + 1] = 0.0
+        else:
+            a = ms[i] / ds[i]
+            b = ms[i + 1] / ds[i]
+            s = math.hypot(a, b)
+            if s > 3.0:
+                ms[i] = (3.0 / s) * a * ds[i]
+                ms[i + 1] = (3.0 / s) * b * ds[i]
+    for i in range(n - 1):
+        if xs[i] <= ph <= xs[i + 1]:
+            h = max(1e-6, xs[i + 1] - xs[i])
+            u = (ph - xs[i]) / h
+            u2 = u * u
+            u3 = u2 * u
+            h00 = 2.0 * u3 - 3.0 * u2 + 1.0
+            h10 = u3 - 2.0 * u2 + u
+            h01 = -2.0 * u3 + 3.0 * u2
+            h11 = u3 - u2
+            return h00 * ys[i] + h10 * h * ms[i] + h01 * ys[i + 1] + h11 * h * ms[i + 1]
+    return ys[-1]
+
+
 def eval_anim_driver(
     phase: float,
     *,
@@ -72,21 +119,33 @@ def eval_anim_driver(
     seed: int = 42,
     keyframes: Sequence[Sequence[Any]] | None = None,
 ) -> float:
-    """Evaluate a Pixel-Composer-style procedural animation driver at normalized ``phase in [0, 1)``."""
-    ph = (float(phase) * float(freq) + float(phase_offset)) % 1.0
+    """Evaluate a Pixel-Composer-style procedural animation driver at normalized ``phase in [0, 1]``."""
+    raw_ph = float(phase) * float(freq) + float(phase_offset)
+    if kind in ("keyframes", "bezier_curve", "spline") and keyframes:
+        if 0.0 <= raw_ph <= 1.0:
+            ph = raw_ph
+        else:
+            ph = raw_ph % 1.0
+    else:
+        ph = raw_ph % 1.0
     lo, hi = float(min_val), float(max_val)
 
-    if kind == "keyframes" and keyframes:
+    if kind in ("keyframes", "bezier_curve", "spline") and keyframes:
         pts = sorted(keyframes, key=lambda k: float(k[0]))
         if ph <= float(pts[0][0]):
             return float(pts[0][1])
         if ph >= float(pts[-1][0]):
             return float(pts[-1][1])
+        first_mode = str(pts[0][2]).lower() if len(pts[0]) >= 3 else ("spline" if kind in ("bezier_curve", "spline") else "smoothstep")
+        if kind in ("bezier_curve", "spline") or first_mode in ("spline", "bezier"):
+            return float(_eval_monotone_cubic_spline([(float(k[0]), float(k[1])) for k in pts], ph))
         for i in range(len(pts) - 1):
             t0, v0 = float(pts[i][0]), float(pts[i][1])
             t1, v1 = float(pts[i + 1][0]), float(pts[i + 1][1])
             if t0 <= ph <= t1:
-                ease_m = str(pts[i][2]) if len(pts[i]) >= 3 else "smoothstep"
+                ease_m = str(pts[i][2]).lower() if len(pts[i]) >= 3 else "smoothstep"
+                if ease_m in ("spline", "bezier"):
+                    return float(_eval_monotone_cubic_spline([(float(k[0]), float(k[1])) for k in pts], ph))
                 u = (ph - t0) / max(1e-6, t1 - t0)
                 return v0 + (v1 - v0) * _ease_val(u, ease_m)
         return float(pts[-1][1])

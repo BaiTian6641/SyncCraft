@@ -298,6 +298,7 @@ from .math_utility_ops import (
     uv_mapping,
     vector_math,
 )
+from .v16_pro_ops import ScriptSecurityError, paint_layer_stack_op, script_expr_op
 
 # Nodes whose output depends on animation `phase` (re-evaluated per flipbook frame; others cached!)
 _TIME_AWARE_OPS: frozenset[str] = frozenset(
@@ -310,7 +311,7 @@ _TIME_AWARE_OPS: frozenset[str] = frozenset(
         "starfield_sparkle", "plasma_wave", "clockwork_gears",
         "mat_crystal_gem", "mat_obsidian_volcanic", "mat_glowing_runes_pbr",
         "anim_shimmer", "anim_flicker_pulse", "anim_flow_warp",
-        "subgraph_group",
+        "subgraph_group", "script_expr",
     }
 )
 
@@ -331,6 +332,7 @@ _BUS_INPUT_KEYS: dict[str, frozenset[str]] = {
     "anim_flow_warp": frozenset({"src"}),
     "reroute": frozenset({"in"}),
     "subgraph_group": frozenset({"in_0", "in_1", "in_2", "in_3", "in_4", "in_5"}),
+    "paint_layer_stack": frozenset({"base"}),
     "paint_entity_eyes_and_parts": frozenset({"base"}),
     "bake_emissive_bounce": frozenset({"mat"}),
     "triplanar_project": frozenset({"src"}),
@@ -1759,6 +1761,10 @@ class TexGraph:
                     is_dyn = True
                 if sp.op == "noise_3d" and any(abs(float(c)) > 1e-6 for c in p.get("flow_vec", (0, 0, 0))):
                     is_dyn = True
+                if sp.op == "script_expr":
+                    ex_all = f"{p.get('expr', '')} {p.get('expr_g', '')} {p.get('expr_b', '')}"
+                    if "t" in ex_all or "phase" in ex_all:
+                        is_dyn = True
             if not is_dyn and any(_parse_ref(ref)[0] in dyn for ref in sp.inputs.values()):
                 is_dyn = True
             if is_dyn:
@@ -3162,6 +3168,31 @@ class TexGraph:
             kw = {k: v for k, v in p.items() if k != "seed"}
             return paint_mask(H, W, **kw)
 
+        # --- TexGraph v16 Multi-Channel PBR Paint Stack & AST-Sandboxed Script Expression ---
+        if op == "paint_layer_stack":
+            return paint_layer_stack_op(
+                H,
+                W,
+                base=ins.get("base"),
+                layers_json=p.get("layers_json", ""),
+                height_normal_strength=float(p.get("height_normal_strength", 2.6)),
+                tileable=tile,
+            )
+        if op == "script_expr":
+            return script_expr_op(
+                H,
+                W,
+                a=ins.get("a"),
+                b=ins.get("b"),
+                expr=str(p.get("expr", "0.5 + 0.5 * sin(r_dist * 18.0 - t * tau)")),
+                expr_g=str(p.get("expr_g", "")),
+                expr_b=str(p.get("expr_b", "")),
+                mode=str(p.get("mode", "scalar")),
+                param_k=float(p.get("param_k", 1.0)),
+                phase=phase,
+                seed=seed,
+            )
+
         # --- TexGraph v15 Nested Compound Subgraph Group (`group_input` / `subgraph_group`) ---
         if op == "group_input":
             pname = str(p.get("port_name", "in_0"))
@@ -3465,6 +3496,8 @@ class TexGraph:
                     res = _resolve_ref(vals, sp.inputs[first_key], allow_bus=(first_key in bus_keys))
                 else:
                     res = self._eval_node(sp, vals, float(phase))
+            except ScriptSecurityError:
+                raise
             except (KeyError, ValueError, TypeError):
                 if allow_orphan_errors and reachable is not None and nid not in reachable:
                     # Unconnected freshly spawned node in interactive GUI: keep output live with neutral placeholder!

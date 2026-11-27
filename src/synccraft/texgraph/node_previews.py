@@ -198,6 +198,7 @@ _FAST_PREVIEW_PARAMS: dict[str, dict[str, Any]] = {
     "paint_mask": {"base_value": 0.08},
     "float_constant": {"value": 0.72},
     "color_constant": {"color": "#38BDF8"},
+    "script_expr": {"mode": "rgb", "expr": "0.5 + 0.5 * sin(r_dist * 20.0 + ang * 2.0 - t * tau)", "expr_g": "0.5 + 0.5 * sin(r_dist * 20.0 - t * tau + 1.8)", "expr_b": "0.5 + 0.5 * cos(r_dist * 16.0 - t * tau)"},
 }
 
 # For animated multi-frame previews, ensure time-capable nodes visibly animate even if default speed is 0
@@ -262,6 +263,23 @@ def _eval_single_node_preview(
             fb_id = g.add("feedback_loop", inputs={"src": s_id}, loop_frames=4, pre_roll=2, decay=0.82, drift_y_px=-1.0)
             g.set_output(fb_id)
             return _to_data_url(g.evaluate(phase=float(phase)).output, sz)
+        if op == "paint_layer_stack":
+            u, v = refs["u"], refs["v"]
+            bg = np.zeros((sz, sz, 4), dtype=np.float32)
+            bg[..., 0] = 0.16 + 0.08 * (1.0 - v)
+            bg[..., 1] = 0.19 + 0.09 * (1.0 - v)
+            bg[..., 2] = 0.27 + 0.10 * (1.0 - v)
+            bg[..., 3] = 1.0
+            # Diagonal metallic gold stroke + bright cyan arcane rune stroke
+            d_gold = np.abs((v - 0.36) - 0.18 * np.sin(u * 5.0))
+            m_gold = np.clip(1.0 - d_gold / 0.14, 0.0, 1.0) * ((u > 0.10) & (u < 0.90))
+            d_cyan = np.abs((v - 0.68) + 0.15 * np.sin(u * 5.6))
+            m_cyan = np.clip(1.0 - d_cyan / 0.12, 0.0, 1.0) * ((u > 0.14) & (u < 0.88))
+            gold_c = np.array([0.94, 0.78, 0.34], dtype=np.float32)
+            cyan_c = np.array([0.22, 0.94, 1.00], dtype=np.float32)
+            bg[..., :3] = bg[..., :3] * (1.0 - m_gold[..., None]) + gold_c[None, None, :] * m_gold[..., None]
+            bg[..., :3] = bg[..., :3] * (1.0 - m_cyan[..., None]) + cyan_c[None, None, :] * m_cyan[..., None]
+            return _to_data_url(bg, sz)
         if op == "paint_mask":
             u, v = refs["u"], refs["v"]
             d_curve = np.abs((v - 0.5) - 0.24 * np.sin((u - 0.15) * 5.2))

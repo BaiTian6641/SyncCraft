@@ -1458,6 +1458,20 @@ NODE_CATALOG: dict[str, NodeMeta] = {
         ParamSchema("title", "text", "Node Group", group="Group"),
         ParamSchema("color", "color", "#7E22CE", group="Group"),
     )),
+    # --- TexGraph v16 Commercial Workstation Pro Nodes (`paint_layer_stack` & AST-Sandboxed `script_expr`) ---
+    "paint_layer_stack": NodeMeta("paint_layer_stack", "Material Bus (PBR)", "3D Multi-Channel PBR Paint Stack", "Substance-Painter-style layered 3D/2D brush stack painting Albedo, Roughness, Metallic, Height (auto-Normal) & Emissive directly onto your model!", (PortSchema("base", "ANY", True),), "MATERIAL", outputs=(PortSchema("mat", "MATERIAL"), PortSchema("albedo", "RGBA"), PortSchema("roughness", "SCALAR"), PortSchema("metallic", "SCALAR"), PortSchema("height", "HEIGHT"), PortSchema("normal", "NORMAL"), PortSchema("emissive", "RGBA")), params=(
+        ParamSchema("active_layer_id", "text", "layer_1", group="Layers", tooltip="Currently selected paint layer ID"),
+        ParamSchema("height_normal_strength", "slider", 2.6, 0.0, 8.0, 0.1, group="Relief", tooltip="Strength of micro-normal derived from painted Height strokes"),
+        ParamSchema("layers_json", "text", "", group="Paint Buffers", tooltip="Serialized multi-channel PBR paint layers (managed by 3D/2D PBR Brush UI)"),
+    )),
+    "script_expr": NodeMeta("script_expr", "Math & Utility", "Sandboxed Shader Script (Expr)", "Safe AST-validated vectorized NumPy math/shader expression node (zero eval/exec!). Supports u, v, r_dist, ang, t, k, a, b, sin, cos, mix, smoothstep, clamp, hash2.", (PortSchema("a", "ANY", True), PortSchema("b", "ANY", True)), "ANY", time_aware=True, params=(
+        ParamSchema("mode", "select", "scalar", choices=("scalar", "rgb"), group="Expression"),
+        ParamSchema("expr", "text", "0.5 + 0.5 * sin(r_dist * 18.0 - t * tau)", group="Expression", tooltip="Primary / Red channel safe math expression"),
+        ParamSchema("expr_g", "text", "", group="Expression", tooltip="Optional Green channel expression (used when mode=rgb)"),
+        ParamSchema("expr_b", "text", "", group="Expression", tooltip="Optional Blue channel expression (used when mode=rgb)"),
+        ParamSchema("param_k", "slider", 1.0, -8.0, 8.0, 0.05, group="Parameters", animatable=True, tooltip="Custom animatable scalar variable `k` available inside expression"),
+        ParamSchema("seed", "int", 42, 0, 99999, 1, group="Randomness"),
+    )),
 }
 
 

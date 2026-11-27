@@ -21,10 +21,33 @@
     channel: 'pbr_lit',
     pickMode: false,
     brushMode: false,
+    brushTargetMode: 'mask',
     brushRadius: 6,
     brushValue: 1.0,
     brushPending: [],
     brushFlushTimer: null,
+    pbrBrush: {
+      preset: 'gold_trim',
+      color: '#F0C85A',
+      roughness: 0.18,
+      metallic: 0.95,
+      height: 0.78,
+      emissive_color: '#38F2FF',
+      emissive_strength: 0.0,
+      paint_albedo: true,
+      paint_roughness: true,
+      paint_metallic: true,
+      paint_height: true,
+      paint_emissive: false,
+      erase: false,
+    },
+    pbrLayers: [],
+    activePbrLayerId: 'layer_1',
+    syncpacks: [],
+    curveDriverIdx: 0,
+    curveDragIdx: -1,
+    curveDragKfs: null,
+    batchPollTimer: null,
     lightDragMode: false,
     envRotDeg: 0,
     lightIntensity: 1.0,
@@ -182,12 +205,13 @@
     if (!el || !bridge) return;
     const c = bridge.clients || 0;
     if (c > 0) {
-      el.textContent = `BB5 Live (${c})`;
+      el.textContent = `BB5 (${c})`;
       el.className = 'pill-badge ok';
     } else {
-      el.textContent = `BB5 Link · r${bridge.rev || 0}`;
+      el.textContent = `BB5`;
       el.className = 'pill-badge';
     }
+    el.title = `Blockbench 5 Live Link SSE Bridge · rev ${bridge.rev || 0} · ${c} client(s)`;
   }
 
   function renderBreadcrumbs() {
@@ -359,7 +383,7 @@
       resSel.style.display = 'none';
       if (meshResBadge) {
         meshResBadge.style.display = 'inline-flex';
-        meshResBadge.textContent = `${rec.width}×${rec.height} UV`;
+        meshResBadge.textContent = `${rec.width}×${rec.height}`;
       }
     } else {
       resSel.style.display = '';
@@ -388,8 +412,10 @@
     renderPassFilterBar();
     renderBreadcrumbs();
     updateBridgeBadge(st.bridge);
+    syncPbrLayersFromGraph();
     renderInspector();
     renderTimelineDrivers();
+    renderCurveEditor();
     renderExposedParams();
     renderConsoleLog();
     renderAiVariantsPanel();
@@ -426,12 +452,14 @@
     if (!ev) return;
     const total = (ev.cache_hits || 0) + (ev.cache_misses || 0);
     const hitPct = total > 0 ? Math.round((ev.cache_hits / total) * 100) : 0;
-    $('perfBadge').textContent = `${ev.eval_ms.toFixed(0)}ms · ${hitPct}%`;
+    $('perfBadge').textContent = `${Math.round(ev.eval_ms)}ms`;
+    $('perfBadge').title = `Eval ${ev.eval_ms.toFixed(1)} ms · Cache Hit Rate ${hitPct}%`;
 
     const qa = ev.qa;
     const qb = $('qaBadge');
     if (qa && typeof qa.score === 'number') {
-      qb.textContent = `QA ${Math.round(qa.score)}/100`;
+      qb.textContent = `QA ${Math.round(qa.score)}`;
+      qb.title = `Automated Multi-Domain Texture QA Score: ${Math.round(qa.score)}/100`;
       qb.className = 'pill-badge ' + (qa.passed ? 'ok' : (qa.score >= 70 ? 'warn' : 'err'));
     }
     if (ev.bridge) updateBridgeBadge(ev.bridge);
@@ -585,6 +613,145 @@
     updateViewportHud(state.lightDragMode ? '☀ DRAG LIGHT/HDRI' : null);
   }
 
+  function setBrushTargetMode(mode) {
+    state.brushTargetMode = mode === 'pbr' ? 'pbr' : 'mask';
+    const isPbr = state.brushTargetMode === 'pbr';
+    if ($('btnBrushModeMask')) $('btnBrushModeMask').classList.toggle('active', !isPbr);
+    if ($('btnBrushModePbr')) $('btnBrushModePbr').classList.toggle('active', isPbr);
+    if ($('brushMaskControls')) $('brushMaskControls').style.display = isPbr ? 'none' : 'inline-flex';
+    if ($('brushPbrControls')) $('brushPbrControls').style.display = isPbr ? 'inline-flex' : 'none';
+    if ($('brushPbrChannels')) $('brushPbrChannels').style.display = isPbr ? 'grid' : 'none';
+    if (isPbr) {
+      syncPbrLayersFromGraph();
+      renderPbrLayerPills();
+    }
+    updateViewportHud(state.brushMode ? (isPbr ? '🖌 3D PBR LAYERS' : '🖌 MASK BRUSH') : null);
+  }
+
+  function applyPbrBrushPreset(presetId) {
+    const presets = (state.schemaPayload && state.schemaPayload.brush_presets) || {};
+    const p = presets[presetId];
+    state.pbrBrush.preset = presetId;
+    if (p) {
+      state.pbrBrush.color = p.color || '#F0C85A';
+      state.pbrBrush.roughness = p.roughness != null ? p.roughness : 0.25;
+      state.pbrBrush.metallic = p.metallic != null ? p.metallic : 0.9;
+      state.pbrBrush.height = p.height != null ? p.height : 0.7;
+      state.pbrBrush.emissive_color = p.emissive_color || p.color || '#38F2FF';
+      state.pbrBrush.emissive_strength = p.emissive_strength != null ? p.emissive_strength : 0.0;
+      state.pbrBrush.paint_albedo = p.paint_albedo !== false;
+      state.pbrBrush.paint_roughness = p.paint_roughness !== false;
+      state.pbrBrush.paint_metallic = p.paint_metallic !== false;
+      state.pbrBrush.paint_height = p.paint_height !== false;
+      state.pbrBrush.paint_emissive = !!p.paint_emissive || state.pbrBrush.emissive_strength > 0.01;
+      state.pbrBrush.erase = !!p.erase || presetId === 'eraser';
+    } else if (presetId === 'eraser') {
+      state.pbrBrush.erase = true;
+    } else {
+      state.pbrBrush.erase = false;
+    }
+    if ($('pbrBrushColor')) $('pbrBrushColor').value = state.pbrBrush.color;
+    if ($('pbrBrushRough')) $('pbrBrushRough').value = String(state.pbrBrush.roughness);
+    if ($('pbrBrushMetal')) $('pbrBrushMetal').value = String(state.pbrBrush.metallic);
+    if ($('pbrBrushHeight')) $('pbrBrushHeight').value = String(state.pbrBrush.height);
+    if ($('pbrBrushEmissive')) $('pbrBrushEmissive').value = String(state.pbrBrush.emissive_strength);
+  }
+
+  function findActivePaintStackNode() {
+    const rec = state.serverState && state.serverState.recipe;
+    if (!rec || !Array.isArray(rec.nodes)) return null;
+    const sel = rec.nodes.find((n) => n.id === state.selectedNodeId && n.op === 'paint_layer_stack');
+    if (sel) return sel;
+    for (let i = rec.nodes.length - 1; i >= 0; i--) {
+      if (rec.nodes[i].op === 'paint_layer_stack') return rec.nodes[i];
+    }
+    return null;
+  }
+
+  function syncPbrLayersFromGraph() {
+    const node = findActivePaintStackNode();
+    if (!node) {
+      state.pbrLayers = [{ id: 'layer_1', name: 'Hero Detail Paint', visible: true, opacity: 1.0, blend_mode: 'normal' }];
+      state.activePbrLayerId = 'layer_1';
+      renderPbrLayerPills();
+      return;
+    }
+    try {
+      const raw = node.params && node.params.layers_json;
+      const parsed = typeof raw === 'string' ? JSON.parse(raw) : (Array.isArray(raw) ? raw : []);
+      if (Array.isArray(parsed) && parsed.length) {
+        state.pbrLayers = parsed.map((l) => ({
+          id: l.id || 'layer_1',
+          name: l.name || l.id || 'Layer',
+          visible: l.visible !== false,
+          opacity: l.opacity != null ? l.opacity : 1.0,
+          blend_mode: l.blend_mode || 'normal',
+        }));
+      }
+      state.activePbrLayerId = (node.params && node.params.active_layer_id) || state.pbrLayers[0].id;
+    } catch (_) {}
+    renderPbrLayerPills();
+  }
+
+  async function runPbrLayerAction(layerAction, extra) {
+    const node = findActivePaintStackNode();
+    try {
+      const st = await apiPost('/api/paint_stack/stroke', Object.assign({
+        node_id: node ? node.id : null,
+        layer_id: state.activePbrLayerId,
+        layer_action: layerAction,
+      }, extra || {}));
+      invalidateAnimRing();
+      applyServerState(st, { autoPrim: false });
+      await runEvaluate({ includeThumbsMode: 'all', includeQa: false });
+      return st;
+    } catch (err) {
+      showToast(err.message, 'err');
+      return null;
+    }
+  }
+
+  function renderPbrLayerPills() {
+    const wrap = $('pbrLayerPills');
+    if (!wrap) return;
+    wrap.innerHTML = '';
+    const layers = state.pbrLayers || [];
+    for (const l of layers) {
+      const pill = document.createElement('span');
+      pill.className = 'pbr-layer-pill' + (l.id === state.activePbrLayerId ? ' active' : '') + (!l.visible ? ' hidden-layer' : '');
+      pill.title = `${l.name} (${l.blend_mode} · ${Math.round((l.opacity != null ? l.opacity : 1) * 100)}%)`;
+      const eyeBtn = document.createElement('button');
+      eyeBtn.textContent = l.visible ? '👁' : '○';
+      eyeBtn.title = l.visible ? 'Hide Paint Layer' : 'Show Paint Layer';
+      eyeBtn.onclick = (ev) => {
+        ev.stopPropagation();
+        runPbrLayerAction('toggle_visible', { layer_id: l.id });
+      };
+      const lbl = document.createElement('span');
+      lbl.textContent = l.name;
+      pill.appendChild(eyeBtn);
+      pill.appendChild(lbl);
+      if (layers.length > 1) {
+        const delBtn = document.createElement('button');
+        delBtn.textContent = '✕';
+        delBtn.title = 'Delete Paint Layer';
+        delBtn.onclick = (ev) => {
+          ev.stopPropagation();
+          runPbrLayerAction('delete_layer', { layer_id: l.id });
+        };
+        pill.appendChild(delBtn);
+      }
+      pill.onclick = () => {
+        state.activePbrLayerId = l.id;
+        renderPbrLayerPills();
+        if (findActivePaintStackNode()) {
+          runPbrLayerAction('select_layer', { layer_id: l.id });
+        }
+      };
+      wrap.appendChild(pill);
+    }
+  }
+
   function queueBrushStroke(u, v, isStart) {
     state.brushPending.push({ u, v, radius_px: state.brushRadius, value: state.brushValue, softness: 0.35, opacity: 0.95 });
     if (isStart) state._brushUndoNext = true;
@@ -599,6 +766,39 @@
     const strokes = state.brushPending.splice(0, state.brushPending.length);
     const undoable = !!state._brushUndoNext;
     state._brushUndoNext = false;
+
+    // v16 Multi-Channel 3D/2D PBR Paint Layer Stack Mode!
+    if (state.brushTargetMode === 'pbr') {
+      const node = findActivePaintStackNode();
+      const b = Object.assign({}, state.pbrBrush, {
+        emissive_color: state.pbrBrush.emissive_strength > 0.01 ? state.pbrBrush.color : '#000000',
+        paint_emissive: state.pbrBrush.emissive_strength > 0.01,
+      });
+      try {
+        const st = await apiPost('/api/paint_stack/stroke', {
+          node_id: node ? node.id : null,
+          layer_id: state.activePbrLayerId,
+          strokes,
+          brush: b,
+          undoable,
+          wire_output: true,
+        });
+        invalidateAnimRing();
+        applyServerState(st, { autoPrim: false });
+        if (st.created_node_id) {
+          if (state.channel === 'selected') {
+            state.channel = 'pbr_lit';
+            $('channelSelect').value = 'pbr_lit';
+          }
+          showToast(`🖌 Auto-wired 3D PBR Paint Stack '${st.created_node_id}'!`, 'ok');
+        }
+        await runEvaluate({ includeThumbsMode: 'all', includeQa: false });
+      } catch (err) {
+        showToast(err.message, 'err');
+      }
+      return;
+    }
+
     const rec = state.serverState && state.serverState.recipe;
     const sel = rec && (rec.nodes || []).find((n) => n.id === state.selectedNodeId);
     const targetId = (sel && sel.op === 'paint_mask') ? sel.id : null;
@@ -1187,13 +1387,84 @@
   }
 
   function switchLibTab(tab) {
-    state.libTab = tab === 'syncmat' ? 'syncmat' : 'nodes';
+    state.libTab = (tab === 'syncmat' || tab === 'syncpack') ? tab : 'nodes';
     if ($('tabLibNodes')) $('tabLibNodes').classList.toggle('active', state.libTab === 'nodes');
     if ($('tabLibSyncmat')) $('tabLibSyncmat').classList.toggle('active', state.libTab === 'syncmat');
+    if ($('tabLibSyncpack')) $('tabLibSyncpack').classList.toggle('active', state.libTab === 'syncpack');
     if ($('libNodesSearchRow')) $('libNodesSearchRow').style.display = state.libTab === 'nodes' ? '' : 'none';
     if ($('libBody')) $('libBody').style.display = state.libTab === 'nodes' ? '' : 'none';
     if ($('syncmatBody')) $('syncmatBody').style.display = state.libTab === 'syncmat' ? 'flex' : 'none';
+    if ($('syncpackBody')) $('syncpackBody').style.display = state.libTab === 'syncpack' ? 'flex' : 'none';
     if (state.libTab === 'syncmat') renderSyncmatList();
+    if (state.libTab === 'syncpack') renderSyncpackList();
+  }
+
+  function renderSyncpackList() {
+    const list = $('syncpackList');
+    if (!list) return;
+    list.innerHTML = '';
+    const packs = state.syncpacks || [];
+    if ($('syncpackCount')) $('syncpackCount').textContent = String(packs.length);
+    if (!packs.length) {
+      list.innerHTML = '<div style="font-size:11px;color:var(--text-muted);padding:6px;">No .syncpack macro packages found.</div>';
+      return;
+    }
+    for (const pk of packs) {
+      const card = document.createElement('div');
+      card.className = 'syncmat-card';
+      card.style.borderLeftColor = pk.color || '#7E22CE';
+      const macros = Array.isArray(pk.macros) ? pk.macros : [];
+      const tagsHtml = (pk.tags || []).slice(0, 4).map((t) => `<span class="syncpack-tag">${t}</span>`).join('');
+      card.innerHTML = `
+        <div class="syncmat-card-top">
+          <span class="syncmat-card-name" title="${pk.name || pk.id}">${pk.name || pk.id}</span>
+          <span class="syncmat-card-cat">${pk.builtin ? 'Built-in' : 'User'} · v${pk.version || '1.0'}</span>
+        </div>
+        <div class="syncmat-card-desc">${pk.description || ''}</div>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:4px;">
+          <div class="syncpack-tags">${tagsHtml}</div>
+          <button class="btn sm" data-act="dl-pack" title="Download .syncpack.json" style="height:18px;font-size:9px;padding:0 5px;">⬇ .syncpack</button>
+        </div>
+        <div class="syncpack-macro-list"></div>
+      `;
+      card.querySelector('[data-act="dl-pack"]').onclick = () => {
+        triggerDownload(`${pk.id || 'pack'}.syncpack.json`, JSON.stringify(pk, null, 2));
+        showToast(`Downloaded ${pk.id}.syncpack.json`, 'ok');
+      };
+      const mList = card.querySelector('.syncpack-macro-list');
+      for (const m of macros) {
+        const mRow = document.createElement('div');
+        mRow.className = 'syncpack-macro-row';
+        const nLen = (m.nodes || []).length;
+        mRow.innerHTML = `
+          <div class="syncpack-macro-info">
+            <span class="syncpack-macro-title" title="${m.name || m.id}">${m.name || m.id}</span>
+            <span class="syncpack-macro-desc" title="${m.description || ''}">${m.description || `${nLen} nodes`}</span>
+          </div>
+          <button class="btn sm primary" data-spawn-macro="${m.id}" style="height:20px;font-size:9.5px;padding:0 6px;flex-shrink:0;">+ Spawn</button>
+        `;
+        mRow.querySelector('[data-spawn-macro]').onclick = async () => {
+          try {
+            const cx = Math.round((-graphCanvas.panX + graphCanvas.stage.clientWidth * 0.44) / graphCanvas.zoom - 110);
+            const cy = Math.round((-graphCanvas.panY + graphCanvas.stage.clientHeight * 0.42) / graphCanvas.zoom - 50);
+            const st = await apiPost('/api/syncpack/spawn', {
+              pack_id: pk.id,
+              macro_id: m.id,
+              pos: [cx, cy],
+              wrap_frame: true,
+            });
+            invalidateAnimRing();
+            applyServerState(st, { autoPrim: false });
+            await runEvaluate({ includeThumbs: true, includeQa: true });
+            showToast(`Spawned '${m.name}' from ${pk.name} (${nLen} nodes)`, 'ok');
+          } catch (err) {
+            showToast(err.message, 'err');
+          }
+        };
+        mList.appendChild(mRow);
+      }
+      list.appendChild(card);
+    }
   }
 
   function renderSyncmatList() {
@@ -1560,6 +1831,349 @@
       ctx.strokeStyle = '#3b82f6';
       ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, 20); ctx.stroke();
       list.appendChild(row);
+    });
+  }
+
+  // ------------------------------------------------------------------------
+  // Milestone v16: Interactive Curve / Spline Graph Editor (Fritsch-Carlson)
+  // ------------------------------------------------------------------------
+  function sampleDriverToKeyframes(d) {
+    if (Array.isArray(d.keyframes) && d.keyframes.length >= 2) {
+      return d.keyframes.map((pt) => [Number(pt[0]), Number(pt[1]), pt[2] || 'smooth']);
+    }
+    const lo = Number(d.min_val != null ? d.min_val : 0.0);
+    const hi = Number(d.max_val != null ? d.max_val : 1.0);
+    const freq = Number(d.freq || 1.0);
+    const off = Number(d.phase_offset || 0.0);
+    const kfs = [];
+    const nPts = 5;
+    for (let i = 0; i < nPts; i++) {
+      const ph = i / (nPts - 1);
+      const t = (ph * freq + off) % 1.0;
+      let u = 0.5 + 0.5 * Math.sin(t * Math.PI * 2);
+      if (d.kind === 'sawtooth') u = t;
+      else if (d.kind === 'pulse') u = t < (d.duty || 0.5) ? 1.0 : 0.0;
+      else if (d.kind === 'wiggler') u = 0.5 + 0.35 * Math.sin(t * Math.PI * 2) + 0.15 * Math.cos(t * Math.PI * 6);
+      kfs.push([Number(ph.toFixed(3)), Number((lo + (hi - lo) * Math.max(0, Math.min(1, u))).toFixed(4)), 'smooth']);
+    }
+    return kfs;
+  }
+
+  function evalMonotoneSplineJS(kfs, ph) {
+    const pts = kfs.slice().sort((a, b) => a[0] - b[0]);
+    const n = pts.length;
+    if (!n) return 0;
+    if (n === 1 || ph <= pts[0][0]) return pts[0][1];
+    if (ph >= pts[n - 1][0]) return pts[n - 1][1];
+    const xs = pts.map((p) => p[0]);
+    const ys = pts.map((p) => p[1]);
+    const hs = [], ds = [];
+    for (let i = 0; i < n - 1; i++) {
+      const h = Math.max(1e-6, xs[i + 1] - xs[i]);
+      hs.push(h);
+      ds.push((ys[i + 1] - ys[i]) / h);
+    }
+    const ms = new Array(n).fill(0);
+    ms[0] = ds[0];
+    ms[n - 1] = ds[n - 2];
+    for (let i = 1; i < n - 1; i++) {
+      if (ds[i - 1] * ds[i] <= 0) ms[i] = 0;
+      else {
+        const w1 = 2 * hs[i] + hs[i - 1];
+        const w2 = hs[i] + 2 * hs[i - 1];
+        ms[i] = (w1 + w2) / (w1 / ds[i - 1] + w2 / ds[i]);
+      }
+    }
+    for (let i = 0; i < n - 1; i++) {
+      if (Math.abs(ds[i]) < 1e-8) { ms[i] = 0; ms[i + 1] = 0; }
+      else {
+        const a = ms[i] / ds[i], b = ms[i + 1] / ds[i];
+        const r2 = a * a + b * b;
+        if (r2 > 9) {
+          const tau = 3 / Math.sqrt(r2);
+          ms[i] = tau * a * ds[i];
+          ms[i + 1] = tau * b * ds[i];
+        }
+      }
+    }
+    let idx = 0;
+    for (let i = 0; i < n - 1; i++) {
+      if (ph >= xs[i] && ph <= xs[i + 1]) { idx = i; break; }
+    }
+    const h = hs[idx];
+    const s = Math.max(0, Math.min(1, (ph - xs[idx]) / h));
+    const s2 = s * s, s3 = s2 * s;
+    return (2 * s3 - 3 * s2 + 1) * ys[idx] + (s3 - 2 * s2 + s) * h * ms[idx]
+      + (-2 * s3 + 3 * s2) * ys[idx + 1] + (s3 - s2) * h * ms[idx + 1];
+  }
+
+  function evalCurveAtPhaseJS(kfs, ph, mode) {
+    const pts = kfs.slice().sort((a, b) => a[0] - b[0]);
+    if (!pts.length) return 0;
+    if (pts.length === 1 || ph <= pts[0][0]) return pts[0][1];
+    if (ph >= pts[pts.length - 1][0]) return pts[pts.length - 1][1];
+    if (mode === 'spline') return evalMonotoneSplineJS(pts, ph);
+    for (let i = 0; i < pts.length - 1; i++) {
+      if (ph >= pts[i][0] && ph <= pts[i + 1][0]) {
+        if (mode === 'step') return pts[i][1];
+        const u = (ph - pts[i][0]) / Math.max(1e-6, pts[i + 1][0] - pts[i][0]);
+        return pts[i][1] + (pts[i + 1][1] - pts[i][1]) * u;
+      }
+    }
+    return pts[pts.length - 1][1];
+  }
+
+  function getCurveBounds(kfs, driver) {
+    const vals = kfs.map((p) => p[1]);
+    if (driver) {
+      if (driver.min_val != null) vals.push(Number(driver.min_val));
+      if (driver.max_val != null) vals.push(Number(driver.max_val));
+    }
+    let lo = Math.min(...vals, 0);
+    let hi = Math.max(...vals, 1);
+    if (hi - lo < 0.05) { lo -= 0.25; hi += 0.25; }
+    const pad = (hi - lo) * 0.12;
+    return { lo: lo - pad, hi: hi + pad };
+  }
+
+  function getCurveInterpMode(driver) {
+    if (!driver) return 'spline';
+    if (driver.kind === 'bezier_curve' || driver.kind === 'spline') return 'spline';
+    if (Array.isArray(driver.keyframes) && driver.keyframes.length && driver.keyframes[0][2] === 'step') return 'step';
+    if (driver.kind === 'keyframes') return 'linear';
+    return 'spline';
+  }
+
+  function renderCurveEditor() {
+    const cv = $('curveEditorCanvas');
+    const sel = $('curveDriverSelect');
+    const interpSel = $('curveInterpSelect');
+    if (!cv || !sel) return;
+    const drivers = (state.serverState && state.serverState.recipe && state.serverState.recipe.drivers) || [];
+    sel.innerHTML = '';
+    if (!drivers.length) {
+      const o = document.createElement('option');
+      o.value = '-1';
+      o.textContent = 'No @animate tracks (click ~ in Inspector)';
+      sel.appendChild(o);
+      state.curveDriverIdx = -1;
+    } else {
+      if (state.curveDriverIdx < 0 || state.curveDriverIdx >= drivers.length) state.curveDriverIdx = 0;
+      drivers.forEach((d, idx) => {
+        const o = document.createElement('option');
+        o.value = String(idx);
+        o.textContent = `${d.node_id}.${d.param_key} (${d.kind})`;
+        if (idx === state.curveDriverIdx) o.selected = true;
+        sel.appendChild(o);
+      });
+    }
+
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const rect = cv.getBoundingClientRect();
+    const cw = Math.max(240, Math.floor((rect.width || 560) * dpr));
+    const ch = Math.max(76, Math.floor((rect.height || 92) * dpr));
+    if (cv.width !== cw || cv.height !== ch) { cv.width = cw; cv.height = ch; }
+    const ctx = cv.getContext('2d');
+    ctx.clearRect(0, 0, cw, ch);
+
+    const padL = 34 * dpr, padR = 12 * dpr, padT = 10 * dpr, padB = 14 * dpr;
+    const plotW = Math.max(10, cw - padL - padR);
+    const plotH = Math.max(10, ch - padT - padB);
+
+    // Grid lines
+    ctx.strokeStyle = 'rgba(148, 163, 184, 0.14)';
+    ctx.lineWidth = 1;
+    for (let gx = 0; gx <= 4; gx++) {
+      const x = padL + (gx / 4) * plotW;
+      ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, padT + plotH); ctx.stroke();
+    }
+    for (let gy = 0; gy <= 2; gy++) {
+      const y = padT + (gy / 2) * plotH;
+      ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(padL + plotW, y); ctx.stroke();
+    }
+
+    if (!drivers.length || state.curveDriverIdx < 0) {
+      ctx.fillStyle = '#64748b';
+      ctx.font = `${11 * dpr}px system-ui, sans-serif`;
+      ctx.fillText('Bind any Inspector slider with ~ to edit its live Spline / Keyframe curve here.', padL + 8 * dpr, padT + plotH * 0.55);
+      return;
+    }
+
+    const driver = drivers[state.curveDriverIdx];
+    const mode = interpSel ? (state._curveModeOverride || getCurveInterpMode(driver)) : 'spline';
+    if (interpSel && !state._curveModeOverride) interpSel.value = mode;
+    const kfs = state.curveDragKfs || sampleDriverToKeyframes(driver);
+    const { lo, hi } = getCurveBounds(kfs, driver);
+    const toX = (t) => padL + Math.max(0, Math.min(1, t)) * plotW;
+    const toY = (v) => padT + (1 - (v - lo) / Math.max(1e-6, hi - lo)) * plotH;
+    state._curveGeom = { padL, padR, padT, padB, plotW, plotH, lo, hi, dpr };
+
+    // Y axis labels
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = `${9 * dpr}px monospace`;
+    ctx.fillText(hi.toFixed(2), 3 * dpr, padT + 7 * dpr);
+    ctx.fillText(lo.toFixed(2), 3 * dpr, padT + plotH);
+
+    // Fill area under curve
+    ctx.beginPath();
+    const samples = 120;
+    for (let i = 0; i <= samples; i++) {
+      const ph = i / samples;
+      const v = evalCurveAtPhaseJS(kfs, ph, mode);
+      const x = toX(ph), y = toY(v);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.lineTo(padL + plotW, padT + plotH);
+    ctx.lineTo(padL, padT + plotH);
+    ctx.closePath();
+    const grad = ctx.createLinearGradient(0, padT, 0, padT + plotH);
+    grad.addColorStop(0, 'rgba(245, 158, 11, 0.28)');
+    grad.addColorStop(1, 'rgba(245, 158, 11, 0.02)');
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    // Curve stroke
+    ctx.beginPath();
+    for (let i = 0; i <= samples; i++) {
+      const ph = i / samples;
+      const v = evalCurveAtPhaseJS(kfs, ph, mode);
+      const x = toX(ph), y = toY(v);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.strokeStyle = '#f59e0b';
+    ctx.lineWidth = 2 * dpr;
+    ctx.stroke();
+
+    // Playhead line + live dot
+    const playX = toX(state.phase);
+    const playV = evalCurveAtPhaseJS(kfs, state.phase, mode);
+    ctx.strokeStyle = '#38bdf8';
+    ctx.lineWidth = 1.4 * dpr;
+    ctx.beginPath(); ctx.moveTo(playX, padT); ctx.lineTo(playX, padT + plotH); ctx.stroke();
+    ctx.fillStyle = '#38bdf8';
+    ctx.beginPath(); ctx.arc(playX, toY(playV), 3.2 * dpr, 0, Math.PI * 2); ctx.fill();
+
+    // Draggable Keyframe Dots
+    kfs.forEach((pt, idx) => {
+      const kx = toX(pt[0]);
+      const ky = toY(pt[1]);
+      const isDrag = idx === state.curveDragIdx;
+      ctx.beginPath();
+      ctx.arc(kx, ky, (isDrag ? 5.6 : 4.4) * dpr, 0, Math.PI * 2);
+      ctx.fillStyle = isDrag ? '#38bdf8' : '#fef3c7';
+      ctx.fill();
+      ctx.lineWidth = 1.6 * dpr;
+      ctx.strokeStyle = isDrag ? '#ffffff' : '#d97706';
+      ctx.stroke();
+    });
+
+    if ($('curveInfoBadge')) {
+      $('curveInfoBadge').textContent = `${kfs.length} kfs · φ=${state.phase.toFixed(2)} → ${playV.toFixed(2)}`;
+    }
+  }
+
+  function commitCurveKeyframes(kfs, mode, undoable) {
+    const drivers = (state.serverState && state.serverState.recipe && state.serverState.recipe.drivers) || [];
+    if (state.curveDriverIdx < 0 || state.curveDriverIdx >= drivers.length) return;
+    const ease = mode === 'step' ? 'step' : (mode === 'linear' ? 'linear' : 'smooth');
+    const kind = mode === 'spline' ? 'bezier_curve' : 'keyframes';
+    const packed = kfs.slice().sort((a, b) => a[0] - b[0]).map((p) => [Number(p[0].toFixed(4)), Number(p[1].toFixed(4)), ease]);
+    state._curveModeOverride = mode;
+    mutate({
+      action: 'update_driver',
+      index: state.curveDriverIdx,
+      kind,
+      keyframes: packed,
+      undoable: undoable !== false,
+    }, { immediateEval: undoable !== false, delayMs: 60 });
+  }
+
+  function setupCurveEditorEvents() {
+    const cv = $('curveEditorCanvas');
+    if (!cv) return;
+    const getCanvasPos = (e) => {
+      const r = cv.getBoundingClientRect();
+      const dpr = (state._curveGeom && state._curveGeom.dpr) || 1;
+      return { x: (e.clientX - r.left) * dpr, y: (e.clientY - r.top) * dpr };
+    };
+    const hitKeyframe = (kfs, x, y) => {
+      const g = state._curveGeom;
+      if (!g) return -1;
+      let best = -1, bestD = 12 * g.dpr;
+      kfs.forEach((pt, idx) => {
+        const kx = g.padL + pt[0] * g.plotW;
+        const ky = g.padT + (1 - (pt[1] - g.lo) / Math.max(1e-6, g.hi - g.lo)) * g.plotH;
+        const d = Math.hypot(x - kx, y - ky);
+        if (d < bestD) { bestD = d; best = idx; }
+      });
+      return best;
+    };
+
+    cv.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      const drivers = (state.serverState && state.serverState.recipe && state.serverState.recipe.drivers) || [];
+      if (state.curveDriverIdx < 0 || state.curveDriverIdx >= drivers.length || !state._curveGeom) return;
+      const driver = drivers[state.curveDriverIdx];
+      const mode = $('curveInterpSelect') ? $('curveInterpSelect').value : 'spline';
+      const kfs = sampleDriverToKeyframes(driver);
+      const { x, y } = getCanvasPos(e);
+      const hit = hitKeyframe(kfs, x, y);
+      const g = state._curveGeom;
+      if (hit >= 0) {
+        state.curveDragIdx = hit;
+        state.curveDragKfs = kfs;
+        cv.setPointerCapture(e.pointerId);
+        renderCurveEditor();
+      } else {
+        const ph = Math.max(0, Math.min(1, (x - g.padL) / g.plotW));
+        const val = g.lo + (1 - (y - g.padT) / g.plotH) * (g.hi - g.lo);
+        kfs.push([Number(ph.toFixed(3)), Number(val.toFixed(3)), mode === 'step' ? 'step' : 'smooth']);
+        kfs.sort((a, b) => a[0] - b[0]);
+        commitCurveKeyframes(kfs, mode, true);
+        showToast(`Inserted keyframe at φ=${ph.toFixed(2)}`, 'ok');
+      }
+    });
+
+    cv.addEventListener('pointermove', (e) => {
+      if (state.curveDragIdx < 0 || !state.curveDragKfs || !state._curveGeom) return;
+      const g = state._curveGeom;
+      const { x, y } = getCanvasPos(e);
+      const ph = Math.max(0, Math.min(1, (x - g.padL) / g.plotW));
+      const val = g.lo + (1 - (y - g.padT) / g.plotH) * (g.hi - g.lo);
+      state.curveDragKfs[state.curveDragIdx][0] = Number(ph.toFixed(3));
+      state.curveDragKfs[state.curveDragIdx][1] = Number(val.toFixed(3));
+      renderCurveEditor();
+    });
+
+    const finishDrag = () => {
+      if (state.curveDragIdx < 0 || !state.curveDragKfs) return;
+      const kfs = state.curveDragKfs;
+      const mode = $('curveInterpSelect') ? $('curveInterpSelect').value : 'spline';
+      state.curveDragIdx = -1;
+      state.curveDragKfs = null;
+      commitCurveKeyframes(kfs, mode, true);
+    };
+    cv.addEventListener('pointerup', finishDrag);
+    cv.addEventListener('pointercancel', finishDrag);
+
+    cv.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      const drivers = (state.serverState && state.serverState.recipe && state.serverState.recipe.drivers) || [];
+      if (state.curveDriverIdx < 0 || state.curveDriverIdx >= drivers.length || !state._curveGeom) return;
+      const driver = drivers[state.curveDriverIdx];
+      const kfs = sampleDriverToKeyframes(driver);
+      if (kfs.length <= 2) {
+        showToast('Curve requires at least 2 keyframes', 'err');
+        return;
+      }
+      const { x, y } = getCanvasPos(e);
+      const hit = hitKeyframe(kfs, x, y);
+      if (hit >= 0) {
+        kfs.splice(hit, 1);
+        const mode = $('curveInterpSelect') ? $('curveInterpSelect').value : 'spline';
+        commitCurveKeyframes(kfs, mode, true);
+        showToast('Removed keyframe', 'ok');
+      }
     });
   }
 
@@ -1986,8 +2600,10 @@
   function switchBottomTab(tab) {
     document.querySelectorAll('[data-bot-tab]').forEach((b) => b.classList.toggle('active', b.dataset.botTab === tab));
     $('botTabTimeline').style.display = tab === 'timeline' ? 'flex' : 'none';
+    if ($('botTabCurves')) $('botTabCurves').style.display = tab === 'curves' ? 'flex' : 'none';
     $('botTabExposed').style.display = tab === 'exposed' ? 'flex' : 'none';
     $('botTabConsole').style.display = tab === 'console' ? 'flex' : 'none';
+    if (tab === 'curves') requestAnimationFrame(() => renderCurveEditor());
   }
 
   // ------------------------------------------------------------------------
@@ -2041,8 +2657,9 @@
     $('phaseSlider').value = state.phase.toFixed(2);
     $('phaseLabel').textContent = state.phase.toFixed(2);
     const fIdx = Math.floor(state.phase * state.animFrames);
-    $('frameReadout').textContent = `F${fIdx}/${state.animFrames} · φ${state.phase.toFixed(2)}`;
+    $('frameReadout').textContent = `F${fIdx}/${state.animFrames}`;
     renderTimelineDrivers();
+    if ($('botTabCurves') && $('botTabCurves').style.display !== 'none') renderCurveEditor();
     if (immediate) return runEvaluate({ includeThumbsMode: 'dynamic', includeQa: false });
     if (evalTimer) clearTimeout(evalTimer);
     evalTimer = setTimeout(() => runEvaluate({ includeThumbsMode: 'dynamic', includeQa: false }), 22);
@@ -2051,7 +2668,7 @@
 
   function stopAnimLoop() {
     state.animPlaying = false;
-    $('btnPlayAnim').textContent = '▶ Play';
+    $('btnPlayAnim').textContent = '▶';
     $('btnPlayAnim').classList.remove('amber');
     if (state.animTimer) { clearTimeout(state.animTimer); state.animTimer = null; }
     if (state.animRafId) { cancelAnimationFrame(state.animRafId); state.animRafId = null; }
@@ -2111,7 +2728,7 @@
       return;
     }
 
-    btn.textContent = '⏸ Pause';
+    btn.textContent = '⏸';
     let lastStamp = performance.now();
     let curIdx = Math.floor(state.phase * gl3d.animRing.length) % gl3d.animRing.length;
     let dir = 1;
@@ -2134,7 +2751,8 @@
           state.phase = entry.phase;
           $('phaseSlider').value = state.phase.toFixed(2);
           $('phaseLabel').textContent = state.phase.toFixed(2);
-          $('frameReadout').textContent = `⚡ F${curIdx}/${nF} · ${state.animFps}fps`;
+          $('frameReadout').textContent = `⚡F${curIdx}/${nF}`;
+          if ($('botTabCurves') && $('botTabCurves').style.display !== 'none') renderCurveEditor();
           if (state.vpMode === '2d' && entry.displayImg) {
             state.img2d = entry.displayImg;
             render2DCanvas();
@@ -2335,27 +2953,31 @@
       for (const n of nodes) state.opMap[n.op] = Object.assign({ category: cat }, n);
     }
     graphCanvas.setSchema(schemaPayload.schema);
-    $('versionBadge').textContent = `v15.1 · ${schemaPayload.schema.node_count} nodes`;
+    $('versionBadge').textContent = `v16 · ${schemaPayload.schema.node_count}`;
+    state.syncpacks = (schemaPayload && schemaPayload.syncpacks) || [];
 
-    // Kick off non-blocking background fetch for 228 procedural swatches, anim sheet & .syncmat presets
+    // Kick off non-blocking background fetch for 230 procedural swatches, anim sheet, .syncmat & .syncpack presets
     const bgAssetsPromise = Promise.all([
       apiGet('/api/schema/previews?size=40').catch(() => ({ previews: {} })),
       apiGet('/api/schema/preview_anim_sheet?size=36&frames=6').catch(() => ({ sheet: {} })),
       apiGet('/api/syncmat/list').catch(() => ({ presets: [] })),
-    ]).then(([prevPayload, animSheetPayload, syncmatPayload]) => {
+      apiGet('/api/syncpack/list').catch(() => ({ packs: state.syncpacks })),
+    ]).then(([prevPayload, animSheetPayload, syncmatPayload, syncpackPayload]) => {
       state.nodePreviews = (prevPayload && prevPayload.previews) || {};
       state.timeAwareOps = new Set((prevPayload && prevPayload.time_aware_ops) || []);
       state.animSheet = (animSheetPayload && animSheetPayload.sheet) || {};
       state.syncmats = (syncmatPayload && syncmatPayload.presets) || [];
+      if (syncpackPayload && Array.isArray(syncpackPayload.packs)) state.syncpacks = syncpackPayload.packs;
       renderNodeLibrary();
       renderSyncmatList();
+      renderSyncpackList();
       startLiveSwatchLoop();
     });
 
     // Populate Project / Preset Dropdown
     const pSel = $('projectSelect');
     const ogSamples = document.createElement('optgroup');
-    ogSamples.label = 'Flagship 3D Studio Projects (v15)';
+    ogSamples.label = 'Flagship 3D Studio Projects (v16)';
     for (const s of schemaPayload.samples) {
       const o = document.createElement('option');
       o.value = `sample:${s.id}`;
@@ -2383,6 +3005,7 @@
 
     renderNodeLibrary();
     renderSyncmatList();
+    renderSyncpackList();
     applyServerState(initState, { fitGraph: true, autoPrim: true });
     await runEvaluate({ includeThumbs: true, includeQa: true });
     await bgAssetsPromise;
@@ -2590,6 +3213,46 @@
         showToast(`Cleared brush mask '${sel.id}'`, 'ok');
       };
     }
+    // Milestone v16: 3D/2D Multi-Material PBR Paint Layer Stack Controls
+    if ($('btnBrushModeMask')) $('btnBrushModeMask').onclick = () => setBrushTargetMode('mask');
+    if ($('btnBrushModePbr')) $('btnBrushModePbr').onclick = () => setBrushTargetMode('pbr');
+    if ($('pbrBrushPresetSelect')) {
+      $('pbrBrushPresetSelect').onchange = (e) => applyPbrBrushPreset(e.target.value);
+    }
+    if ($('pbrBrushColor')) {
+      $('pbrBrushColor').oninput = (e) => {
+        state.pbrBrush.color = e.target.value;
+        state.pbrBrush.erase = false;
+      };
+    }
+    if ($('pbrBrushRough')) {
+      $('pbrBrushRough').oninput = (e) => { state.pbrBrush.roughness = parseFloat(e.target.value); };
+    }
+    if ($('pbrBrushMetal')) {
+      $('pbrBrushMetal').oninput = (e) => { state.pbrBrush.metallic = parseFloat(e.target.value); };
+    }
+    if ($('pbrBrushHeight')) {
+      $('pbrBrushHeight').oninput = (e) => { state.pbrBrush.height = parseFloat(e.target.value); };
+    }
+    if ($('pbrBrushEmissive')) {
+      $('pbrBrushEmissive').oninput = (e) => {
+        const v = parseFloat(e.target.value);
+        state.pbrBrush.emissive_strength = v;
+        state.pbrBrush.paint_emissive = v > 0.01;
+      };
+    }
+    if ($('btnPbrAddLayer')) {
+      $('btnPbrAddLayer').onclick = async () => {
+        const st = await runPbrLayerAction('add_layer', { name: `PBR Layer ${(state.pbrLayers || []).length + 1}` });
+        if (st) showToast(`Added PBR paint layer (${state.activePbrLayerId})`, 'ok');
+      };
+    }
+    if ($('btnPbrClearLayer')) {
+      $('btnPbrClearLayer').onclick = async () => {
+        const st = await runPbrLayerAction('clear_layer');
+        if (st) showToast(`Cleared active PBR paint layer`, 'ok');
+      };
+    }
     if ($('btnSplitWipe')) {
       $('btnSplitWipe').onclick = () => {
         state.splitWipe = !state.splitWipe;
@@ -2772,9 +3435,45 @@
       }
     });
 
-    // Node Library Tabs, Live Swatches & .syncmat Preset Drawer
+    // Node Library Tabs, Live Swatches, .syncmat & .syncpack Marketplace Drawer
     if ($('tabLibNodes')) $('tabLibNodes').onclick = () => switchLibTab('nodes');
     if ($('tabLibSyncmat')) $('tabLibSyncmat').onclick = () => switchLibTab('syncmat');
+    if ($('tabLibSyncpack')) $('tabLibSyncpack').onclick = () => switchLibTab('syncpack');
+    if ($('btnSaveSyncpack')) {
+      $('btnSaveSyncpack').onclick = async () => {
+        const ids = getActiveSelectionIds();
+        const defName = (state.serverState && state.serverState.recipe && state.serverState.recipe.name) || 'Custom Pack';
+        try {
+          const res = await apiPost('/api/syncpack/save', {
+            node_ids: ids.length ? ids : null,
+            name: `${defName} Pack`,
+            description: `Distributable .syncpack exported from ${defName}`,
+          });
+          if (res.packs) state.syncpacks = res.packs;
+          switchLibTab('syncpack');
+          showToast(`Saved .syncpack '${res.pack.name}'`, 'ok');
+        } catch (err) {
+          showToast(err.message, 'err');
+        }
+      };
+    }
+    if ($('btnUploadSyncpack')) $('btnUploadSyncpack').onclick = () => $('syncpackFileInput').click();
+    if ($('syncpackFileInput')) {
+      $('syncpackFileInput').onchange = async (e) => {
+        const f = e.target.files && e.target.files[0];
+        if (!f) return;
+        try {
+          const doc = JSON.parse(await f.text());
+          const res = await apiPost('/api/syncpack/import', { pack: doc });
+          if (res.packs) state.syncpacks = res.packs;
+          switchLibTab('syncpack');
+          showToast(`Imported .syncpack '${doc.name || f.name}'`, 'ok');
+        } catch (err) {
+          showToast(`Invalid .syncpack: ${err.message}`, 'err');
+        }
+        e.target.value = '';
+      };
+    }
     if ($('btnLiveSwatches')) {
       $('btnLiveSwatches').onclick = () => {
         state.liveSwatches = !state.liveSwatches;
@@ -2909,6 +3608,162 @@
       invalidateAnimRing();
       setPhase(state.phase);
     };
+
+    // Milestone v16: Curve / Spline Graph Editor Controls
+    setupCurveEditorEvents();
+    if ($('curveDriverSelect')) {
+      $('curveDriverSelect').onchange = (e) => {
+        state.curveDriverIdx = parseInt(e.target.value, 10);
+        state._curveModeOverride = null;
+        renderCurveEditor();
+      };
+    }
+    if ($('curveInterpSelect')) {
+      $('curveInterpSelect').onchange = (e) => {
+        const mode = e.target.value;
+        state._curveModeOverride = mode;
+        const drivers = (state.serverState && state.serverState.recipe && state.serverState.recipe.drivers) || [];
+        if (state.curveDriverIdx >= 0 && state.curveDriverIdx < drivers.length) {
+          const kfs = sampleDriverToKeyframes(drivers[state.curveDriverIdx]);
+          commitCurveKeyframes(kfs, mode, true);
+        }
+        renderCurveEditor();
+      };
+    }
+    if ($('btnCurveAddKf')) {
+      $('btnCurveAddKf').onclick = () => {
+        const drivers = (state.serverState && state.serverState.recipe && state.serverState.recipe.drivers) || [];
+        if (state.curveDriverIdx < 0 || state.curveDriverIdx >= drivers.length) {
+          showToast('No @animate track selected. Click ~ in Inspector first!', 'err');
+          return;
+        }
+        const d = drivers[state.curveDriverIdx];
+        const mode = $('curveInterpSelect') ? $('curveInterpSelect').value : 'spline';
+        const kfs = sampleDriverToKeyframes(d);
+        const ph = Number(state.phase.toFixed(3));
+        const val = Number(evalCurveAtPhaseJS(kfs, ph, mode).toFixed(3));
+        const existsIdx = kfs.findIndex((p) => Math.abs(p[0] - ph) < 0.02);
+        if (existsIdx >= 0) {
+          const midPh = Number(((ph + 0.15) % 1.0).toFixed(3));
+          kfs.push([midPh, Number(evalCurveAtPhaseJS(kfs, midPh, mode).toFixed(3)), mode === 'step' ? 'step' : 'smooth']);
+        } else {
+          kfs.push([ph, val, mode === 'step' ? 'step' : 'smooth']);
+        }
+        commitCurveKeyframes(kfs, mode, true);
+        showToast(`Added keyframe on ${d.node_id}.${d.param_key}`, 'ok');
+      };
+    }
+
+    // Milestone v16: Multi-Asset Batch Bakery Queue Modal
+    const stopBatchPoll = () => {
+      if (state.batchPollTimer) { clearInterval(state.batchPollTimer); state.batchPollTimer = null; }
+    };
+    const renderBatchQueue = (items, summaryText) => {
+      if ($('batchSummaryLine') && summaryText) $('batchSummaryLine').textContent = summaryText;
+      const list = $('batchQueueList');
+      if (!list) return;
+      list.innerHTML = '';
+      if (!items || !items.length) {
+        list.innerHTML = '<div style="font-size:11px;color:var(--text-muted);padding:8px;">No assets scanned yet. Click Scan Folder or Run Batch Bakery.</div>';
+        return;
+      }
+      for (const it of items) {
+        const row = document.createElement('div');
+        row.className = 'batch-item-row';
+        const stName = it.status || 'pending';
+        const metaParts = [];
+        if (it.kind) metaParts.push(it.kind);
+        else {
+          if (it.bbmodel_path || it.bbmodel) metaParts.push('3D .bbmodel');
+          if (it.texdsl_path || it.texdsl) metaParts.push('.texdsl');
+        }
+        if (it.qa_score != null) metaParts.push(`QA ${Math.round(it.qa_score)}/100`);
+        const msVal = it.ms != null ? it.ms : it.elapsed_ms;
+        if (msVal != null && msVal > 0) metaParts.push(`${Math.round(msVal)}ms`);
+        if (it.files_count != null && it.files_count > 0) metaParts.push(`${it.files_count} files`);
+        if (it.mesh_cache_hit) metaParts.push('cache hit');
+        if (it.error) metaParts.push(`ERR: ${it.error}`);
+        row.innerHTML = `
+          <div class="batch-item-main">
+            <span class="batch-item-stem">${it.stem || 'asset'}</span>
+            <span class="batch-item-meta">${metaParts.join(' · ')}</span>
+          </div>
+          <span class="batch-status-pill ${stName}">${stName.toUpperCase()}</span>
+        `;
+        list.appendChild(row);
+      }
+    };
+    const pollBatchStatus = async () => {
+      try {
+        const st = await apiGet('/api/batch/status');
+        const tot = st.total || 0;
+        const done = st.completed || 0;
+        const meanQa = st.report && st.report.mean_qa != null ? ` · Mean QA ${Math.round(st.report.mean_qa)}/100` : '';
+        const sum = st.running
+          ? `Baking ${done}/${tot} assets -> ${st.out_dir || ''}`
+          : (st.error ? `Batch error: ${st.error}` : `Done: ${st.succeeded || 0}/${tot} succeeded${meanQa} -> ${st.out_dir || ''}`);
+        renderBatchQueue(st.items || [], sum);
+        if (!st.running) {
+          stopBatchPoll();
+          if ($('btnBatchRun')) $('btnBatchRun').disabled = false;
+          if (!st.error && tot > 0) showToast(`Batch Bakery complete: ${st.succeeded}/${tot} PBR v2.0 + .mtlx bundles!`, 'ok');
+        }
+      } catch (_) {}
+    };
+    if ($('btnOpenBatch')) {
+      $('btnOpenBatch').onclick = () => {
+        $('batchModal').classList.add('open');
+        pollBatchStatus();
+      };
+    }
+    if ($('btnCloseBatch')) {
+      $('btnCloseBatch').onclick = () => { stopBatchPoll(); $('batchModal').classList.remove('open'); };
+    }
+    if ($('batchModal')) {
+      $('batchModal').addEventListener('click', (e) => {
+        if (e.target === $('batchModal')) { stopBatchPoll(); $('batchModal').classList.remove('open'); }
+      });
+    }
+    if ($('btnBatchScan')) {
+      $('btnBatchScan').onclick = async () => {
+        try {
+          const res = await apiPost('/api/batch/scan', {
+            input_dir: ($('batchInputDir') && $('batchInputDir').value.trim()) || '',
+            max_assets: 16,
+          });
+          if ($('batchInputDir') && !$('batchInputDir').value.trim() && res.input_dir) {
+            $('batchInputDir').value = res.input_dir;
+          }
+          const items = (res.assets || []).map((a) => Object.assign({}, a, { status: 'pending' }));
+          renderBatchQueue(items, `Scanned ${res.count} asset(s) in ${res.input_dir}`);
+          showToast(`Found ${res.count} bakeable asset(s)`, 'ok');
+        } catch (err) {
+          showToast(err.message, 'err');
+        }
+      };
+    }
+    if ($('btnBatchRun')) {
+      $('btnBatchRun').onclick = async () => {
+        try {
+          $('btnBatchRun').disabled = true;
+          const res = await apiPost('/api/batch/start', {
+            input_dir: ($('batchInputDir') && $('batchInputDir').value.trim()) || '',
+            out_dir: ($('batchOutDir') && $('batchOutDir').value.trim()) || '',
+            preset: ($('batchPresetSelect') && $('batchPresetSelect').value) || 'studio_hero',
+            max_assets: 12,
+          });
+          if (res.status) {
+            renderBatchQueue(res.status.items || [], `Started Batch Bakery -> ${res.status.out_dir || ''}`);
+          }
+          stopBatchPoll();
+          state.batchPollTimer = setInterval(pollBatchStatus, 350);
+          pollBatchStatus();
+        } catch (err) {
+          $('btnBatchRun').disabled = false;
+          showToast(err.message, 'err');
+        }
+      };
+    }
 
     // Visual Add-Node Browser & Command Palette
     if ($('btnPalList')) $('btnPalList').onclick = () => { state.paletteViewMode = 'list'; renderPaletteList(); };
@@ -3137,6 +3992,7 @@
         if (state.lightDragMode) setLightDragMode(false);
         $('exportModal').classList.remove('open');
         $('meshModal').classList.remove('open');
+        if ($('batchModal')) $('batchModal').classList.remove('open');
         return;
       }
       if (inField) return;

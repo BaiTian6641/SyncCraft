@@ -14,6 +14,21 @@ Pure vectorized NumPy/Pillow DAG node engine for expert pixel-art textures:
 from __future__ import annotations
 
 from .core import EvalResult, GraphCycleError, NodeSpec, TexGraph, ValidationReport
+from .v16_pro_ops import (
+    BUILTIN_SYNCPACKS,
+    PBR_BRUSH_PRESETS,
+    ScriptSecurityError,
+    apply_pbr_brush_strokes_to_layer,
+    list_all_syncpacks,
+    make_empty_paint_layer,
+    paint_layer_stack_op,
+    run_batch_bakery,
+    save_user_syncpack,
+    scan_batch_folder,
+    script_expr_op,
+    spawn_syncpack_macro_into_graph,
+    validate_safe_script_ast,
+)
 from .engine_ops import (
     auto_levels,
     curvature_from_height,
