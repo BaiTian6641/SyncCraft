@@ -580,6 +580,84 @@ NODE_CATALOG: dict[str, NodeMeta] = {
         (PortSchema("base", "MATERIAL"),), "MATERIAL",
         outputs=(PortSchema("albedo", "RGBA"), PortSchema("height", "HEIGHT"), PortSchema("normal", "NORMAL"), PortSchema("roughness", "SCALAR"), PortSchema("metallic", "SCALAR"), PortSchema("ao", "SCALAR"), PortSchema("emissive", "RGBA"), PortSchema("sss", "SCALAR"), PortSchema("eye_mask", "MASK")),
     ),
+    # --- TexGraph v9 Pixel Composer Atomic Operators & 3D Baked Emissive Bounce ---
+    "pixel_dither": NodeMeta(
+        "pixel_dither", "Pixel Composer FX", "Pixel Dither (Bayer / Error-Diffuse)",
+        "Pixel Composer Dither: ordered Bayer (2x2/4x4/8x8), diamond, blue-noise, or Floyd-Steinberg/Atkinson error-diffusion locked strictly to a discrete OKLab palette.",
+        (PortSchema("src", "ANY"),), "RGBA",
+    ),
+    "palette_posterize": NodeMeta(
+        "palette_posterize", "Pixel Composer FX", "Palette Posterize",
+        "Pixel Composer Posterize: snap every pixel crisply onto a discrete curated palette in OKLab/RGB/luma space with optional hard alpha cutoff.",
+        (PortSchema("src", "ANY"),), "RGBA",
+    ),
+    "color_replace": NodeMeta(
+        "color_replace", "Pixel Composer FX", "Replace Palette / Colors",
+        "Pixel Composer Replace Palette: cleanly remap source palette colors to destination colorway palette.",
+        (PortSchema("src", "RGBA"),), "RGBA",
+    ),
+    "level_selector": NodeMeta(
+        "level_selector", "Pixel Composer FX", "Level Selector",
+        "Pixel Composer Level Selector: isolate a luminance slice [center ± width/2] for gem glints, specular rims & mask extraction.",
+        (PortSchema("src", "ANY"),), "MASK",
+    ),
+    "de_stray": NodeMeta(
+        "de_stray", "Pixel Composer FX", "De-Stray (Orphan Cleaner)",
+        "Pixel Composer De-Stray: eliminate isolated 1x1 noise specks while preserving coherent artistic clusters & catchlights.",
+        (PortSchema("src", "ANY"),), "ANY",
+    ),
+    "de_corner": NodeMeta(
+        "de_corner", "Pixel Composer FX", "De-Corner (Jag Cleaner)",
+        "Pixel Composer De-Corner: remove ugly L-shaped stair-step pixel jaggies and line doubles cleanly while staying palette-locked.",
+        (PortSchema("src", "ANY"),), "ANY",
+    ),
+    "pixel_clusters": NodeMeta(
+        "pixel_clusters", "Pixel Composer FX", "Directional Pixel Clusters",
+        "Hytale/Everbloom/Mickey Joe 2-4 px directional pixel cluster sculptor with palette lock, De-Stray & De-Corner.",
+        (PortSchema("src", "ANY"),), "RGBA",
+    ),
+    "pixel_bevel_directional": NodeMeta(
+        "pixel_bevel_directional", "Pixel Composer FX", "Directional Chipped Bevel",
+        "Anti-wireframe directional top-left lit bevel + bottom-right cast shadow with asymmetric battle-chip notch breakup (ports: highlight, shadow, chips, signed).",
+        (), "MASK",
+        outputs=(PortSchema("highlight", "MASK"), PortSchema("shadow", "MASK"), PortSchema("chips", "MASK"), PortSchema("signed", "SCALAR")),
+    ),
+    "pixel_outline": NodeMeta(
+        "pixel_outline", "Pixel Composer FX", "Pixel Outline / Inline",
+        "Pixel Composer Outline: crisp 4-way or 8-way outside/inside pixel-art outline.",
+        (PortSchema("src", "RGBA"),), "RGBA",
+    ),
+    "heightmap_shadow": NodeMeta(
+        "heightmap_shadow", "Pixel Composer FX", "Heightmap Cast Shadow",
+        "Pixel Composer 1.22.4 Heightmap Shadow: directional ray-marched cast shadows across 2D relief.",
+        (PortSchema("height", "HEIGHT"),), "SCALAR",
+    ),
+    "pixel_mirror": NodeMeta(
+        "pixel_mirror", "Transform & Distort", "Pixel Mirror / Symmetry",
+        "Pixel Composer Mirror: exact pixel-grid X, Y, or 4-way XY symmetry.",
+        (PortSchema("src", "ANY"),), "ANY",
+    ),
+    "pixel_sort": NodeMeta(
+        "pixel_sort", "Pixel Composer FX", "Pixel Sort",
+        "Pixel Composer Pixel Sort: directional luminance-masked pixel span sorting.",
+        (PortSchema("src", "ANY"),), "ANY",
+    ),
+    "chromatic_aberration": NodeMeta(
+        "chromatic_aberration", "Pixel Composer FX", "Chromatic Aberration",
+        "Pixel Composer Chromatic Aberration: crisp RGB channel edge shift.",
+        (PortSchema("src", "RGBA"),), "RGBA",
+    ),
+    "vignette": NodeMeta(
+        "vignette", "Pixel Composer FX", "Vignette",
+        "Pixel Composer Vignette: hue-shifted dark focal frame.",
+        (PortSchema("src", "RGBA"),), "RGBA",
+    ),
+    "bake_emissive_bounce": NodeMeta(
+        "bake_emissive_bounce", "PBR & Normal", "3D Baked Emissive Bounce Light (MATERIAL)",
+        "Hytale Golem_Firesteel 3D world-space GI bounce: projects warm/colored glow from eyes, runes & magma fissures onto adjacent dark armor, obsidian & skin.",
+        (PortSchema("mat", "MATERIAL"),), "MATERIAL",
+        outputs=(PortSchema("albedo", "RGBA"), PortSchema("height", "HEIGHT"), PortSchema("normal", "NORMAL"), PortSchema("roughness", "SCALAR"), PortSchema("metallic", "SCALAR"), PortSchema("ao", "SCALAR"), PortSchema("emissive", "RGBA"), PortSchema("sss", "SCALAR")),
+    ),
 }
 
 
@@ -601,7 +679,7 @@ def export_node_schema_json() -> dict[str, Any]:
     ]
     return {
         "schema_version": "3.1",
-        "engine_version": "8.0",
+        "engine_version": "9.0",
         "node_count": len(NODE_CATALOG),
         "subgraph_count": len(subgraphs),
         "supports_multi_port": True,
@@ -612,6 +690,7 @@ def export_node_schema_json() -> dict[str, Any]:
         "supports_dag_validation": True,
         "supports_incremental_cache": True,
         "supports_texdsl": True,
+        "supports_pixel_composer_fx": True,
         "categories": list(by_cat.keys()),
         "nodes_by_category": by_cat,
         "subgraphs": subgraphs,

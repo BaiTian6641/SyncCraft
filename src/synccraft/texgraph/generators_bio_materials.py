@@ -42,6 +42,7 @@ from .generators_painterly import directional_brushstrokes, organic_domain_warp_
 from .ops_fx_color import oklch_adjust
 from .pbr import height_to_normal_map
 from .pixel_art_ops import hex_to_srgb
+from .pixel_composer_ops import heightmap_shadow, pixel_clusters
 
 
 # ---------------------------------------------------------------------------
@@ -458,13 +459,20 @@ def organic_fur_pelt(
         1.0,
     ).astype(np.float32)
 
-    coat_rgba = multi_stop_gradient(fur_tone, coat_stops, space="oklab", smooth_blend=smooth_blend, quantize_steps=quantize_steps, dither="none")
-    belly_rgba = multi_stop_gradient(np.clip(fur_tone + 0.08, 0.0, 1.0), belly_stops, space="oklab", smooth_blend=smooth_blend, quantize_steps=quantize_steps, dither="none")
+    # Crisp Everbloom-grade vertical pixel-clustered fur locks (80% stepped clusters + 20% smooth bridge!)
+    sb_fur = min(0.28, float(smooth_blend))
+    coat_raw = multi_stop_gradient(fur_tone, coat_stops, space="oklab", smooth_blend=sb_fur, quantize_steps=quantize_steps, dither="none")
+    coat_cl = pixel_clusters(coat_raw, [c for _, c in coat_stops], direction="vertical", cluster_size=2, clean_strays=True, clean_corners=True)
+    coat_rgba = coat_cl * 0.80 + coat_raw * 0.20
 
-    # Jagged fur-tuft countershading boundary (Everbloom Husky signature: cream belly, chest & paws!)
+    belly_raw = multi_stop_gradient(np.clip(fur_tone + 0.08, 0.0, 1.0), belly_stops, space="oklab", smooth_blend=sb_fur, quantize_steps=quantize_steps, dither="none")
+    belly_cl = pixel_clusters(belly_raw, [c for _, c in belly_stops], direction="vertical", cluster_size=2, clean_strays=True, clean_corners=True)
+    belly_rgba = belly_cl * 0.80 + belly_raw * 0.20
+
+    # Jagged fur-tuft countershading boundary (Everbloom Husky signature: crisp stepped cream belly, chest & paws!)
     elev = wpn[..., 1] * 0.72 + (wn[..., 1] * 0.5 + 0.5) * 0.28
-    jagged_edge = (tuft_v - 0.5) * 0.20 + (w3["flow"] - 0.5) * 0.12
-    belly_mask = np.clip((float(countershade_height) - (elev + jagged_edge)) / 0.09, 0.0, 1.0).astype(np.float32)
+    jagged_edge = (tuft_v - 0.5) * 0.24 + (w3["flow"] - 0.5) * 0.14
+    belly_mask = np.clip((float(countershade_height) - (elev + jagged_edge)) / 0.055, 0.0, 1.0).astype(np.float32)
 
     rgb = coat_rgba[..., :3] * (1.0 - belly_mask[..., None]) + belly_rgba[..., :3] * belly_mask[..., None]
 
@@ -489,7 +497,9 @@ def organic_fur_pelt(
         mark_m = dorsal_band * 0.55
 
     if float(mark_m.max()) > 0.01:
-        mark_rgba = multi_stop_gradient(fur_tone, marking_stops, space="oklab", smooth_blend=smooth_blend, quantize_steps=quantize_steps, dither="none")
+        mark_raw = multi_stop_gradient(fur_tone, marking_stops, space="oklab", smooth_blend=sb_fur, quantize_steps=quantize_steps, dither="none")
+        mark_cl = pixel_clusters(mark_raw, [c for _, c in marking_stops], direction="vertical", cluster_size=2, clean_strays=True, clean_corners=True)
+        mark_rgba = mark_cl * 0.80 + mark_raw * 0.20
         rgb = rgb * (1.0 - mark_m[..., None]) + mark_rgba[..., :3] * mark_m[..., None]
 
     albedo = np.concatenate((np.clip(rgb, 0.0, 1.0), np.ones((H, W, 1), dtype=np.float32)), axis=-1).astype(np.float32)
@@ -590,27 +600,38 @@ def layered_plumage(
     key_l /= np.linalg.norm(key_l)
     ndotl = np.clip(np.sum(wn * key_l[None, None, :], axis=-1) * 0.5 + 0.5, 0.0, 1.0)
 
-    f_h = np.clip(0.38 + 0.26 * fan_dome + 0.10 * quill + 0.10 * tip_rim - 0.26 * overlap_sh + 0.08 * (w3["mottle"] - 0.5), 0.0, 1.0).astype(np.float32)
+    f_h = np.clip(0.36 + 0.28 * fan_dome + 0.12 * quill + 0.12 * tip_rim - 0.30 * overlap_sh + 0.08 * (w3["mottle"] - 0.5), 0.0, 1.0).astype(np.float32)
+    # Ray-marched roof-tile feather cast shadow (Pixel Composer 1.22.4 Heightmap Shadow -> crisp overlapping scallops!)
+    hm_sh = heightmap_shadow(f_h, light_angle_deg=-115.0, elevation_deg=40.0, max_steps=3, strength=0.58, tileable=False)
     tone = np.clip(
-        0.24 + 0.36 * ndotl + 0.22 * (f_h - 0.45) + f_var + 0.10 * tip_rim + 0.06 * quill - 0.20 * overlap_sh - 0.24 * cav - 0.16 * (1.0 - ao),
+        0.22 + 0.32 * ndotl + 0.24 * (f_h - 0.44) + f_var + 0.14 * tip_rim + 0.08 * quill - 0.26 * overlap_sh - 0.22 * (1.0 - hm_sh) - 0.24 * cav - 0.16 * (1.0 - ao),
         0.0,
         1.0,
     ).astype(np.float32)
 
-    sb_pl = max(0.62, float(smooth_blend))
-    base_rgba = multi_stop_gradient(tone, feather_stops, space="oklab", smooth_blend=sb_pl, quantize_steps=max(6, quantize_steps), dither="none")
-    rgb = base_rgba[..., :3]
+    sb_pl = min(0.28, float(smooth_blend))
+    f_pal_hex = [c for _, c in feather_stops]
+    base_raw = multi_stop_gradient(tone, feather_stops, space="oklab", smooth_blend=sb_pl, quantize_steps=max(5, quantize_steps), dither="none")
+    base_cl = pixel_clusters(base_raw, f_pal_hex, direction="vertical", cluster_size=2, clean_strays=True, clean_corners=True)
+    rgb = (base_cl[..., :3] * 0.82 + base_raw[..., :3] * 0.18).astype(np.float32)
 
     mk = marking.lower()
     if mk == "barred":
-        # Soft single painterly crescent band across mid-tip of each feather (zero harsh zebra stripes!)
-        bar = np.exp(-(((sy - 0.58) / 0.18) ** 2)) * np.clip(1.0 - np.abs(sx) * 0.45, 0.2, 1.0) * 0.52
-        acc = multi_stop_gradient(tone, accent_stops, space="oklab", smooth_blend=sb_pl, quantize_steps=quantize_steps, dither="none")
-        rgb = rgb * (1.0 - bar[..., None]) + acc[..., :3] * bar[..., None]
+        # Crisp single painterly crescent band across mid-tip of each feather (zero harsh zebra stripes!)
+        bar = np.exp(-(((sy - 0.58) / 0.16) ** 2)) * np.clip(1.0 - np.abs(sx) * 0.45, 0.2, 1.0) * 0.58
+        acc_raw = multi_stop_gradient(tone, accent_stops, space="oklab", smooth_blend=sb_pl, quantize_steps=quantize_steps, dither="none")
+        acc_cl = pixel_clusters(acc_raw, [c for _, c in accent_stops], direction="horizontal", cluster_size=2, clean_strays=True, clean_corners=True)
+        rgb = rgb * (1.0 - bar[..., None]) + (acc_cl[..., :3] * 0.82 + acc_raw[..., :3] * 0.18) * bar[..., None]
     elif mk == "speckled":
-        dot = np.exp(-(((sx * 1.5) ** 2 + ((sy - 0.64) * 2.1) ** 2) / 0.22)) * 0.58
-        acc = multi_stop_gradient(tone, accent_stops, space="oklab", smooth_blend=sb_pl, quantize_steps=quantize_steps, dither="none")
-        rgb = rgb * (1.0 - dot[..., None]) + acc[..., :3] * dot[..., None]
+        dot = np.exp(-(((sx * 1.5) ** 2 + ((sy - 0.64) * 2.1) ** 2) / 0.20)) * 0.64
+        acc_raw = multi_stop_gradient(tone, accent_stops, space="oklab", smooth_blend=sb_pl, quantize_steps=quantize_steps, dither="none")
+        acc_cl = pixel_clusters(acc_raw, [c for _, c in accent_stops], direction="vertical", cluster_size=2, clean_strays=True, clean_corners=True)
+        rgb = rgb * (1.0 - dot[..., None]) + (acc_cl[..., :3] * 0.82 + acc_raw[..., :3] * 0.18) * dot[..., None]
+    elif mk == "solid":
+        # Even pale/solid breast plumage gets crisp dark scalloped feather-tip arches so chest panels NEVER look blank/flat!
+        scallop_rim = (overlap_sh > 0.26).astype(np.float32) * 0.42
+        c_deep = np.array(hex_to_srgb(f_pal_hex[0]), dtype=np.float32)[None, None, :]
+        rgb = rgb * (1.0 - scallop_rim[..., None]) + c_deep * scallop_rim[..., None]
 
     ir = float(np.clip(iridescence, 0.0, 1.0))
     if ir > 0.01 or mk == "iridescent":
@@ -690,13 +711,19 @@ def chitin_carapace(
     ndotl = np.clip(np.sum(wn * key_l[None, None, :], axis=-1) * 0.5 + 0.5, 0.0, 1.0)
 
     ch_h = np.clip(0.32 + 0.44 * seg_dome + 0.14 * seg_rim + 0.12 * ridge + 0.06 * (dimple - 0.5) - 0.38 * seg_seam, 0.0, 1.0).astype(np.float32)
+    # Mickey Joe Scorpion roof-tile ray-marched shadow under each overlapping dorsal segment!
+    ch_sh = heightmap_shadow(ch_h, light_angle_deg=-120.0, elevation_deg=38.0, max_steps=4, strength=0.68, tileable=False)
     tone = np.clip(
-        0.18 + 0.40 * ndotl + 0.26 * (ch_h - 0.45) + 0.16 * seg_rim * ndotl + 0.10 * (w3["mottle"] - 0.5) - 0.34 * seg_seam - 0.28 * cav - 0.20 * (1.0 - ao),
+        0.18 + 0.38 * ndotl + 0.26 * (ch_h - 0.45) + 0.18 * seg_rim * ndotl + 0.10 * (w3["mottle"] - 0.5) - 0.34 * seg_seam - 0.22 * (1.0 - ch_sh) - 0.28 * cav - 0.20 * (1.0 - ao),
         0.0,
         1.0,
     ).astype(np.float32)
 
-    base_rgba = multi_stop_gradient(tone, chitin_stops, space="oklab", smooth_blend=smooth_blend, quantize_steps=quantize_steps, dither="none")
+    sb_ch = min(0.28, float(smooth_blend))
+    ch_hex = [c for _, c in chitin_stops]
+    base_raw = multi_stop_gradient(tone, chitin_stops, space="oklab", smooth_blend=sb_ch, quantize_steps=quantize_steps, dither="none")
+    base_cl = pixel_clusters(base_raw, ch_hex, direction="horizontal", cluster_size=2, clean_strays=True, clean_corners=True)
+    base_rgba = base_cl * 0.82 + base_raw * 0.18
     rgb = base_rgba[..., :3]
 
     ir = float(np.clip(iridescence, 0.0, 1.0))
@@ -781,14 +808,18 @@ def aquatic_scales_skin(
         sc_dome = np.clip(1.0 - dist_c * 0.65, 0.0, 1.0)
         lat_line = np.exp(-(((v - 0.48 + 0.05 * w3["warp_y"]) / 0.07) ** 2))
         surf_h = np.clip(0.35 + 0.42 * sc_dome + 0.18 * sc_rim, 0.0, 1.0).astype(np.float32)
-        tone = np.clip(0.18 + 0.44 * ndotl + 0.24 * (surf_h - 0.48) + 0.18 * lat_line + 0.12 * sc_rim * ndotl - 0.24 * cav, 0.0, 1.0).astype(np.float32)
-        base_rgba = multi_stop_gradient(tone, base_stops, space="oklab", smooth_blend=smooth_blend, quantize_steps=quantize_steps, dither="none")
-        rgb = base_rgba[..., :3]
+        sc_sh = heightmap_shadow(surf_h, light_angle_deg=-130.0, elevation_deg=42.0, max_steps=3, strength=0.55, tileable=False)
+        tone = np.clip(0.18 + 0.42 * ndotl + 0.24 * (surf_h - 0.48) + 0.18 * lat_line + 0.14 * sc_rim * ndotl - 0.18 * (1.0 - sc_sh) - 0.24 * cav, 0.0, 1.0).astype(np.float32)
+        sb_aq = min(0.30, float(smooth_blend))
+        base_raw = multi_stop_gradient(tone, base_stops, space="oklab", smooth_blend=sb_aq, quantize_steps=quantize_steps, dither="none")
+        base_cl = pixel_clusters(base_raw, [c for _, c in base_stops], direction="diag_pos", cluster_size=2, clean_strays=True, clean_corners=True)
+        rgb = (base_cl[..., :3] * 0.80 + base_raw[..., :3] * 0.20).astype(np.float32)
         if float(lat_line.max()) > 0.1:
-            accent = multi_stop_gradient(tone, spot_stops, space="oklab", smooth_blend=smooth_blend, quantize_steps=quantize_steps, dither="none")
-            rgb = rgb * (1.0 - lat_line[..., None] * 0.48) + accent[..., :3] * (lat_line[..., None] * 0.48)
+            accent_raw = multi_stop_gradient(tone, spot_stops, space="oklab", smooth_blend=sb_aq, quantize_steps=quantize_steps, dither="none")
+            accent_cl = pixel_clusters(accent_raw, [c for _, c in spot_stops], direction="diag_pos", cluster_size=2, clean_strays=True, clean_corners=True)
+            rgb = rgb * (1.0 - lat_line[..., None] * 0.48) + (accent_cl[..., :3] * 0.80 + accent_raw[..., :3] * 0.20) * (lat_line[..., None] * 0.48)
     else:
-        # Smooth moist amphibian/koi skin with resolution-independent organic blotches & glossy specular pores!
+        # Smooth moist amphibian/koi skin with resolution-independent organic blotches & crisp pixel clusters!
         res_m_a = max(1.0, math.sqrt((H * W) / 4096.0))
         pores = fbm_noise(H, W, scale=12.0 * res_m_a, octaves=2, seed=seed + 53, tileable=False)
         blotch_n = fbm_noise(H, W, scale=4.2 * res_m_a, octaves=2, seed=seed + 71, tileable=False)
@@ -801,9 +832,11 @@ def aquatic_scales_skin(
             patch_m = histogram_scan(np.clip(1.0 - sp_w / 0.42, 0.0, 1.0), position=0.50, contrast=0.72)
         surf_h = np.clip(0.42 + 0.24 * w3["mottle"] + 0.18 * patch_m + 0.14 * (pores - 0.5), 0.0, 1.0).astype(np.float32)
         tone = np.clip(0.20 + 0.46 * ndotl + 0.16 * (w3["mottle"] - 0.5) + 0.12 * (pores - 0.5) + 0.18 * (ndotl ** 4) * wet - 0.25 * cav, 0.0, 1.0).astype(np.float32)
-        base_rgba = multi_stop_gradient(tone, base_stops, space="oklab", smooth_blend=0.52, quantize_steps=6, dither="none")
-        spot_rgba = multi_stop_gradient(tone, spot_stops, space="oklab", smooth_blend=0.52, quantize_steps=6, dither="none")
-        rgb = base_rgba[..., :3] * (1.0 - patch_m[..., None]) + spot_rgba[..., :3] * patch_m[..., None]
+        base_raw = multi_stop_gradient(tone, base_stops, space="oklab", smooth_blend=0.28, quantize_steps=6, dither="none")
+        base_cl = pixel_clusters(base_raw, [c for _, c in base_stops], direction="omni", cluster_size=2, clean_strays=True, clean_corners=True)
+        spot_raw = multi_stop_gradient(tone, spot_stops, space="oklab", smooth_blend=0.28, quantize_steps=6, dither="none")
+        spot_cl = pixel_clusters(spot_raw, [c for _, c in spot_stops], direction="omni", cluster_size=2, clean_strays=True, clean_corners=True)
+        rgb = (base_cl[..., :3] * 0.78 + base_raw[..., :3] * 0.22) * (1.0 - patch_m[..., None]) + (spot_cl[..., :3] * 0.78 + spot_raw[..., :3] * 0.22) * patch_m[..., None]
 
     albedo = np.concatenate((np.clip(rgb, 0.0, 1.0), np.ones((H, W, 1), dtype=np.float32)), axis=-1).astype(np.float32)
     return {
@@ -871,8 +904,11 @@ def elemental_golem_surface(
     key_l = np.array([0.32, 0.85, 0.42], dtype=np.float32)
     key_l /= np.linalg.norm(key_l)
     ndotl = np.clip(np.sum(wn * key_l[None, None, :], axis=-1) * 0.5 + 0.5, 0.0, 1.0)
-    tone = np.clip(0.22 + 0.40 * ndotl + 0.30 * (rock_h - 0.40) + 0.24 * ew["wear"] - 0.26 * cav - 0.18 * (1.0 - ao), 0.0, 1.0).astype(np.float32)
-    rock_rgba = multi_stop_gradient(tone, rock_stops, space="oklab", smooth_blend=smooth_blend, quantize_steps=quantize_steps, dither="none")
+    rock_sh = heightmap_shadow(rock_h, light_angle_deg=-135.0, elevation_deg=36.0, max_steps=4, strength=0.70, tileable=False)
+    tone = np.clip(0.20 + 0.38 * ndotl + 0.30 * (rock_h - 0.40) + 0.26 * ew["wear"] - 0.22 * (1.0 - rock_sh) - 0.26 * cav - 0.18 * (1.0 - ao), 0.0, 1.0).astype(np.float32)
+    rock_raw = multi_stop_gradient(tone, rock_stops, space="oklab", smooth_blend=min(0.26, float(smooth_blend)), quantize_steps=quantize_steps, dither="none")
+    rock_cl = pixel_clusters(rock_raw, [c for _, c in rock_stops], direction="omni", cluster_size=2, clean_strays=True, clean_corners=True)
+    rock_rgba = rock_cl * 0.82 + rock_raw * 0.18
 
     # Focused glowing elemental fissures strictly tucked inside deep rock crevices!
     cracks = np.clip((0.105 - f2m1) / 0.105, 0.0, 1.0) * (0.55 + 0.45 * chip_n)

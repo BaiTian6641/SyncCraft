@@ -55,6 +55,23 @@ from .generators_character_materials import (
     stitched_leather,
     woven_battle_cloth,
 )
+from .pixel_composer_ops import (
+    bake_emissive_bounce,
+    chromatic_aberration,
+    color_replace,
+    de_corner,
+    de_stray,
+    heightmap_shadow,
+    level_selector,
+    palette_posterize,
+    pixel_bevel_directional,
+    pixel_clusters,
+    pixel_dither,
+    pixel_mirror,
+    pixel_outline,
+    pixel_sort,
+    vignette,
+)
 from .generators_gradients import (
     body_flow_gradient,
     cosine_gradient,
@@ -202,6 +219,7 @@ _BUS_INPUT_KEYS: dict[str, frozenset[str]] = {
     "material_set_alpha": frozenset({"mat"}),
     "material_pad_islands": frozenset({"mat"}),
     "paint_entity_eyes_and_parts": frozenset({"base"}),
+    "bake_emissive_bounce": frozenset({"mat"}),
 }
 
 
@@ -1132,7 +1150,7 @@ class TexGraph:
 
     def sdf_boolean(self, a: str, b: str, *, op: str = "smooth_union", smoothness: float = 0.04, id: str | None = None) -> str:
         """Boolean combine two 2D SDF fields (ports: sdf, mask, bevel)."""
-        return self.add("sdf_boolean", id=id, inputs={"a": a, "b": b}, op=op, smoothness=smoothness)
+        return self.add("sdf_boolean", id=id, inputs={"a": a, "b": b}, bool_op=op, smoothness=smoothness)
 
     def tile_sampler(
         self,
@@ -1244,6 +1262,52 @@ class TexGraph:
     def paint_entity_eyes_and_parts(self, base: str, *, id: str | None = None, **kw: Any) -> str:
         """Part-aware semantic anatomical landmark compositor (protects eyes, noses, beaks, mouths, teeth, claws, fins, runes)."""
         return self.add("paint_entity_eyes_and_parts", id=id, inputs={"base": base}, **kw)
+
+    # --- TexGraph v9 Pixel Composer Atomic Operators & 3D Baked Emissive Bounce ---
+    def pixel_dither(self, src: str, palette: list[Any], *, pattern: str = "bayer_2x2", contrast: float = 1.0, mode: str = "color", id: str | None = None, **kw: Any) -> str:
+        return self.add("pixel_dither", id=id, inputs={"src": src}, palette=palette, pattern=pattern, contrast=contrast, mode=mode, **kw)
+
+    def palette_posterize(self, src: str, palette: list[Any], *, space: str = "oklab", posterize_alpha: bool = True, id: str | None = None, **kw: Any) -> str:
+        return self.add("palette_posterize", id=id, inputs={"src": src}, palette=palette, space=space, posterize_alpha=posterize_alpha, **kw)
+
+    def color_replace(self, src: str, src_palette: list[Any], dst_palette: list[Any], *, tolerance: float = 0.25, id: str | None = None) -> str:
+        return self.add("color_replace", id=id, inputs={"src": src}, src_palette=src_palette, dst_palette=dst_palette, tolerance=tolerance)
+
+    def level_selector(self, src: str, *, center: float = 0.75, width: float = 0.20, softness: float = 0.05, id: str | None = None) -> str:
+        return self.add("level_selector", id=id, inputs={"src": src}, center=center, width=width, softness=softness)
+
+    def de_stray(self, src: str, *, strictness: str = "medium", tolerance: float = 0.06, iterations: int = 1, id: str | None = None) -> str:
+        return self.add("de_stray", id=id, inputs={"src": src}, strictness=strictness, tolerance=tolerance, iterations=iterations)
+
+    def de_corner(self, src: str, *, strictness: str = "medium", tolerance: float = 0.06, iterations: int = 1, id: str | None = None) -> str:
+        return self.add("de_corner", id=id, inputs={"src": src}, strictness=strictness, tolerance=tolerance, iterations=iterations)
+
+    def pixel_clusters(self, src: str, palette: list[Any], *, direction: str = "isotropic", cluster_size: int = 2, dither_strength: float = 0.0, id: str | None = None, **kw: Any) -> str:
+        return self.add("pixel_clusters", id=id, inputs={"src": src}, palette=palette, direction=direction, cluster_size=cluster_size, dither_strength=dither_strength, **kw)
+
+    def pixel_bevel_directional(self, *, light_angle_deg: float = -135.0, bevel_width: float = 0.11, chip_amount: float = 0.42, id: str | None = None, **kw: Any) -> str:
+        return self.add("pixel_bevel_directional", id=id, light_angle_deg=light_angle_deg, bevel_width=bevel_width, chip_amount=chip_amount, **kw)
+
+    def pixel_outline(self, src: str, *, width: int = 1, position: str = "outside", color: str = "#161224", corner_mode: str = "4way", id: str | None = None, **kw: Any) -> str:
+        return self.add("pixel_outline", id=id, inputs={"src": src}, width=width, position=position, color=color, corner_mode=corner_mode, **kw)
+
+    def heightmap_shadow(self, height: str, *, light_angle_deg: float = -135.0, elevation_deg: float = 34.0, max_steps: int = 8, strength: float = 0.72, id: str | None = None, **kw: Any) -> str:
+        return self.add("heightmap_shadow", id=id, inputs={"height": height}, light_angle_deg=light_angle_deg, elevation_deg=elevation_deg, max_steps=max_steps, strength=strength, **kw)
+
+    def pixel_mirror(self, src: str, *, axis: str = "x", id: str | None = None) -> str:
+        return self.add("pixel_mirror", id=id, inputs={"src": src}, axis=axis)
+
+    def pixel_sort(self, src: str, *, axis: str = "vertical", low_thresh: float = 0.25, high_thresh: float = 0.85, reverse: bool = False, id: str | None = None) -> str:
+        return self.add("pixel_sort", id=id, inputs={"src": src}, axis=axis, low_thresh=low_thresh, high_thresh=high_thresh, reverse=reverse)
+
+    def chromatic_aberration(self, src: str, *, shift_x: int = 1, shift_y: int = 0, strength: float = 0.65, id: str | None = None) -> str:
+        return self.add("chromatic_aberration", id=id, inputs={"src": src}, shift_x=shift_x, shift_y=shift_y, strength=strength)
+
+    def vignette(self, src: str, *, strength: float = 0.35, radius: float = 0.72, color: str = "#120E1D", id: str | None = None) -> str:
+        return self.add("vignette", id=id, inputs={"src": src}, strength=strength, radius=radius, color=color)
+
+    def bake_emissive_bounce(self, mat: str, *, radius_units: float = 7.5, intensity: float = 0.52, posterize_steps: int = 0, id: str | None = None, **kw: Any) -> str:
+        return self.add("bake_emissive_bounce", id=id, inputs={"mat": mat}, radius_units=radius_units, intensity=intensity, posterize_steps=posterize_steps, **kw)
 
     def sculpted_pinion_wing(
         self,
@@ -2248,7 +2312,7 @@ class TexGraph:
             )
 
         if op == "sdf_boolean":
-            return sdf_boolean(ins["a"], ins["b"], op=str(p.get("op", "smooth_union")), smoothness=float(p.get("smoothness", 0.04)))
+            return sdf_boolean(ins["a"], ins["b"], op=str(p.get("bool_op", p.get("op", "smooth_union"))), smoothness=float(p.get("smoothness", 0.04)))
 
         if op == "tile_sampler":
             return tile_sampler(
@@ -2433,6 +2497,146 @@ class TexGraph:
         if op == "paint_entity_eyes_and_parts":
             kw = {k: v for k, v in p.items() if k != "seed"}
             return paint_entity_eyes_and_parts(ins["base"], self.mesh_context, seed=seed, **kw)
+
+        # --- TexGraph v9 Pixel Composer Atomic Operators & 3D Baked Emissive Bounce ---
+        if op == "pixel_dither":
+            return pixel_dither(
+                ins["src"],
+                p.get("palette", ["#1B1726", "#4D5368", "#949FB5", "#E5EEF7"]),
+                pattern=str(p.get("pattern", "bayer_2x2")),
+                contrast=float(p.get("contrast", 1.0)),
+                mode=str(p.get("mode", "color")),
+                invert=bool(p.get("invert", False)),
+                seed=seed,
+            )
+
+        if op == "palette_posterize":
+            return palette_posterize(
+                ins["src"],
+                p.get("palette", ["#1B1726", "#4D5368", "#949FB5", "#E5EEF7"]),
+                space=str(p.get("space", "oklab")),
+                posterize_alpha=bool(p.get("posterize_alpha", True)),
+                alpha_threshold=float(p.get("alpha_threshold", 0.5)),
+                blend=float(p.get("blend", 1.0)),
+            )
+
+        if op == "color_replace":
+            return color_replace(
+                ins["src"],
+                p["src_palette"],
+                p["dst_palette"],
+                tolerance=float(p.get("tolerance", 0.25)),
+            )
+
+        if op == "level_selector":
+            return level_selector(
+                ins["src"],
+                center=float(p.get("center", 0.75)),
+                width=float(p.get("width", 0.20)),
+                softness=float(p.get("softness", 0.05)),
+            )
+
+        if op == "de_stray":
+            return de_stray(
+                ins["src"],
+                strictness=str(p.get("strictness", "medium")),
+                tolerance=float(p.get("tolerance", 0.06)),
+                iterations=int(p.get("iterations", 1)),
+                tileable=bool(p.get("tileable", tile)),
+            )
+
+        if op == "de_corner":
+            return de_corner(
+                ins["src"],
+                strictness=str(p.get("strictness", "medium")),
+                tolerance=float(p.get("tolerance", 0.06)),
+                iterations=int(p.get("iterations", 1)),
+                tileable=bool(p.get("tileable", tile)),
+            )
+
+        if op == "pixel_clusters":
+            return pixel_clusters(
+                ins["src"],
+                p.get("palette", ["#1B1726", "#4D5368", "#949FB5", "#E5EEF7"]),
+                direction=str(p.get("direction", "isotropic")),
+                cluster_size=int(p.get("cluster_size", 2)),
+                dither_strength=float(p.get("dither_strength", 0.0)),
+                clean_strays=bool(p.get("clean_strays", True)),
+                clean_corners=bool(p.get("clean_corners", True)),
+                tileable=bool(p.get("tileable", tile)),
+            )
+
+        if op == "pixel_bevel_directional":
+            mc = self.mesh_context
+            return pixel_bevel_directional(
+                H, W,
+                local_uv=mc.local_uv if mc else None,
+                world_normal=mc.world_normal if mc else None,
+                joint_cavity=mc.joint_cavity if mc else None,
+                light_angle_deg=float(p.get("light_angle_deg", -135.0)),
+                bevel_width=float(p.get("bevel_width", 0.11)),
+                chip_amount=float(p.get("chip_amount", 0.42)),
+                breakup_scale=float(p.get("breakup_scale", 10.0)),
+                seed=seed,
+            )
+
+        if op == "pixel_outline":
+            return pixel_outline(
+                ins["src"],
+                width=int(p.get("width", 1)),
+                position=str(p.get("position", "outside")),
+                color=str(p.get("color", "#161224")),
+                corner_mode=str(p.get("corner_mode", "4way")),
+                alpha_threshold=float(p.get("alpha_threshold", 0.5)),
+            )
+
+        if op == "heightmap_shadow":
+            return heightmap_shadow(
+                ins["height"],
+                light_angle_deg=float(p.get("light_angle_deg", -135.0)),
+                elevation_deg=float(p.get("elevation_deg", 34.0)),
+                max_steps=int(p.get("max_steps", 8)),
+                strength=float(p.get("strength", 0.72)),
+                tileable=bool(p.get("tileable", tile)),
+            )
+
+        if op == "pixel_mirror":
+            return pixel_mirror(ins["src"], axis=str(p.get("axis", "x")))
+
+        if op == "pixel_sort":
+            return pixel_sort(
+                ins["src"],
+                axis=str(p.get("axis", "vertical")),
+                low_thresh=float(p.get("low_thresh", 0.25)),
+                high_thresh=float(p.get("high_thresh", 0.85)),
+                reverse=bool(p.get("reverse", False)),
+            )
+
+        if op == "chromatic_aberration":
+            return chromatic_aberration(
+                ins["src"],
+                shift_x=int(p.get("shift_x", 1)),
+                shift_y=int(p.get("shift_y", 0)),
+                strength=float(p.get("strength", 0.65)),
+            )
+
+        if op == "vignette":
+            return vignette(
+                ins["src"],
+                strength=float(p.get("strength", 0.35)),
+                radius=float(p.get("radius", 0.72)),
+                color=str(p.get("color", "#120E1D")),
+            )
+
+        if op == "bake_emissive_bounce":
+            return bake_emissive_bounce(
+                ins["mat"],
+                self.mesh_context,
+                radius_units=float(p.get("radius_units", 7.5)),
+                intensity=float(p.get("intensity", 0.52)),
+                max_emitters=int(p.get("max_emitters", 96)),
+                posterize_steps=int(p.get("posterize_steps", 0)),
+            )
 
         raise ValueError(f"Unsupported TexGraph op: {op!r}")
 

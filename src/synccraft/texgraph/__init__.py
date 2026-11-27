@@ -48,6 +48,23 @@ from .generators_character_materials import (
     stitched_leather,
     woven_battle_cloth,
 )
+from .pixel_composer_ops import (
+    bake_emissive_bounce,
+    chromatic_aberration,
+    color_replace,
+    de_corner,
+    de_stray,
+    heightmap_shadow,
+    level_selector,
+    palette_posterize,
+    pixel_bevel_directional,
+    pixel_clusters,
+    pixel_dither,
+    pixel_mirror,
+    pixel_outline,
+    pixel_sort,
+    vignette,
+)
 from .texdsl import TexDslError, export_texdsl, load_texdsl, parse_texdsl
 from .production import PALETTE_BANK, BatchJobResult, BatchTextureJob, pack_sprite_atlas, run_batch
 from .quality import QualityReport, evaluate_texture_quality

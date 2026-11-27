@@ -42,6 +42,14 @@ from .generators_painterly import directional_brushstrokes, gradient_eye_paint
 from .pbr import height_to_normal_map
 from .pipeline import MATERIAL_BUS_PORTS, _ensure_bus, material_make
 from .pixel_art_ops import hex_to_srgb, paint_creature_eye
+from .pixel_composer_ops import (
+    de_corner,
+    de_stray,
+    heightmap_shadow,
+    palette_posterize,
+    pixel_bevel_directional,
+    pixel_clusters,
+)
 
 
 def _normalize_stops(stops: Sequence[Any]) -> tuple[tuple[float, str], ...]:
@@ -105,15 +113,15 @@ def orc_flesh_skin(
     edge_bevel: np.ndarray | None = None,
     local_uv: np.ndarray | None = None,
     stops: Sequence[Any] = (
-        (0.00, "#172A26"),  # cool deep teal-slate crevice shadow
-        (0.22, "#244834"),  # cool forest shadow
-        (0.48, "#3F743C"),  # rich BearSpirit08 emerald-olive midtone
-        (0.74, "#6D9C46"),  # warm sunlit moss plane
-        (0.90, "#A7C459"),  # warm yellow-green forehead/brow/knuckle peak
-        (1.00, "#D4DF86"),  # crisp warm chartreuse rim catchlight
+        (0.00, "#1D2A24"),  # Everbloom Troll / BearSpirit08 deep cool sage-teal shadow
+        (0.24, "#314835"),  # earthy forest shadow
+        (0.50, "#4F6E43"),  # calm studio sage-olive midtone (NEVER neon candy lime!)
+        (0.75, "#749257"),  # warm sunlit moss plane
+        (0.90, "#9DB872"),  # warm yellow-olive forehead/brow/knuckle peak
+        (1.00, "#C7D896"),  # crisp warm highlight cluster
     ),
-    subsurface_color: str = "#9C4B3B",
-    subsurface_strength: float = 0.24,
+    subsurface_color: str = "#8E4B3E",
+    subsurface_strength: float = 0.22,
     scar_amount: float = 0.28,
     scar_color: str = "#C7B299",
     warpaint_color: str | None = None,
@@ -121,16 +129,16 @@ def orc_flesh_skin(
     muscle_contrast: float = 0.36,
     roughness_base: float = 0.62,
     sss_base: float = 0.38,
-    smooth_blend: float = 0.62,
-    quantize_steps: int = 7,
+    smooth_blend: float = 0.22,
+    quantize_steps: int = 6,
     seed: int = 42,
 ) -> dict[str, np.ndarray]:
-    """Studio Hue-Shifted Orc / Goblin / Monster Skin MaterialBus.
+    """Studio Hue-Shifted Orc / Goblin / Troll Skin MaterialBus (Everbloom / BearSpirit08 discipline).
 
-    Follows the BearSpirit08 / Voxel Spawns / ArtsByKev color discipline:
-    - Cool blue-teal deep shadows -> rich emerald/olive midtones -> warm yellow-green highlights
-    - Subtle warm reddish-brown subcutaneous blush over knuckles, brow ridges, nose bridge & cheeks
-    - Clean painterly muscle planes with subtle healed pale battle scars & optional tribal war paint!
+    - Calm, earthy sage-olive hue-shifted palette (zero neon-lime airbrush!)
+    - Crisp 2-4 px organized muscle-plane pixel clusters (`pixel_clusters` + `de_stray` + `de_corner`)
+    - Anti-wireframe directional top-left warm catchlight & cool underside occlusion
+    - Subtle warm reddish-brown subcutaneous blush, pale battle scars & optional tribal war paint!
     """
     H, W = int(height), int(width)
     wpn, wn, ao, cav, bev, luv = _mesh_or_fallback(
@@ -144,29 +152,35 @@ def orc_flesh_skin(
     )
     res_mult = max(1.0, math.sqrt((H * W) / 4096.0))
     pal = _normalize_stops(stops)
+    pal_hex = [c for _, c in pal]
 
-    # 3D rest-space smooth muscle planes + subtle painterly grain (zero TV-static grit!)
-    macro_3d = noise_3d_field(wpn, scale=4.2, octaves=3, mode="fbm", seed=seed)
-    muscle_ridge = 1.0 - np.abs(noise_3d_field(wpn, scale=7.5, octaves=2, mode="fbm", seed=seed + 19) * 2.0 - 1.0)
+    # 3D rest-space broad muscle clusters + gentle directional skin texture (calm 65% base!)
+    macro_3d = noise_3d_field(wpn, scale=4.0, octaves=3, mode="fbm", seed=seed)
+    muscle_ridge = 1.0 - np.abs(noise_3d_field(wpn, scale=7.2, octaves=2, mode="fbm", seed=seed + 19) * 2.0 - 1.0)
     brush = directional_brushstrokes(
         H, W,
-        angle_deg=-18.0,
-        scale_along=3.5 * res_mult,
-        scale_across=14.0 * res_mult,
+        angle_deg=-14.0,
+        scale_along=3.2 * res_mult,
+        scale_across=12.0 * res_mult,
         contrast=0.18,
         seed=seed + 37,
         tileable=False,
     )
+    dir_bev = pixel_bevel_directional(
+        H, W, local_uv=luv, world_normal=wn, joint_cavity=cav,
+        light_angle_deg=-135.0, bevel_width=0.10, chip_amount=0.35, breakup_scale=9.0, seed=seed + 7,
+    )
 
-    # Top-front directional plane shading + local-island vertical lift
-    top_light = np.clip(wn[..., 1] * 0.50 + wn[..., 2] * 0.24 + 0.56, 0.0, 1.0)
+    # Top-front directional form planes + crisp directional edge accents (never 4-sided box frames!)
+    top_light = np.clip(wn[..., 1] * 0.48 + wn[..., 2] * 0.24 + 0.54, 0.0, 1.0)
     isl_v = 1.0 - luv[..., 1]
     h_map = np.clip(
-        0.46
-        + 0.20 * (macro_3d - 0.5)
+        0.48
+        + 0.18 * (macro_3d - 0.5)
         + 0.16 * float(muscle_contrast) * (muscle_ridge - 0.5)
-        + 0.12 * (brush - 0.5)
-        + 0.12 * bev
+        + 0.10 * (brush - 0.5)
+        + 0.12 * dir_bev["highlight"]
+        - 0.14 * dir_bev["shadow"]
         - 0.24 * cav,
         0.05,
         0.98,
@@ -174,17 +188,19 @@ def orc_flesh_skin(
 
     tone = np.clip(
         0.16
-        + 0.36 * top_light
+        + 0.34 * top_light
         + 0.14 * isl_v
-        + 0.22 * (h_map - 0.45)
-        + 0.16 * (ao - 0.65)
-        + 0.10 * bev
-        - 0.22 * cav,
+        + 0.24 * (h_map - 0.46)
+        + 0.18 * (ao - 0.65)
+        + 0.14 * dir_bev["highlight"]
+        - 0.16 * dir_bev["shadow"]
+        - 0.24 * cav,
         0.0,
         1.0,
     ).astype(np.float32)
 
-    alb = multi_stop_gradient(
+    # Crisp palette-locked painterly clusters (breaks smooth airbrush into studio hand-placed pixel islands!)
+    raw_alb = multi_stop_gradient(
         tone,
         pal,
         space="oklab",
@@ -193,46 +209,56 @@ def orc_flesh_skin(
         dither="none",
         dither_strength=0.0,
     )
-    rgb = alb[..., :3].copy()
+    clustered = pixel_clusters(
+        raw_alb,
+        pal_hex,
+        direction="isotropic",
+        cluster_size=2,
+        dither_strength=0.0,
+        clean_strays=True,
+        clean_corners=True,
+    )
+    # Blend 80% crisp pixel clusters + 20% smooth bridge (exact Hytale / Everbloom sweet spot!)
+    rgb = (clustered[..., :3] * 0.80 + raw_alb[..., :3] * 0.20).astype(np.float32)
 
     # Subcutaneous warm blush along exposed convex ridges (brow, nose bridge, cheekbones, knuckles!)
     sss_n = noise_3d_field(wpn, scale=5.5, octaves=2, mode="fbm", seed=seed + 61)
     sss_m = np.clip(
-        (0.55 * bev + 0.45 * np.clip(wn[..., 2] * 0.5 + 0.5, 0.0, 1.0)) * np.clip((sss_n - 0.36) * 2.2, 0.0, 1.0) * ao,
+        (0.55 * dir_bev["highlight"] + 0.45 * np.clip(wn[..., 2] * 0.5 + 0.5, 0.0, 1.0))
+        * np.clip((sss_n - 0.40) * 2.4, 0.0, 1.0)
+        * ao,
         0.0,
         1.0,
     ).astype(np.float32)
-    s_w = sss_m * float(np.clip(subsurface_strength, 0.0, 0.65))
+    s_w = sss_m * float(np.clip(subsurface_strength, 0.0, 0.55))
     c_sub = np.array(hex_to_srgb(subsurface_color), dtype=np.float32)[None, None, :]
     rgb = rgb * (1.0 - s_w[..., None]) + c_sub * s_w[..., None]
 
-    # Healed diagonal battle scars (thin recessed groove + pale healed ridge + subtle reddish margin)
+    # Healed diagonal battle scars (crisp 1-2 px slash snapped onto pixel grid!)
     scar_m = np.zeros((H, W), dtype=np.float32)
     sc_amt = float(np.clip(scar_amount, 0.0, 1.0))
     if sc_amt > 0.02:
-        # 3D projected diagonal slash field (rare, deliberate scars rather than noisy web)
         slash_coord = wpn[..., 0] * 3.8 + wpn[..., 1] * 2.9 - wpn[..., 2] * 2.2
-        slash_wave = np.abs(np.sin(slash_coord * math.pi * 1.35 + macro_3d * 1.4))
+        slash_wave = np.abs(np.sin(slash_coord * math.pi * 1.35 + macro_3d * 1.2))
         scar_patch = noise_3d_field(wpn, scale=2.6, octaves=2, mode="fbm", seed=seed + 83)
-        scar_thresh = 0.045 + 0.045 * sc_amt
-        scar_gate = np.clip((scar_patch - (0.68 - 0.22 * sc_amt)) * 5.0, 0.0, 1.0)
-        scar_core = np.clip(1.0 - slash_wave / scar_thresh, 0.0, 1.0) * scar_gate * (1.0 - cav * 0.8)
-        scar_m = np.clip(scar_core, 0.0, 1.0).astype(np.float32)
+        scar_thresh = 0.042 + 0.040 * sc_amt
+        scar_gate = (scar_patch > (0.68 - 0.20 * sc_amt)).astype(np.float32)
+        scar_m = ((slash_wave < scar_thresh).astype(np.float32) * scar_gate * (1.0 - cav * 0.8)).astype(np.float32)
         c_scar = np.array(hex_to_srgb(scar_color), dtype=np.float32)[None, None, :]
-        rgb = rgb * (1.0 - scar_m[..., None] * 0.68) + c_scar * (scar_m[..., None] * 0.68)
+        rgb = rgb * (1.0 - scar_m[..., None] * 0.65) + c_scar * (scar_m[..., None] * 0.65)
         h_map = np.clip(h_map - scar_m * 0.16, 0.04, 0.98).astype(np.float32)
 
-    # Optional bold tribal war paint (asymmetric brushed bands across brow/cheeks/shoulders!)
+    # Optional crisp tribal war paint (hard-edged brushed cluster bands across brow/cheeks/shoulders!)
     wp_amt = float(np.clip(warpaint_amount, 0.0, 1.0))
     if warpaint_color and wp_amt > 0.02:
-        wp_band = np.sin((wpn[..., 1] * 14.0 + wpn[..., 0] * 5.5 + (macro_3d - 0.5) * 1.8) * math.pi)
-        wp_zone = np.clip((wpn[..., 1] - 0.52) * 3.5, 0.0, 1.0) * np.clip((wpn[..., 2] - 0.35) * 2.8, 0.0, 1.0)
-        wp_edge = np.clip((wp_band - (0.72 - 0.30 * wp_amt)) * 4.5, 0.0, 1.0) * wp_zone
+        wp_band = np.sin((wpn[..., 1] * 14.0 + wpn[..., 0] * 5.5 + (macro_3d - 0.5) * 1.6) * math.pi)
+        wp_zone = ((wpn[..., 1] > 0.55) & (wpn[..., 2] > 0.42)).astype(np.float32)
+        wp_edge = ((wp_band > (0.76 - 0.26 * wp_amt)).astype(np.float32)) * wp_zone
         c_wp = np.array(hex_to_srgb(warpaint_color), dtype=np.float32)[None, None, :]
         rgb = rgb * (1.0 - wp_edge[..., None] * 0.78) + c_wp * (wp_edge[..., None] * 0.78)
 
     albedo = np.concatenate((np.clip(rgb, 0.0, 1.0), np.ones((H, W, 1), dtype=np.float32)), axis=-1).astype(np.float32)
-    rough = np.clip(float(roughness_base) + 0.10 * cav - 0.10 * bev - 0.08 * scar_m, 0.38, 0.86).astype(np.float32)
+    rough = np.clip(float(roughness_base) + 0.10 * cav - 0.08 * dir_bev["highlight"] - 0.08 * scar_m, 0.40, 0.86).astype(np.float32)
     sss = np.clip(float(sss_base) * (0.65 + 0.55 * sss_m) * ao, 0.05, 0.85).astype(np.float32)
     out = material_make(
         albedo,
@@ -250,7 +276,7 @@ def orc_flesh_skin(
 
 
 # ---------------------------------------------------------------------------
-# 2. Stitched Leather & Harness Straps (MATERIAL Bus)
+# 2. Stitched Leather & Harness Straps (MATERIAL Bus — Anti-Boxy Directional Craft!)
 # ---------------------------------------------------------------------------
 
 
@@ -267,23 +293,22 @@ def stitched_leather(
     stops: Sequence[Any] = (
         (0.00, "#241614"),  # deep cool umber crease
         (0.28, "#4A2C1E"),  # rich dark saddle shadow
-        (0.58, "#74482D"),  # warm chestnut leather body
-        (0.84, "#9E6E47"),  # worn tan outer rim
-        (1.00, "#C79C6F"),  # warm burnished bevel highlight
+        (0.58, "#72472C"),  # warm chestnut leather body
+        (0.84, "#9C6D47"),  # worn tan outer catchlight
+        (1.00, "#C4996E"),  # subtle burnished bevel
     ),
-    stitch_color: str = "#DEC79E",
+    stitch_color: str = "#D9C198",
     stitch_density: float = 1.0,
     wear: float = 0.32,
     roughness_base: float = 0.64,
-    smooth_blend: float = 0.55,
-    quantize_steps: int = 6,
+    smooth_blend: float = 0.22,
+    quantize_steps: int = 5,
     seed: int = 107,
 ) -> dict[str, np.ndarray]:
-    """Studio Stitched Leather MaterialBus (BearSpirit08 / Voxel Spawns discipline).
+    """Studio Stitched Leather MaterialBus (BearSpirit08 / Voxel Spawns / Everbloom discipline).
 
-    Deliberately lower specular contrast than steel, concentric stepped rim bevels
-    (slightly darker recessed center panel, warmer burnished edges), subtle pebbled hide
-    grain, and crisp perimeter stitch dots along local face edges!
+    Anti-wireframe directional top-left tan bevel + bottom-right umber shadow, calm 2-4 px leather
+    clusters, crisp local-UV stitch dashes & worn creases — ZERO robotic 4-sided box frames!
     """
     H, W = int(height), int(width)
     wpn, wn, ao, cav, bev, luv = _mesh_or_fallback(
@@ -297,80 +322,68 @@ def stitched_leather(
     )
     res_mult = max(1.0, math.sqrt((H * W) / 4096.0))
     pal = _normalize_stops(stops)
+    pal_hex = [c for _, c in pal]
 
-    # Subtle pebbled leather grain + worn fold creases
-    grain = fbm_noise(H, W, scale=14.0 * res_mult, octaves=3, seed=seed, tileable=False)
-    creases = 1.0 - np.abs(fbm_noise(H, W, scale=5.5 * res_mult, octaves=2, seed=seed + 23, tileable=False) * 2.0 - 1.0)
-    crease_dip = np.power(creases, 3.0) * float(np.clip(wear, 0.0, 1.0))
+    grain = fbm_noise(H, W, scale=11.0 * res_mult, octaves=2, seed=seed, tileable=False)
+    creases = 1.0 - np.abs(fbm_noise(H, W, scale=5.0 * res_mult, octaves=2, seed=seed + 23, tileable=False) * 2.0 - 1.0)
+    crease_dip = np.power(creases, 3.2) * float(np.clip(wear, 0.0, 1.0))
 
-    # Concentric stepped rim shading on each strap/panel face (darker recessed interior -> warm outer edge!)
+    dir_bev = pixel_bevel_directional(
+        H, W, local_uv=luv, world_normal=wn, joint_cavity=cav,
+        light_angle_deg=-135.0, bevel_width=0.11, chip_amount=0.36, breakup_scale=9.5, seed=seed + 11,
+    )
+
     lu, lv = luv[..., 0], luv[..., 1]
-    d_edge = np.minimum(np.minimum(lu, 1.0 - lu), np.minimum(lv, 1.0 - lv))
-    outer_trim = np.clip(1.0 - d_edge / 0.14, 0.0, 1.0)
-    recess_groove = np.exp(-((d_edge - 0.16) / 0.045) ** 2)
-
-    # Crisp 1 px perimeter stitch dots running inside the recess groove
     sd = float(np.clip(stitch_density, 0.0, 2.0))
     stitch_m = np.zeros((H, W), dtype=np.float32)
     if sd > 0.05:
-        freq_s = 7.0 * sd
-        on_h = (np.abs(lv - 0.15) < 0.045) | (np.abs(lv - 0.85) < 0.045)
-        on_v = (np.abs(lu - 0.15) < 0.045) | (np.abs(lu - 0.85) < 0.045)
-        dash_h = (np.sin(lu * freq_s * 2.0 * math.pi) > 0.35) & (lu > 0.12) & (lu < 0.88)
-        dash_v = (np.sin(lv * freq_s * 2.0 * math.pi) > 0.35) & (lv > 0.12) & (lv < 0.88)
-        stitch_m = ((on_h & dash_h) | (on_v & dash_v)).astype(np.float32) * np.clip(1.0 - cav * 1.1, 0.0, 1.0)
+        freq_s = 6.5 * sd
+        on_h = (np.abs(lv - 0.16) < 0.042) | (np.abs(lv - 0.84) < 0.042)
+        dash_h = (np.sin(lu * freq_s * 2.0 * math.pi) > 0.42) & (lu > 0.14) & (lu < 0.86)
+        stitch_m = (on_h & dash_h).astype(np.float32) * np.clip(1.0 - cav * 1.1, 0.0, 1.0)
 
-    top_light = np.clip(wn[..., 1] * 0.42 + wn[..., 2] * 0.22 + 0.56, 0.0, 1.0)
+    top_light = np.clip(wn[..., 1] * 0.40 + wn[..., 2] * 0.22 + 0.56, 0.0, 1.0)
     h_map = np.clip(
         0.52
         + 0.10 * (grain - 0.5)
-        + 0.16 * outer_trim
-        - 0.18 * recess_groove
+        + 0.14 * dir_bev["highlight"]
+        - 0.16 * dir_bev["shadow"]
         - 0.14 * crease_dip
-        + 0.16 * stitch_m
+        + 0.15 * stitch_m
         - 0.22 * cav,
         0.06,
         0.96,
     ).astype(np.float32)
 
-    # Kept intentionally narrower value swing than metal so leather reads warm & satin, not metallic!
     tone = np.clip(
-        0.22
+        0.24
         + 0.28 * top_light
-        + 0.16 * outer_trim
-        + 0.12 * (grain - 0.5)
+        + 0.16 * dir_bev["highlight"]
+        - 0.18 * dir_bev["shadow"]
+        + 0.10 * (grain - 0.5)
         + 0.16 * (ao - 0.65)
-        + 0.10 * float(wear) * bev
-        - 0.14 * recess_groove
         - 0.16 * crease_dip
         - 0.20 * cav,
         0.0,
-        0.95,
+        0.94,
     ).astype(np.float32)
 
-    alb = multi_stop_gradient(
-        tone,
-        pal,
-        space="oklab",
-        smooth_blend=float(smooth_blend),
-        quantize_steps=int(quantize_steps),
-        dither="none",
-        dither_strength=0.0,
-    )
-    rgb = alb[..., :3].copy()
+    raw_alb = multi_stop_gradient(tone, pal, space="oklab", smooth_blend=float(smooth_blend), quantize_steps=int(quantize_steps))
+    cl = pixel_clusters(raw_alb, pal_hex, direction="horizontal", cluster_size=2, clean_strays=True, clean_corners=True)
+    rgb = (cl[..., :3] * 0.82 + raw_alb[..., :3] * 0.18).astype(np.float32)
     if sd > 0.05:
         c_st = np.array(hex_to_srgb(stitch_color), dtype=np.float32)[None, None, :]
-        rgb = rgb * (1.0 - stitch_m[..., None] * 0.78) + c_st * (stitch_m[..., None] * 0.78)
+        rgb = rgb * (1.0 - stitch_m[..., None] * 0.72) + c_st * (stitch_m[..., None] * 0.72)
 
     albedo = np.concatenate((np.clip(rgb, 0.0, 1.0), np.ones((H, W, 1), dtype=np.float32)), axis=-1).astype(np.float32)
-    rough = np.clip(float(roughness_base) - 0.10 * outer_trim + 0.12 * crease_dip + 0.10 * cav, 0.42, 0.88).astype(np.float32)
+    rough = np.clip(float(roughness_base) - 0.08 * dir_bev["highlight"] + 0.12 * crease_dip + 0.10 * cav, 0.44, 0.88).astype(np.float32)
     out = material_make(
         albedo,
         height=h_map,
-        normal=height_to_normal_map(h_map, strength=2.3, tileable=False),
+        normal=height_to_normal_map(h_map, strength=2.2, tileable=False),
         roughness=rough,
         metallic=0.0,
-        ao=np.clip(ao * (1.0 - 0.22 * recess_groove - 0.24 * cav), 0.14, 1.0),
+        ao=np.clip(ao * (1.0 - 0.24 * cav - 0.14 * dir_bev["shadow"]), 0.14, 1.0),
         porosity=0.35,
     )
     out["stitch_mask"] = stitch_m
@@ -378,7 +391,7 @@ def stitched_leather(
 
 
 # ---------------------------------------------------------------------------
-# 3. Forged Battle Metal & Chipped Steel Armor (MATERIAL Bus)
+# 3. Forged Battle Metal & Chipped Steel Armor (Wackyblocks / Hytale Standard!)
 # ---------------------------------------------------------------------------
 
 
@@ -393,27 +406,29 @@ def forged_battle_metal(
     edge_bevel: np.ndarray | None = None,
     local_uv: np.ndarray | None = None,
     stops: Sequence[Any] = (
-        (0.00, "#1B1726"),  # TugkanDeMan cool charcoal-indigo shadow
-        (0.24, "#313344"),  # dark forged iron base
-        (0.52, "#51576A"),  # slate steel midtone
-        (0.78, "#8A95AA"),  # bright brushed specular band
-        (0.93, "#C6D3E3"),  # razor 1 px edge bevel catchlight
-        (1.00, "#F0F6FD"),  # peak steel glint
+        (0.00, "#1D1B2A"),  # Wackyblocks / TugkanDeMan cool charcoal-indigo shadow (#393d4b family)
+        (0.24, "#333748"),  # dark forged slate base
+        (0.52, "#51586B"),  # calm studio steel body (65% plate interior!)
+        (0.78, "#838FA4"),  # brushed diagonal specular band
+        (0.93, "#C2D1DE"),  # razor broken 1 px top-left bevel (#c7d6d5 Wackyblocks catchlight!)
+        (1.00, "#ECF3FA"),  # pinpoint corner glint
     ),
     scratches: float = 0.45,
     rivets: float = 0.50,
     rust: float = 0.18,
-    rust_color: str = "#7A361E",
+    rust_color: str = "#8C4222",
     roughness_base: float = 0.26,
     metallic_base: float = 0.88,
-    smooth_blend: float = 0.56,
-    quantize_steps: int = 7,
+    smooth_blend: float = 0.20,
+    quantize_steps: int = 6,
     seed: int = 211,
 ) -> dict[str, np.ndarray]:
-    """Studio Forged Iron / Steel Battle Armor MaterialBus (TugkanDeMan / Voxel Spawns standard).
+    """Studio Forged Steel & Battle Armor MaterialBus (Wackyblocks / Hytale / TugkanDeMan standard!).
 
-    Wide specular contrast jumps, cool charcoal-indigo crevices, razor-crisp 1 px metallic edge
-    bevels, hammered anvil dimples, diagonal blade scratches, corner rivets & optional cavity rust!
+    - **ZERO uniform 4-sided box outlines!** Uses `pixel_bevel_directional` for asymmetrically
+      broken 1 px top-left catchlights, cool dark bottom-right cast shadows & chipped battle notches!
+    - Calm 65%+ brushed slate plate interiors (`pixel_clusters` diagonal streaks) punctuated by
+      deliberate diagonal scratches, crisp rivets & cavity rust!
     """
     H, W = int(height), int(width)
     wpn, wn, ao, cav, bev, luv = _mesh_or_fallback(
@@ -427,113 +442,117 @@ def forged_battle_metal(
     )
     res_mult = max(1.0, math.sqrt((H * W) / 4096.0))
     pal = _normalize_stops(stops)
+    pal_hex = [c for _, c in pal]
 
-    # Hammered forged iron facets + brushed diagonal sheen
-    hammer = voronoi_noise(H, W, scale=9.0 * res_mult, jitter=0.72, output="f1", seed=seed, tileable=False)
+    hammer = voronoi_noise(H, W, scale=7.5 * res_mult, jitter=0.68, output="f1", seed=seed, tileable=False)
     brush = directional_brushstrokes(
         H, W,
-        angle_deg=26.0,
-        scale_along=3.0 * res_mult,
-        scale_across=16.0 * res_mult,
-        contrast=0.26,
+        angle_deg=32.0,
+        scale_along=2.8 * res_mult,
+        scale_across=14.0 * res_mult,
+        contrast=0.22,
         seed=seed + 17,
         tileable=False,
     )
 
-    # Sharp metallic diagonal reflection band across faces + 1 px bright outer bevel + 1 px inner shadow line
-    lu, lv = luv[..., 0], luv[..., 1]
-    d_edge = np.minimum(np.minimum(lu, 1.0 - lu), np.minimum(lv, 1.0 - lv))
-    edge_catch = np.clip(1.0 - d_edge / 0.11, 0.0, 1.0) * (1.0 - cav * 0.85)
-    inner_trim = np.exp(-((d_edge - 0.14) / 0.035) ** 2)
-    diag_band = np.exp(-(((lu * 0.72 + lv * 0.68) - 0.56) / 0.18) ** 2)
+    # Anti-wireframe directional chipped metallic edge bevels (Wackyblocks / Hytale Firesteel craft!)
+    dir_bev = pixel_bevel_directional(
+        H, W, local_uv=luv, world_normal=wn, joint_cavity=cav,
+        light_angle_deg=-135.0, bevel_width=0.10, chip_amount=0.46, breakup_scale=11.0, seed=seed + 5,
+    )
 
-    # Diagonal battle scratches (high-contrast bright gleam beside narrow dark gouge)
+    lu, lv = luv[..., 0], luv[..., 1]
+    # Clean bold diagonal brushed steel highlight band (like Hytale Chest metal straps!)
+    diag_band = np.exp(-(((lu * 0.70 + lv * 0.70) - 0.52) / 0.16) ** 2)
+
+    # Crisp diagonal battle scratches (bright glint beside narrow dark gouge)
     sc_amt = float(np.clip(scratches, 0.0, 1.0))
     scratch_hi = np.zeros((H, W), dtype=np.float32)
     scratch_lo = np.zeros((H, W), dtype=np.float32)
     if sc_amt > 0.02:
-        s_n = fbm_noise(H, W, scale=7.0 * res_mult, octaves=2, seed=seed + 43, tileable=False)
-        diag_s = np.sin((wpn[..., 0] * 18.0 - wpn[..., 1] * 14.0 + wpn[..., 2] * 9.0 + s_n * 2.5) * math.pi)
-        gate = (s_n > (0.64 - 0.20 * sc_amt)).astype(np.float32)
-        scratch_hi = (diag_s > (0.94 - 0.06 * sc_amt)).astype(np.float32) * gate
-        scratch_lo = (diag_s < -(0.94 - 0.06 * sc_amt)).astype(np.float32) * gate
+        s_n = fbm_noise(H, W, scale=6.5 * res_mult, octaves=2, seed=seed + 43, tileable=False)
+        diag_s = np.sin((wpn[..., 0] * 16.0 - wpn[..., 1] * 13.0 + wpn[..., 2] * 9.0 + s_n * 2.2) * math.pi)
+        gate = (s_n > (0.68 - 0.18 * sc_amt)).astype(np.float32)
+        scratch_hi = (diag_s > (0.95 - 0.04 * sc_amt)).astype(np.float32) * gate
+        scratch_lo = (diag_s < -(0.95 - 0.04 * sc_amt)).astype(np.float32) * gate
 
-    # Corner forged rivets near (0.16, 0.16), (0.84, 0.16), (0.16, 0.84), (0.84, 0.84)
+    # Subtle recessed rivets near corners (only where not buried in cavities)
     riv_amt = float(np.clip(rivets, 0.0, 1.0))
     riv_hi = np.zeros((H, W), dtype=np.float32)
     riv_ring = np.zeros((H, W), dtype=np.float32)
     if riv_amt > 0.05:
-        for cx, cy in ((0.16, 0.16), (0.84, 0.16), (0.16, 0.84), (0.84, 0.84)):
+        for cx, cy in ((0.18, 0.18), (0.82, 0.18), (0.18, 0.82), (0.82, 0.82)):
             dr = np.sqrt((lu - cx) ** 2 + (lv - cy) ** 2)
-            riv_hi = np.maximum(riv_hi, np.clip(1.0 - dr / 0.045, 0.0, 1.0))
-            riv_ring = np.maximum(riv_ring, np.exp(-((dr - 0.060) / 0.022) ** 2))
+            riv_hi = np.maximum(riv_hi, (dr < 0.042).astype(np.float32))
+            riv_ring = np.maximum(riv_ring, ((dr >= 0.042) & (dr < 0.072)).astype(np.float32))
         riv_hi *= riv_amt * (1.0 - cav)
-        riv_ring *= riv_amt
+        riv_ring *= riv_amt * (1.0 - cav)
 
-    top_light = np.clip(wn[..., 1] * 0.48 + wn[..., 2] * 0.28 + 0.50, 0.0, 1.0)
+    top_light = np.clip(wn[..., 1] * 0.44 + wn[..., 2] * 0.24 + 0.50, 0.0, 1.0)
     h_map = np.clip(
         0.54
-        - 0.12 * hammer
-        + 0.10 * (brush - 0.5)
-        + 0.20 * edge_catch
-        - 0.14 * inner_trim
+        - 0.09 * hammer
+        + 0.09 * (brush - 0.5)
+        + 0.22 * dir_bev["highlight"]
+        - 0.22 * dir_bev["shadow"]
+        - 0.24 * dir_bev["chips"]
         - 0.20 * scratch_lo
         + 0.18 * riv_hi
-        - 0.12 * riv_ring
+        - 0.14 * riv_ring
         - 0.24 * cav,
         0.04,
         0.98,
     ).astype(np.float32)
 
     tone = np.clip(
-        0.10
-        + 0.34 * top_light
-        + 0.24 * diag_band * ao
-        + 0.28 * edge_catch
-        + 0.16 * bev
-        + 0.12 * (brush - 0.5)
-        - 0.14 * hammer
-        - 0.14 * inner_trim
-        + 0.28 * scratch_hi
-        - 0.26 * scratch_lo
-        + 0.26 * riv_hi
-        - 0.22 * riv_ring
+        0.16
+        + 0.30 * top_light
+        + 0.22 * diag_band * ao
+        + 0.34 * dir_bev["highlight"]
+        - 0.26 * dir_bev["shadow"]
+        - 0.30 * dir_bev["chips"]
+        + 0.10 * (brush - 0.5)
+        - 0.10 * hammer
+        + 0.26 * scratch_hi
+        - 0.24 * scratch_lo
+        + 0.22 * riv_hi
+        - 0.20 * riv_ring
         - 0.28 * cav,
         0.0,
         1.0,
     ).astype(np.float32)
 
-    alb = multi_stop_gradient(
-        tone,
-        pal,
-        space="oklab",
-        smooth_blend=float(smooth_blend),
-        quantize_steps=int(quantize_steps),
-        dither="none",
-        dither_strength=0.0,
-    )
-    rgb = alb[..., :3].copy()
+    raw_alb = multi_stop_gradient(tone, pal, space="oklab", smooth_blend=float(smooth_blend), quantize_steps=int(quantize_steps))
+    cl = pixel_clusters(raw_alb, pal_hex, direction="diag_pos", cluster_size=2, clean_strays=True, clean_corners=True)
+    # Keep razor 1 px directional bevel catchlights & rivets crisp ON TOP of calm clustered steel plates!
+    rgb = (cl[..., :3] * 0.84 + raw_alb[..., :3] * 0.16).astype(np.float32)
+    c_hi = np.array(hex_to_srgb(pal_hex[-2]), dtype=np.float32)[None, None, :]
+    c_sh = np.array(hex_to_srgb(pal_hex[0]), dtype=np.float32)[None, None, :]
+    hi_px = (dir_bev["highlight"] > 0.52).astype(np.float32)[..., None]
+    chip_px = (dir_bev["chips"] > 0.25).astype(np.float32)[..., None]
+    rgb = rgb * (1.0 - hi_px * 0.75) + c_hi * (hi_px * 0.75)
+    rgb = rgb * (1.0 - chip_px * 0.80) + c_sh * (chip_px * 0.80)
 
-    # Optional oxidized rust tucked into cavities & recessed bevels
+    # Optional oxidized rust tucked into cavities & chipped notches (Wackyblocks rust accent!)
     rust_m = np.zeros((H, W), dtype=np.float32)
     r_amt = float(np.clip(rust, 0.0, 1.0))
     if r_amt > 0.02:
-        r_n = noise_3d_field(wpn, scale=7.0, octaves=3, mode="fbm", seed=seed + 79)
-        rust_m = np.clip((0.55 * cav + 0.30 * inner_trim + 0.35 * (1.0 - ao)) * r_n * (1.8 + 1.5 * r_amt), 0.0, 1.0)
-        rust_m = np.clip((rust_m - 0.28) * 2.2, 0.0, 1.0).astype(np.float32) * r_amt
+        r_n = noise_3d_field(wpn, scale=7.0, octaves=2, mode="fbm", seed=seed + 79)
+        rust_raw = (0.55 * cav + 0.45 * dir_bev["chips"] + 0.30 * (1.0 - ao)) * r_n * (1.8 + 1.4 * r_amt)
+        rust_m = (rust_raw > 0.42).astype(np.float32) * r_amt
         c_rust = np.array(hex_to_srgb(rust_color), dtype=np.float32)[None, None, :]
         rgb = rgb * (1.0 - rust_m[..., None] * 0.82) + c_rust * (rust_m[..., None] * 0.82)
 
     albedo = np.concatenate((np.clip(rgb, 0.0, 1.0), np.ones((H, W, 1), dtype=np.float32)), axis=-1).astype(np.float32)
-    rough = np.clip(float(roughness_base) - 0.12 * edge_catch - 0.10 * scratch_hi + 0.52 * rust_m + 0.18 * cav, 0.10, 0.90).astype(np.float32)
+    rough = np.clip(float(roughness_base) - 0.10 * dir_bev["highlight"] - 0.08 * scratch_hi + 0.52 * rust_m + 0.18 * cav, 0.10, 0.90).astype(np.float32)
     metal = np.clip(float(metallic_base) * (1.0 - 0.85 * rust_m), 0.10, 0.98).astype(np.float32)
     out = material_make(
         albedo,
         height=h_map,
-        normal=height_to_normal_map(h_map, strength=2.8, tileable=False),
+        normal=height_to_normal_map(h_map, strength=2.6, tileable=False),
         roughness=rough,
         metallic=metal,
-        ao=np.clip(ao * (1.0 - 0.25 * cav - 0.18 * riv_ring), 0.12, 1.0),
+        ao=np.clip(ao * (1.0 - 0.25 * cav - 0.18 * riv_ring - 0.15 * dir_bev["shadow"]), 0.12, 1.0),
     )
     out["rust_mask"] = rust_m
     out["scratch_mask"] = np.clip(scratch_hi + scratch_lo, 0.0, 1.0).astype(np.float32)
@@ -541,7 +560,7 @@ def forged_battle_metal(
 
 
 # ---------------------------------------------------------------------------
-# 4. Woven Battle Cloth & Twisted Rope (MATERIAL Bus)
+# 4. Woven Battle Cloth & Twisted Rope (MATERIAL Bus — Crisp Vertical Folds!)
 # ---------------------------------------------------------------------------
 
 
@@ -563,18 +582,18 @@ def woven_battle_cloth(
         (1.00, "#DF786E"),  # dusty warm edge catchlight
     ),
     style: str = "drape",  # "drape" | "rope"
-    fold_contrast: float = 0.42,
+    fold_contrast: float = 0.44,
     trim_color: str | None = "#C99A4E",
     trim_width: float = 0.12,
     roughness_base: float = 0.86,
-    smooth_blend: float = 0.66,
-    quantize_steps: int = 6,
+    smooth_blend: float = 0.22,
+    quantize_steps: int = 5,
     seed: int = 307,
 ) -> dict[str, np.ndarray]:
     """Studio Woven Cloth / Tabard / Loincloth / Rope Binding MaterialBus (Voxel Spawns craft).
 
-    Soft 2-3 px vertical cloth drape folds with gentle value steps (never crunchy), fine linen
-    cross-weave texture, optional gold/embroidered hem trim band, and diagonal rope-twist mode!
+    Crisp 2-3 px vertical cloth drape fold clusters (`pixel_clusters`) with gentle value steps,
+    embroidered hem trim band & diagonal rope-twist mode!
     """
     H, W = int(height), int(width)
     wpn, wn, ao, cav, bev, luv = _mesh_or_fallback(
@@ -588,56 +607,41 @@ def woven_battle_cloth(
     )
     res_mult = max(1.0, math.sqrt((H * W) / 4096.0))
     pal = _normalize_stops(stops)
+    pal_hex = [c for _, c in pal]
     lu, lv = luv[..., 0], luv[..., 1]
 
     if style == "rope":
-        # Alternating diagonal tan/umber twisted twine ridges
         strand = 0.5 + 0.5 * np.sin((lu * 7.5 + lv * 7.5) * 2.0 * math.pi)
-        fiber = fbm_noise(H, W, scale=18.0 * res_mult, octaves=2, seed=seed, tileable=False)
+        fiber = fbm_noise(H, W, scale=16.0 * res_mult, octaves=2, seed=seed, tileable=False)
         fold_h = np.clip(0.30 + 0.55 * strand + 0.15 * (fiber - 0.5), 0.0, 1.0).astype(np.float32)
-        weave = np.zeros_like(fold_h)
     else:
-        # Soft vertical drape folds + delicate linen cross-weave
-        n_warp = fbm_noise(H, W, scale=3.5 * res_mult, octaves=2, seed=seed + 11, tileable=False)
-        fold_wave = 0.5 + 0.5 * np.sin((lu * 3.5 + (n_warp - 0.5) * 0.45) * 2.0 * math.pi)
-        yy = np.arange(H, dtype=np.float32)[:, None]
-        xx = np.arange(W, dtype=np.float32)[None, :]
-        weave = (((xx.astype(np.int32) + yy.astype(np.int32)) & 1).astype(np.float32) - 0.5) * 0.07
-        fold_h = np.clip(0.50 + float(fold_contrast) * (fold_wave - 0.5) + weave, 0.08, 0.94).astype(np.float32)
+        n_warp = fbm_noise(H, W, scale=3.2 * res_mult, octaves=2, seed=seed + 11, tileable=False)
+        fold_wave = 0.5 + 0.5 * np.sin((lu * 3.5 + (n_warp - 0.5) * 0.40) * 2.0 * math.pi)
+        fold_h = np.clip(0.50 + float(fold_contrast) * (fold_wave - 0.5), 0.08, 0.94).astype(np.float32)
 
     top_light = np.clip(wn[..., 1] * 0.36 + wn[..., 2] * 0.24 + 0.56, 0.0, 1.0)
-    # Soft darkened bottom hem wear (dirt/ground dust near bottom of drape)
     hem_wear = np.clip((lv - 0.80) / 0.20, 0.0, 1.0) * (1.0 if style != "rope" else 0.0)
     tone = np.clip(
         0.16
-        + 0.30 * top_light
-        + 0.34 * fold_h
+        + 0.28 * top_light
+        + 0.38 * fold_h
         + 0.16 * (ao - 0.65)
-        + 0.06 * bev
         - 0.16 * hem_wear
         - 0.20 * cav,
         0.0,
         1.0,
     ).astype(np.float32)
 
-    alb = multi_stop_gradient(
-        tone,
-        pal,
-        space="oklab",
-        smooth_blend=float(smooth_blend),
-        quantize_steps=int(quantize_steps),
-        dither="none",
-        dither_strength=0.0,
-    )
-    rgb = alb[..., :3].copy()
+    raw_alb = multi_stop_gradient(tone, pal, space="oklab", smooth_blend=float(smooth_blend), quantize_steps=int(quantize_steps))
+    cl = pixel_clusters(raw_alb, pal_hex, direction=("diag_pos" if style == "rope" else "vertical"), cluster_size=2, clean_strays=True, clean_corners=True)
+    rgb = (cl[..., :3] * 0.85 + raw_alb[..., :3] * 0.15).astype(np.float32)
 
-    # Optional embroidered woven border trim near lower hem
     if trim_color and style != "rope" and float(trim_width) > 0.01:
         tw = float(np.clip(trim_width, 0.03, 0.25))
         trim_m = ((lv >= (1.0 - tw - 0.06)) & (lv <= (1.0 - 0.05))).astype(np.float32)
         c_tr = np.array(hex_to_srgb(trim_color), dtype=np.float32)[None, None, :]
-        tr_shade = (0.72 + 0.32 * fold_h)[..., None]
-        rgb = rgb * (1.0 - trim_m[..., None] * 0.82) + np.clip(c_tr * tr_shade, 0.0, 1.0) * (trim_m[..., None] * 0.82)
+        tr_shade = (0.74 + 0.30 * fold_h)[..., None]
+        rgb = rgb * (1.0 - trim_m[..., None] * 0.86) + np.clip(c_tr * tr_shade, 0.0, 1.0) * (trim_m[..., None] * 0.86)
 
     albedo = np.concatenate((np.clip(rgb, 0.0, 1.0), np.ones((H, W, 1), dtype=np.float32)), axis=-1).astype(np.float32)
     rough = np.clip(float(roughness_base) + 0.06 * cav + 0.04 * hem_wear, 0.72, 0.96).astype(np.float32)
@@ -735,15 +739,19 @@ def keratin_horn_bone(
         1.0,
     ).astype(np.float32)
 
-    alb = multi_stop_gradient(
+    raw_alb = multi_stop_gradient(
         tone,
         pal,
         space="oklab",
-        smooth_blend=float(smooth_blend),
+        smooth_blend=min(0.32, float(smooth_blend)),
         quantize_steps=int(quantize_steps),
         dither="none",
         dither_strength=0.0,
     )
+    pal_hex = [c for _, c in pal]
+    cl = pixel_clusters(raw_alb, pal_hex, direction="vertical", cluster_size=2, clean_strays=True, clean_corners=True)
+    rgb = (cl[..., :3] * 0.78 + raw_alb[..., :3] * 0.22).astype(np.float32)
+    alb = np.concatenate((np.clip(rgb, 0.0, 1.0), np.ones((H, W, 1), dtype=np.float32)), axis=-1).astype(np.float32)
     rough = np.clip(float(roughness_base) - 0.12 * along + 0.14 * cav, 0.24, 0.72).astype(np.float32)
     return material_make(
         alb,

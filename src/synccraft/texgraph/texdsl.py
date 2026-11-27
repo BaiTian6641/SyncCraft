@@ -235,6 +235,10 @@ _OP_ALIASES: dict[str, str] = {
     "blur": "gaussian_blur",
     "sharpen": "unsharp_mask",
     "quantize": "palette_quantize",
+    "posterize": "palette_posterize",
+    "dither": "pixel_dither",
+    "outline": "pixel_outline",
+    "mirror": "pixel_mirror",
     "shade": "directional_shade",
     "scales": "imbricated_scales",
     "feathers": "feather_barbs",
@@ -282,6 +286,19 @@ _POSITIONAL_PARAMS: dict[str, tuple[str, ...]] = {
     "temple_stone": ("cols", "rows"),
     "wood_planks": ("planks",),
     "foliage_clusters": ("cols", "rows"),
+    # TexGraph v9 Pixel Composer atomic ops (extra positional args after input port!)
+    "pixel_dither": ("palette", "pattern"),
+    "palette_posterize": ("palette", "space"),
+    "pixel_clusters": ("palette", "direction"),
+    "color_replace": ("src_palette", "dst_palette"),
+    "level_selector": ("center", "width"),
+    "pixel_outline": ("color", "position", "corner_mode"),
+    "pixel_mirror": ("axis",),
+    "heightmap_shadow": ("light_angle_deg", "max_steps"),
+    "pixel_sort": ("axis",),
+    "chromatic_aberration": ("shift_x", "shift_y"),
+    "vignette": ("strength", "radius"),
+    "bake_emissive_bounce": ("radius_units", "intensity"),
 }
 
 # Canonical mesh_channel short aliases
@@ -757,23 +774,30 @@ class _TexDslParser:
                     params[pnames[idx]] = val
         elif meta is not None and meta.inputs:
             port_names = [p.name for p in meta.inputs]
-            for idx, val in enumerate(pos_args):
-                if idx < len(port_names):
-                    if isinstance(val, _NodeRef):
-                        inputs[port_names[idx]] = val.ref
-                    elif op == "material_make" and port_names[idx] != "albedo":
-                        params[port_names[idx]] = val
+            pnames = _POSITIONAL_PARAMS.get(op, ())
+            port_idx = 0
+            param_idx = 0
+            for val in pos_args:
+                if isinstance(val, _NodeRef) and port_idx < len(port_names):
+                    inputs[port_names[port_idx]] = val.ref
+                    port_idx += 1
+                elif not isinstance(val, _NodeRef) and pnames and param_idx < len(pnames) and (
+                    port_idx >= len(port_names) or not isinstance(val, (int, float, bool))
+                ):
+                    params[pnames[param_idx]] = val
+                    param_idx += 1
+                elif port_idx < len(port_names):
+                    if op == "material_make" and port_names[port_idx] != "albedo":
+                        params[port_names[port_idx]] = val
                     else:
-                        # Scalar literal passed to a node input port -> auto-promote to constant node!
-                        inputs[port_names[idx]] = self._as_node_ref(val)
+                        # Numeric scalar literal passed to a node input port -> auto-promote to constant node!
+                        inputs[port_names[port_idx]] = self._as_node_ref(val)
+                    port_idx += 1
+                elif param_idx < len(pnames):
+                    params[pnames[param_idx]] = val
+                    param_idx += 1
                 else:
-                    # Overflow positional args go to _POSITIONAL_PARAMS if registered
-                    extra_idx = idx - len(port_names)
-                    pnames = _POSITIONAL_PARAMS.get(op, ())
-                    if extra_idx < len(pnames):
-                        params[pnames[extra_idx]] = val
-                    else:
-                        raise TexDslError(f"Too many positional args for {raw_op}(...)", op_tok.line, op_tok.col)
+                    raise TexDslError(f"Too many positional args for {raw_op}(...)", op_tok.line, op_tok.col)
         else:
             for idx, val in enumerate(pos_args):
                 if isinstance(val, _NodeRef):
@@ -798,11 +822,13 @@ class _TexDslParser:
             ch = str(params["channel"])
             params["channel"] = _MESH_CHANNEL_ALIASES.get(ch, ch)
 
-        # Auto-rewrite `math(..., op="mul")` -> `math_op="mul"`
+        # Auto-rewrite `op=...` -> node-specific param name so it never collides with TexGraph.add(op, ...)
         if op == "math" and "op" in params:
             params["math_op"] = params.pop("op")
         if op == "morph_op" and "op" in params:
             params["morph_op"] = params.pop("op")
+        if op == "sdf_boolean" and "op" in params:
+            params["bool_op"] = params.pop("op")
 
         nid = target_id or self._next_tmp(op)
         g.add(op, id=nid, inputs=inputs, **params)

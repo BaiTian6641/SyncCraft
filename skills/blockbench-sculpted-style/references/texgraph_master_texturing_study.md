@@ -1,6 +1,6 @@
-# SyncCraft TexGraph v8 — Master Blockbench & Pixel Art Texturing Study
+# SyncCraft TexGraph v9 — Master Blockbench & Pixel Composer Texturing Study
 
-> Distilled from a full multi-timestamp study of **16 expert Blockbench & Pixel Composer YouTube timelapses and tutorials** (Voxel Spawns, TugkanDeMan, BearSpirit08, Mickey Joe, TheAdventurousMiner, Everbloom Games, ArtsByKev, Longridr, Captain Atlas, tafaar, MakhamDev, Etomic, MrXuiryusGaming, Juuliet, Side Quest), paired with SyncCraft's declarative **`.texdsl` Texture Language** and **Part-Aware Semantic Entity Pipeline**.
+> Distilled from a full multi-timestamp visual study of **31+ expert Blockbench & Pixel Composer YouTube timelapses and tutorials** — including direct frame-by-frame analysis of **Everbloom Games** (`KS.largetroll`, Husky), **Mickey Joe** (Scorpion), **ArtsByKev** (Hoglin, Snow Golem), **Pseudo Elephant** (Hytale `Golem_Firesteel` & Wooden Chest), **Voxel Spawns** (Pirate Pillager), **Wackyblocks** (Dinosaur Battle Robot), **TugkanDeMan**, **BearSpirit08**, **Longridr**, **MakhamDev** (Pixel Composer Common Nodes, Fire, Bush, Ship, Pixel Builder, 1.22.4 Heightmap Shadow), **Le Lu** (Shiny Gem), and **CMZW** (Reaction-Diffusion Pixel Art) — paired with SyncCraft's declarative **`.texdsl` Texture Language**, **140 Atomic Pixel-Art Nodes**, and **Part-Aware 3D Entity Pipeline**.
 
 ---
 
@@ -166,3 +166,27 @@ Before shipping ANY 3D entity texture:
 3. **Material Specular Contrast Check:** Do steel plates read sharply reflective (`roughness ~0.25`, `metallic ~0.9`), leather warm and satin (`roughness ~0.64`), cloth soft and matte (`roughness ~0.86`), and skin/fur organically shaded?
 4. **1 px Cast Shadow Check:** Does every belt, strap, pauldron, and collar cast a subtle dark contact edge onto the underlying layer?
 5. **UV Padding & Animation Check:** Zero dark UV seam bleeding at islands; if animated, verify frame-to-frame loop continuity and clean `_e.png` emissive isolation.
+
+---
+
+## 5. TexGraph v9 — Expert Pixel-Cluster Craft, Anti-Wireframe Bevels & True Composable Pixel Composer Graphs
+
+Distilled directly from **18 inspected high-resolution studio frames** across **Everbloom Games**, **Hytale / Pseudo Elephant**, **Wackyblocks**, **Mickey Joe**, **MakhamDev (Pixel Composer)**, **Le Lu**, and **CMZW**, `TexGraph v9` closes the final gap between "procedural shader" and **true hand-crafted expert pixel art** via **`15` new Pixel Composer atomic operators (`140` total nodes)**:
+
+### A. The 4 Non-Negotiable Expert Craft Rules (`v9` Standard)
+1. **80% Crisp Stepped Pixel Clusters + 20% Smooth Bridge (Zero Blurry Airbrush Mud!):**
+   - Smooth gradients make Blockbench models read soft and amateur; random 1×1 noise reads dirty.
+   - Always pass tonal shading through **`pixel_clusters(..., direction=..., cluster_size=2, clean_strays=true, clean_corners=true)`** locked to a curated **5–6 swatch hue-shifted palette**, keeping **65–70%+** of flat armor/hide plates calm while breaking forms with intentional `1×2`, `1×3`, and `2×4` directional pixel clusters (`vertical` for fur/feathers/cloth, `horizontal` for wood planks/chitin/leather, `diag_pos` for brushed steel).
+2. **Anti-Wireframe Asymmetric Broken Bevels (`pixel_bevel_directional` — NEVER Uniform 4-Sided Box Borders!):**
+   - Outlining all 4 borders of every cuboid face identically creates a cheap procedural wireframe look.
+   - Use **`pixel_bevel_directional(light_angle_deg=-135.0, chip_amount=0.46)`** so crisp 1 px catchlights hug **ONLY top & leading-left exposed rims** (interrupted intermittently by 1–2 px dark battle-chip notches), paired with cool dark cast-shadow edges strictly along **bottom & trailing-right undersides**!
+3. **Roof-Tile Ray-Marched Cast Shadows (`heightmap_shadow` — Pixel Composer 1.22.4 Parity):**
+   - Overlap straps over wood planks, steel buckles over leather, dorsal chitin segments over abdomen, and scalloped breast feathers using **`heightmap_shadow(h, light_angle_deg=-125.0, max_steps=4)`** to cast crisp 1–4 px directional drop-shadows automatically.
+4. **3D World-Space Baked Emissive Bounce Light (`bake_emissive_bounce` — Hytale `Golem_Firesteel` Standard):**
+   - Glowing eyes, axe runes, solar wingtips, and molten magma fissures MUST illuminate nearby dark skin, obsidian slabs, and steel bevels in 3D world space via inverse-square diffuse bounce (`bake_emissive_bounce(mat, radius_units=6.5, intensity=0.58, posterize_steps=5)`).
+
+### B. Canonical Pixel Composer Atomic Chain (Composable Multi-Node `.texdsl`)
+Instead of relying on monolithic single-node generators, wire atomic nodes directly in `.texdsl` just like Pixel Composer:
+- **Shapes & Scatter:** `sdf_shape` + `sdf_boolean` + `tile_sampler` + `gray_scott` / `fbm` + `scroll` + `displace_uv(..., pixel_snap=true)`
+- **Relief & Cast Lighting:** `slope_blur` -> `heightmap_shadow` -> `pixel_bevel_directional` -> `level_selector`
+- **Pixel-Art Lock & Topology Cleanup:** `pixel_dither` (`bayer_2x2` / `bayer_4x4` / `diamond` / `blue_noise` / `floyd_steinberg` / `atkinson`) -> `palette_posterize` (OKLab palette-locked!) -> `de_corner` (strips L-shaped diagonal stair jaggies) -> `de_stray` (eliminates isolated 1×1 orphan noise specks) -> `pixel_mirror` -> `pixel_outline` (crisp 4-way/8-way outside/inside) -> `color_replace` / `pixel_sort` / `chromatic_aberration` / `vignette`!

@@ -931,9 +931,9 @@ if (!actions[0].deleted) throw new Error("onunload did not clean up actions");
             woven_battle_cloth,
         )
 
-        # 1. Engine v8.0 schema + 6 character/part-aware nodes + 5 character subgraphs + supports_texdsl
+        # 1. Engine v8.0+ schema + 6 character/part-aware nodes + 5 character subgraphs + supports_texdsl
         schema = export_node_schema_json()
-        self.assertEqual(schema["engine_version"], "8.0")
+        self.assertGreaterEqual(float(schema["engine_version"]), 8.0)
         self.assertTrue(schema["supports_texdsl"])
         self.assertGreaterEqual(schema["node_count"], 125)
         self.assertGreaterEqual(len(SUBGRAPH_REGISTRY), 22)
@@ -1082,6 +1082,168 @@ if (!actions[0].deleted) throw new Error("onunload did not clean up actions");
                 0,
             )
             self.assertTrue((td / "out.png").is_file())
+
+    def test_v9_pixel_composer_atomic_nodes_clusters_and_emissive_bounce(self) -> None:
+        from synccraft.texgraph import (
+            bake_emissive_bounce,
+            chromatic_aberration,
+            color_replace,
+            de_corner,
+            de_stray,
+            export_node_schema_json,
+            heightmap_shadow,
+            level_selector,
+            palette_posterize,
+            parse_texdsl,
+            pixel_bevel_directional,
+            pixel_clusters,
+            pixel_dither,
+            pixel_mirror,
+            pixel_outline,
+            pixel_sort,
+            vignette,
+        )
+
+        # 1. Schema v9.0 + 140 atomic nodes + supports_pixel_composer_fx
+        schema = export_node_schema_json()
+        self.assertEqual(schema["engine_version"], "9.0")
+        self.assertGreaterEqual(schema["node_count"], 140)
+        self.assertTrue(schema["supports_pixel_composer_fx"])
+
+        # 2. Direct unit verification of all Pixel Composer atomic operators
+        pal = ["#1B1726", "#3E475C", "#7C8BA1", "#DCE6F0"]
+        pal_warm = ["#261414", "#6B2D24", "#C46B3B", "#F5D08A"]
+        grad = np.linspace(0.0, 1.0, 32, dtype=np.float32)[None, :] * np.ones((32, 1), dtype=np.float32)
+
+        # Ordered Bayer + Error-Diffusion dithering locked strictly to the 4-color palette!
+        for pat in ("bayer_2x2", "bayer_4x4", "diamond", "blue_noise", "floyd_steinberg", "atkinson"):
+            d = pixel_dither(grad, pal, pattern=pat, contrast=0.85, seed=7)
+            self.assertEqual(d.shape, (32, 32, 4))
+            uniq = np.unique(np.rint(d[..., :3] * 255.0).reshape(-1, 3), axis=0)
+            self.assertLessEqual(uniq.shape[0], len(pal))
+            self.assertGreaterEqual(uniq.shape[0], 3)
+
+        # Palette Posterize + Color Replace + Level Selector
+        post = palette_posterize(grad, pal, space="luma_rank", posterize_alpha=True)
+        swapped = color_replace(post, pal, pal_warm)
+        self.assertGreater(float(swapped[..., 0].mean()), float(swapped[..., 2].mean()) + 0.10)
+        band = level_selector(grad, center=0.5, width=0.25, softness=0.04)
+        self.assertGreater(float(band[:, 16].mean()), 0.8)
+        self.assertLess(float(band[:, 0].mean()), 0.1)
+
+        # De-Stray removes an isolated 1x1 bright pixel on a dark canvas!
+        stray_img = np.zeros((16, 16, 4), dtype=np.float32)
+        stray_img[..., 3] = 1.0
+        stray_img[8, 8, :3] = 1.0
+        cleaned = de_stray(stray_img, strictness="medium", iterations=1)
+        self.assertLess(float(cleaned[8, 8, 0]), 0.15)
+
+        # De-Corner strips L-shaped diagonal stair jaggies cleanly
+        jag = np.zeros((16, 16, 4), dtype=np.float32)
+        jag[..., 3] = 1.0
+        for i in range(4, 12):
+            jag[i, i, :3] = 1.0
+            jag[i, i - 1, :3] = 1.0
+        dc = de_corner(jag, strictness="medium", iterations=1)
+        self.assertEqual(dc.shape, (16, 16, 4))
+
+        # Pixel Clusters + Anti-Wireframe Directional Chipped Bevel + Heightmap Shadow + Outline + Mirror + Sort + CA + Vignette
+        cl = pixel_clusters(grad, pal, direction="horizontal", cluster_size=2)
+        self.assertEqual(cl.shape, (32, 32, 4))
+        bev = pixel_bevel_directional(32, 32, light_angle_deg=-135.0, chip_amount=0.45, seed=9)
+        self.assertGreater(float(bev["highlight"][1, 1:16].mean()), float(bev["highlight"][30, 16:31].mean()) + 0.15)
+        self.assertGreater(float(bev["shadow"][30, 16:31].mean()), float(bev["shadow"][1, 1:16].mean()) + 0.15)
+
+        step_h = np.zeros((32, 32), dtype=np.float32)
+        step_h[8:20, 8:20] = 0.9
+        sh = heightmap_shadow(step_h, light_angle_deg=-135.0, elevation_deg=35.0, max_steps=6, strength=0.8, tileable=False)
+        self.assertLess(float(sh[20:23, 20:23].mean()), 0.75)
+
+        spr = np.zeros((24, 24, 4), dtype=np.float32)
+        spr[8:16, 8:16] = [0.2, 0.8, 0.5, 1.0]
+        ol = pixel_outline(spr, width=1, position="outside", color="#120929", corner_mode="4way")
+        self.assertGreater(float(ol[7, 10, 3]), 0.9)
+        self.assertLess(float(ol[7, 7, 3]), 0.1)  # 4-way leaves diagonal corners crisp & empty!
+
+        mir = pixel_mirror(spr, axis="xy")
+        self.assertTrue(np.allclose(mir[:, :12], mir[:, 12:][:, ::-1]))
+        self.assertEqual(pixel_sort(cl, axis="vertical").shape, (32, 32, 4))
+        self.assertEqual(chromatic_aberration(cl, shift_x=1).shape, (32, 32, 4))
+        self.assertEqual(vignette(cl, strength=0.4).shape, (32, 32, 4))
+
+        # 3. True Composable Multi-Node Pixel Composer `.texdsl` graph (positional & keyword ops + sdf_boolean op=)
+        pc_dsl = """
+        @texture { name: "pc_test", size: [32, 32], domain: "item", tileable: false, seed: 19 }
+        @palette { gem: ["#0B1E29", "#14998A", "#3FE0B6", "#F4FFF9"] }
+        @pass build "Composable Pixel Composer Graph" {
+          a      = sdf_shape("gem", center=[0.5, 0.5], size=[0.36, 0.40], bevel_width=0.18)
+          b      = sdf_shape("circle", center=[0.5, 0.5], size=[0.18, 0.18], bevel_width=0.12)
+          u      = sdf_boolean(a.sdf, b.sdf, op="union")
+          sh     = heightmap_shadow(u.bevel, -135.0, 4)
+          tone   = (u.bevel * 0.7) + (sh * 0.3)
+          dith   = dither(tone, @gem, "bayer_2x2", contrast=0.7)
+          cut    = set_alpha(dith, u.mask)
+          post   = posterize(cut, @gem)
+          clean  = de_stray(de_corner(post))
+          mir    = mirror(clean, "x")
+          out    = outline(mir, "#08161E")
+          mat    = material_make(out, height=u.bevel, roughness=0.18, metallic=0.1, ao=sh)
+        }
+        @output material(mat, normal_strength=2.2)
+        """
+        g_pc = parse_texdsl(pc_dsl)
+        self.assertTrue(g_pc.validate_graph().ok, g_pc.validate_graph().errors)
+        ev_pc = g_pc.evaluate(build_pbr=True)
+        self.assertEqual(ev_pc.output.shape, (32, 32, 4))
+        self.assertGreater(float((ev_pc.output[..., 3] > 0.5).mean()), 0.15)
+        self.assertLess(float((ev_pc.output[..., 3] > 0.5).mean()), 0.85)
+
+        # 4. 3D Baked Emissive Bounce Light (`bake_emissive_bounce`) proves glowing eyes warm adjacent dark brow/cheeks!
+        mini_golem_dsl = """
+        @meta { archetype: entity, target_profile: bedrock_entity, texel_density: 32, size_step: 0.5, audit_profile: sculpted }
+        @palette {
+          rock: ramp(base_lch=[0.28, 0.03, 270], steps=4)
+          eye:  ramp(base_lch=[0.78, 0.20, 45], steps=4, emissive=true)
+        }
+        @rig {
+          root bone head {
+            pivot_local: [0, 6, 0]
+            box cranium_core { size: [8, 8, 8], material: rock }
+            box eye_l place(base_box=cranium_core, anchor=[-0.35, 0.1, 1], align=[0, 0, -0.4]) { size: [2, 1.5, 0.5], material: eye }
+          }
+        }
+        """
+        prog = parse_program(mini_golem_dsl)
+        sc = compile_geometry(prog)
+        sem = pack_semantic_uv_atlas(prog, sc, padding=1, mirror_lr_uv="adaptive", canvas_mode="tight")
+        bb = export_bbmodel(sc, name="mini_bounce", atlas={"width": sem["width"], "height": sem["height"], "faces": sem["faces"], "rgba": np.full((sem["height"], sem["width"], 4), 120, dtype=np.uint8)}, program=prog)
+        ctx = bake_bbmodel_maps(bb, padding=1)
+
+        # Build a dark obsidian base with bright orange emissive eye and measure red-channel lift on adjacent cranium south face!
+        H, W = ctx.height, ctx.width
+        base_bus = {
+            "__bus__": np.array([1.0], dtype=np.float32),
+            "albedo": np.concatenate((np.full((H, W, 3), 0.12, dtype=np.float32), np.ones((H, W, 1), dtype=np.float32)), axis=-1),
+            "height": np.full((H, W), 0.5, dtype=np.float32),
+            "normal": np.dstack((np.full((H, W), 0.5), np.full((H, W), 0.5), np.ones((H, W)))).astype(np.float32),
+            "roughness": np.full((H, W), 0.7, dtype=np.float32),
+            "metallic": np.zeros((H, W), dtype=np.float32),
+            "ao": np.ones((H, W), dtype=np.float32),
+            "emissive": np.zeros((H, W, 4), dtype=np.float32),
+            "sss": np.zeros((H, W), dtype=np.float32),
+            "porosity": np.zeros((H, W), dtype=np.float32),
+        }
+        eye_m = (ctx.match_elements_mask("eye_l") > 0.5) & (ctx.face_filter_mask("south") > 0.5)
+        front_rock = (ctx.match_elements_mask("cranium_core") > 0.5) & (ctx.face_filter_mask("south") > 0.5)
+        back_rock = (ctx.match_elements_mask("cranium_core") > 0.5) & (ctx.face_filter_mask("north") > 0.5)
+        base_bus["emissive"][eye_m] = [1.0, 0.45, 0.08, 1.0]
+
+        lit_bus = bake_emissive_bounce(base_bus, ctx, radius_units=7.0, intensity=0.75, posterize_steps=5)
+        front_r_lift = float(lit_bus["albedo"][front_rock, 0].mean() - base_bus["albedo"][front_rock, 0].mean())
+        back_r_lift = float(lit_bus["albedo"][back_rock, 0].mean() - base_bus["albedo"][back_rock, 0].mean())
+        # Adjacent front face MUST receive clear warm orange bounce light, significantly stronger than far back face!
+        self.assertGreater(front_r_lift, 0.06)
+        self.assertGreater(front_r_lift, back_r_lift * 2.5)
 
 
 if __name__ == "__main__":
