@@ -36,7 +36,7 @@ from synccraft import __version__
 from .ai_copilot import BUILT_IN_STYLE_PRESETS, apply_surgical_patch, diagnose_asset, extract_style_dna
 from .core import GraphCycleError, NodeSpec, TexGraph, _parse_ref
 from .mesh_baker import _FACE_BASIS, _euler_xyz_mat, MeshBakeContext, bake_bbmodel_maps
-from .node_previews import generate_node_preview_catalog
+from .node_previews import generate_node_anim_preview, generate_node_preview_catalog
 from .pbr import BAKE_LIGHTING_PRESETS as BAKE_PRESETS, bake_pbr_to_albedo
 from .pipeline import MATERIAL_BUS_PORTS, SUBGRAPH_REGISTRY
 from .pixel_art_ops import encode_png, rgba_float_to_u8
@@ -349,6 +349,36 @@ def _find_orc_warlord_paths() -> tuple[Path, Path] | None:
 
 def build_studio_sample(sample_id: str, *, size: int = 64) -> tuple[TexGraph, dict[str, Any] | None]:
     """Create a rich, commercial multi-pass Studio project with optional 3D `.bbmodel`."""
+    if sample_id == "brass_crystal_workflow_3d":
+        bb_doc = build_sample_monolith_bbmodel()
+        mc = bake_bbmodel_maps(bb_doc)
+        g = TexGraph(mc.width, mc.height, tileable=False, seed=42, name="brass_crystal_workflow_3d", mesh_context=mc)
+        g.domain = "entity"
+        with g.pass_("pass_1_3d_masks", title="1. 3D Part & Direction Masks", color="#0F766E") as p1:
+            m_brass = g.add("mask_uv_part", id="mask_brass_trim", part_pattern="cornice|plinth", zone="all", face_filter="all")
+            m_crystal = g.add("mask_uv_part", id="mask_crystal_fins", part_pattern="crest_fin", zone="all", face_filter="all")
+            m_top = g.add("mask_world_direction", id="mask_top_surfaces", direction="top_up", threshold=0.45, softness=0.25, seed=42)
+            p1.preview_ref = m_brass
+        with g.pass_("pass_2_pbr_materials", title="2. PBR Materials (Obsidian, Brass, Crystal)", color="#92400E") as p2:
+            obs = g.add("mat_obsidian_volcanic", id="obsidian_pillar", obsidian_color="#232036", fissure_color="#7C3AED", fissure_glow=0.35, roughness=0.22, seed=42)
+            brass_raw = g.add("mat_brass", id="brushed_brass", base_color="#D9AE4E", patina_color="#486B5E", roughness=0.24, brushed_strength=0.60, patina_amount=0.22, scratches=0.38, seed=108)
+            brass_aged = g.add("material_weathering", id="aged_brass_fx", inputs={"mat": brass_raw}, preset="patina", amount=0.30, seed=108)
+            crys = g.add("mat_crystal_gem", id="amethyst_crystal", crystal_color="#A855F7", core_glow_color="#38F2FF", opacity=0.72, facet_scale=5.5, glow_strength=0.65, roughness=0.10, seed=77)
+            p2.preview_ref = f"{brass_aged}.albedo"
+        with g.pass_("pass_3_sequence_anim", title="3. Region Sequence & Live Shimmer", color="#4C1D95") as p3:
+            seq1 = g.add("material_region_apply", id="apply_brass_region", inputs={"base": obs, "top": brass_aged, "mask": m_brass}, opacity=1.0, seam_ao_strength=0.28)
+            seq2 = g.add("material_region_apply", id="apply_crystal_region", inputs={"base": seq1, "top": crys, "mask": m_crystal}, opacity=1.0, seam_ao_strength=0.18)
+            shimmer = g.add("anim_shimmer", id="chronal_shimmer", inputs={"src": seq2}, angle_deg=-35.0, speed=1.0, width=0.14, intensity=0.45, color="#FFF2C6")
+            final = g.precompute_shadow_pbr(shimmer, shadow_strength=0.62, bent_normal_strength=0.44, thickness_sss_strength=0.45, bake_into_albedo=0.45, id="brass_crystal_final")
+            p3.preview_ref = f"{final}.albedo"
+        g.set_output_material(final, normal_strength=2.5)
+        g.expose_param("brass_patina", brass_raw, "patina_amount", label="Brass Patina", min_val=0.0, max_val=0.85, step=0.02)
+        g.expose_param("crystal_opacity", crys, "opacity", label="Crystal Opacity", min_val=0.20, max_val=1.0, step=0.02)
+        g.expose_param("crystal_glow", crys, "glow_strength", label="Crystal Glow", min_val=0.0, max_val=1.4, step=0.05)
+        g.expose_param("shimmer_intensity", shimmer, "intensity", label="Live Shimmer", min_val=0.0, max_val=1.2, step=0.05)
+        g.auto_layout(col_spacing=290.0, row_spacing=195.0)
+        return g, bb_doc
+
     if sample_id == "monolith_v10_3d":
         bb_doc = build_sample_monolith_bbmodel()
         mc = bake_bbmodel_maps(bb_doc)
@@ -492,6 +522,13 @@ STUDIO_SAMPLES: list[dict[str, Any]] = [
     {
         "id": "kaelith_dragonborn_3d",
         "title": "Kaelith Chrono-Dragonborn 3D",
+        "category": "Flagship 3D Studio",
+        "has_3d": True,
+        "animated": True,
+    },
+    {
+        "id": "brass_crystal_workflow_3d",
+        "title": "Brass & Amethyst Crystal Chain (3D)",
         "category": "Flagship 3D Studio",
         "has_3d": True,
         "animated": True,
@@ -661,6 +698,15 @@ class StudioSession:
                 "active_variant": self.active_variant,
                 "has_mesh": self.mesh_ctx is not None,
                 "mesh": self.webgl_mesh,
+                "mesh_parts": (
+                    {
+                        "zones": sorted({z for z in self.mesh_ctx.elem_zones if z}),
+                        "bones": sorted({b.split("/")[-1] for b in self.mesh_ctx.elem_bones if b})[:48],
+                        "elements": sorted({e.split("__")[-1] for e in self.mesh_ctx.elem_names if e})[:64],
+                    }
+                    if self.mesh_ctx is not None
+                    else None
+                ),
                 "mesh_stats": (
                     {
                         "width": self.mesh_ctx.width,
@@ -859,6 +905,68 @@ class StudioSession:
                 g.param_drivers = [d for d in g.param_drivers if d.get("node_id") not in id_set]
                 g.exposed_params = {k: v for k, v in g.exposed_params.items() if v.get("node_id") not in id_set}
                 self._log("info", f"Deleted {len(ids)} node(s): {', '.join(ids)}")
+                return self.get_state_payload()
+
+            if action == "duplicate_nodes":
+                ids = [str(x) for x in (payload.get("ids") or []) if str(x) in g.nodes]
+                if not ids:
+                    return self.get_state_payload()
+                self._push_undo()
+                created: list[str] = []
+                for src_id in ids:
+                    orig = g.nodes[src_id]
+                    base_id = f"{orig.id}_copy"
+                    nid = base_id
+                    idx = 1
+                    while nid in g.nodes:
+                        nid = f"{base_id}_{idx}"
+                        idx += 1
+                    ox, oy = orig.pos if orig.pos is not None else (240.0, 140.0)
+                    sp = NodeSpec(
+                        id=nid,
+                        op=orig.op,
+                        inputs=dict(orig.inputs),
+                        params=copy.deepcopy(orig.params),
+                        pos=(float(ox) + 42.0, float(oy) + 42.0),
+                        label=orig.label,
+                        collapsed=orig.collapsed,
+                        bypassed=orig.bypassed,
+                    )
+                    g.nodes[nid] = sp
+                    g.node_order.append(nid)
+                    created.append(nid)
+                self._log("info", f"Duplicated {len(created)} node(s): {', '.join(created)}")
+                out = self.get_state_payload()
+                if created:
+                    out["created_node_id"] = created[-1]
+                return out
+
+            if action == "randomize_seed":
+                import random as _rnd
+
+                new_seed = int(payload.get("seed") if payload.get("seed") is not None else _rnd.randint(1, 99999))
+                nid = payload.get("node_id")
+                self._push_undo()
+                if nid and str(nid) in g.nodes:
+                    g.nodes[str(nid)].params["seed"] = new_seed
+                    self.artist_overrides[f"{nid}.seed"] = new_seed
+                    self._log("info", f"Randomized seed of '{nid}' -> {new_seed}")
+                else:
+                    g.seed = new_seed
+                    self._log("info", f"Randomized global graph seed -> {new_seed}")
+                g._static_cache.clear()
+                return self.get_state_payload()
+
+            if action == "disconnect_all":
+                nid = str(payload.get("node_id", ""))
+                if nid not in g.nodes:
+                    return self.get_state_payload()
+                self._push_undo()
+                g.nodes[nid].inputs.clear()
+                for sp in g.nodes.values():
+                    sp.inputs = {k: v for k, v in sp.inputs.items() if _parse_ref(v)[0] != nid}
+                g._static_cache.clear()
+                self._log("info", f"Disconnected all wires on '{nid}'")
                 return self.get_state_payload()
 
             if action == "set_param":
@@ -1449,7 +1557,34 @@ def create_studio_server(
                 qs = urllib.parse.parse_qs(parsed.query)
                 sz = int((qs.get("size") or ["40"])[0])
                 previews = generate_node_preview_catalog(size=sz)
-                raw = json.dumps({"ok": True, "size": sz, "count": len(previews), "previews": previews}).encode("utf-8")
+                time_aware_ops = sorted(op for op, m in NODE_REGISTRY.items() if m.time_aware)
+                raw = json.dumps(
+                    {
+                        "ok": True,
+                        "size": sz,
+                        "count": len(previews),
+                        "previews": previews,
+                        "time_aware_ops": time_aware_ops,
+                    }
+                ).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(raw)))
+                self.send_header("Cache-Control", "public, max-age=3600")
+                self.end_headers()
+                self.wfile.write(raw)
+                return
+
+            if path == "/api/schema/preview_anim":
+                qs = urllib.parse.parse_qs(parsed.query)
+                op = str((qs.get("op") or [""])[0]).strip()
+                sz = int((qs.get("size") or ["48"])[0])
+                nf = int((qs.get("frames") or ["8"])[0])
+                if op not in NODE_REGISTRY:
+                    self._send_json({"ok": False, "error": f"Unknown op: {op!r}"}, status=404)
+                    return
+                frames = generate_node_anim_preview(op, size=sz, frames=nf)
+                raw = json.dumps({"ok": True, "op": op, "size": sz, "frames": len(frames), "images": frames}).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.send_header("Content-Length", str(len(raw)))

@@ -1,9 +1,11 @@
-"""Real Procedural Visual Thumbnail Generator for SyncCraft Studio Node Library & Add-Node Browser.
+"""Real Procedural Visual Thumbnail & Live Animated Multi-Frame Preview Generator (`TexGraph v13`).
 
-Evaluates every registered TexGraph node (`149` nodes) at crisp pixel-art preview resolution (`40x40`)
-using deterministic reference inputs (scalar ridge field, circular/diamond sprite RGBA, binary mask,
-normal map, material bus, and a miniature 3D baked cuboid mesh) and caches base64 PNG data URLs
-in memory so artists can pick noises, patterns, materials, and FX visually in Grid or List mode!
+Evaluates EVERY registered TexGraph node (`210+` nodes) at crisp pixel-art preview resolution (`40x40`)
+using deterministic reference inputs (scalar ridge field, circular sprite RGBA, binary mask, normal map,
+material bus, and a miniature 3D baked cuboid mesh) and caches:
+  1. Static swatch catalog (`generate_node_preview_catalog(size=40)`)
+  2. Live multi-frame animated preview loops (`generate_node_anim_preview(op, size=48, frames=8)`)
+     so every dynamic/animated node visibly plays motion in the Add-Node Browser & Inspector!
 """
 from __future__ import annotations
 
@@ -15,7 +17,7 @@ from typing import Any
 import numpy as np
 from PIL import Image
 
-from .core import TexGraph
+from .core import NodeSpec, TexGraph
 from .generators_gradients import multi_stop_gradient
 from .generators_noise import fbm_noise, uv_grid
 from .mesh_baker import MeshBakeContext, bake_bbmodel_maps
@@ -26,6 +28,8 @@ from .registry import NODE_CATALOG
 
 _CACHE_LOCK = threading.Lock()
 _PREVIEW_CACHE: dict[int, dict[str, str]] = {}
+_ANIM_CACHE: dict[tuple[str, int, int], list[str]] = {}
+_REF_CACHE: dict[int, tuple[dict[str, Any], MeshBakeContext]] = {}
 
 
 def _to_data_url(arr: Any, size: int) -> str:
@@ -102,13 +106,12 @@ def _build_reference_inputs(size: int) -> dict[str, Any]:
     """Deterministic stylized reference height, mask, RGBA sprite, normal & material bus for filter previews."""
     u, v = uv_grid(size, size)
     noise_base = fbm_noise(size, size, scale=4.0, octaves=3, seed=19, tileable=True)
-    # Crisp beveled diamond/orb heightfield
     dist = np.sqrt(((u - 0.5) * 2.15) ** 2 + ((v - 0.5) * 2.15) ** 2)
     mask = (dist <= 0.78).astype(np.float32)
+    mask_b = (np.abs(u - 0.5) <= 0.32).astype(np.float32)
     dome = np.clip(1.0 - dist / 0.85, 0.0, 1.0).astype(np.float32)
     height = np.clip(0.55 * dome + 0.45 * noise_base, 0.0, 1.0).astype(np.float32)
 
-    # Rich warm-to-cool stylized RGBA tile + masked sprite variant
     tile_rgba = multi_stop_gradient(
         height,
         [(0.0, "#1C1838"), (0.35, "#3E5094"), (0.68, "#62B8D9"), (1.0, "#FAF2D6")],
@@ -119,7 +122,6 @@ def _build_reference_inputs(size: int) -> dict[str, Any]:
     sprite_rgba = tile_rgba.copy()
     sprite_rgba[..., 3] = mask
 
-    # Secondary RGBA & height for blend/composite previews
     alt_h = np.clip(1.0 - np.abs(u - v), 0.0, 1.0).astype(np.float32)
     alt_rgba = multi_stop_gradient(
         alt_h,
@@ -137,6 +139,7 @@ def _build_reference_inputs(size: int) -> dict[str, Any]:
         "scalar": height,
         "height": height,
         "mask": mask,
+        "mask_b": mask_b,
         "rgba": tile_rgba,
         "sprite_rgba": sprite_rgba,
         "alt_scalar": alt_h,
@@ -146,6 +149,17 @@ def _build_reference_inputs(size: int) -> dict[str, Any]:
         "material_top": mat_top,
         "side_sign": np.ones((size, size), dtype=np.float32),
     }
+
+
+def _get_refs_and_mesh(sz: int) -> tuple[dict[str, Any], MeshBakeContext]:
+    with _CACHE_LOCK:
+        hit = _REF_CACHE.get(sz)
+        if hit is not None:
+            return hit
+    pair = (_build_reference_inputs(sz), _build_mini_mesh_ctx(sz))
+    with _CACHE_LOCK:
+        _REF_CACHE[sz] = pair
+    return pair
 
 
 # Fast preview parameter overrides for compute-heavy simulation / multi-step nodes
@@ -169,9 +183,31 @@ _FAST_PREVIEW_PARAMS: dict[str, dict[str, Any]] = {
     "paint_entity_eyes_and_parts": {"eye_glow": 0.95},
     "bake_emissive_bounce": {"max_emitters": 16, "intensity": 0.6},
     "constant": {"value": "#4F8EF7"},
+    "mask_uv_box": {"mode": "uv_rect", "u_min": 0.18, "u_max": 0.82, "v_min": 0.18, "v_max": 0.82},
+    "mask_combine": {"mode": "xor"},
+    "material_region_apply": {"opacity": 1.0, "seam_ao_strength": 0.30},
 }
 
-# Ops that read best with a hard-alpha masked sprite input (outline, selout, silhouette)
+# For animated multi-frame previews, ensure time-capable nodes visibly animate even if default speed is 0
+_ANIM_PREVIEW_OVERRIDES: dict[str, dict[str, Any]] = {
+    "perlin": {"loop_speed": 1.0},
+    "fbm": {"loop_speed": 1.0},
+    "voronoi": {"loop_speed": 1.0},
+    "simplex_noise": {"loop_speed": 1.0},
+    "bubble_noise": {"loop_speed": 1.0},
+    "domain_warp": {"flow_speed": 1.0, "strength": 0.14},
+    "noise_3d": {"flow_vec": (0.25, 0.15, 0.0)},
+    "scroll": {"speed_x": 1.0, "speed_y": 1.0},
+    "caustic_noise": {"loop_speed": 1.0},
+    "curl_flow_noise": {"loop_speed": 1.0},
+    "starfield_sparkle": {"twinkle_speed": 1.0},
+    "plasma_wave": {"speed": 1.0},
+    "clockwork_gears": {"rotate_speed": 1.0},
+    "anim_shimmer": {"speed": 1.0, "intensity": 0.85},
+    "anim_flicker_pulse": {"freq": 2.0, "min_val": 0.35, "max_val": 1.35},
+    "anim_flow_warp": {"speed": 1.0, "strength": 0.10},
+}
+
 _SPRITE_INPUT_OPS: frozenset[str] = frozenset({
     "pixel_outline",
     "directional_selout",
@@ -184,18 +220,96 @@ _SPRITE_INPUT_OPS: frozenset[str] = frozenset({
 
 
 def _fallback_swatch(cat: str, size: int) -> str:
-    """Clean crisp geometric fallback if an exotic node requires custom graph state."""
     u, v = uv_grid(size, size)
     t = np.clip(0.55 * (1.0 - v) + 0.45 * u, 0.0, 1.0).astype(np.float32)
     pal = [(0.0, "#1E2538"), (0.5, "#3B629B"), (1.0, "#9CC5F8")]
     if "Material" in cat or "Character" in cat:
         pal = [(0.0, "#2A1F18"), (0.5, "#9A6C38"), (1.0, "#F6D98C")]
-    elif "Region" in cat:
+    elif "Region" in cat or "Mask" in cat:
         pal = [(0.0, "#1C1A38"), (0.5, "#7A74B8"), (1.0, "#F0F2FF")]
     elif "Sim" in cat or "Anim" in cat:
         pal = [(0.0, "#24102C"), (0.5, "#C23B72"), (1.0, "#FFD280")]
     rgba = multi_stop_gradient(t, pal, space="oklab", smooth_blend=0.8, quantize_steps=5)
     return _to_data_url(rgba, size)
+
+
+def _eval_single_node_preview(
+    op: str,
+    sz: int,
+    refs: dict[str, Any],
+    mesh_ctx: MeshBakeContext,
+    *,
+    phase: float = 0.0,
+    for_anim: bool = False,
+) -> str:
+    meta = NODE_CATALOG[op]
+    try:
+        g = TexGraph(sz, sz, tileable=True, seed=42, name=f"prev_{op}", mesh_context=mesh_ctx)
+        if op == "feedback_loop":
+            s_id = g.add("perlin", scale=5.0, loop_speed=1.0, seed=42)
+            fb_id = g.add("feedback_loop", inputs={"src": s_id}, loop_frames=4, pre_roll=2, decay=0.82, drift_y_px=-1.0)
+            g.set_output(fb_id)
+            return _to_data_url(g.evaluate(phase=float(phase)).output, sz)
+        vals: dict[str, Any] = {}
+        inputs: dict[str, str] = {}
+        for idx, port in enumerate(meta.inputs):
+            pname = port.name
+            if port.optional and pname not in ("mask", "mask_b", "base", "top", "layer"):
+                continue
+            if port.optional and op in ("region_composite", "material_blend", "material_height_blend", "material_region_apply", "blend") and pname == "mask":
+                vals["_in_mask"] = refs["mask"]
+                inputs[pname] = "_in_mask"
+                continue
+            if port.optional and op == "mask_combine" and pname == "mask_b":
+                vals["_in_mask_b"] = refs["mask_b"]
+                inputs[pname] = "_in_mask_b"
+                continue
+            if port.optional:
+                continue
+
+            vid = f"_in_{idx}_{pname}"
+            dt = port.dtype
+            if pname in ("local_u", "span_u"):
+                vals[vid] = refs["u"]
+            elif pname in ("local_v", "trail_v"):
+                vals[vid] = refs["v"]
+            elif pname == "side_sign":
+                vals[vid] = refs["side_sign"]
+            elif dt == "MATERIAL":
+                vals[vid] = refs["material_top"] if pname in ("top", "layer") else refs["material"]
+            elif dt == "NORMAL":
+                vals[vid] = refs["normal"]
+            elif dt == "MASK":
+                vals[vid] = refs["mask_b"] if pname == "mask_b" else refs["mask"]
+            elif dt == "RGBA":
+                if op in _SPRITE_INPUT_OPS:
+                    vals[vid] = refs["sprite_rgba"]
+                elif pname in ("top", "b", "layer", "color"):
+                    vals[vid] = refs["alt_rgba"]
+                else:
+                    vals[vid] = refs["rgba"]
+            elif dt == "ANY":
+                if op in _SPRITE_INPUT_OPS:
+                    vals[vid] = refs["sprite_rgba"]
+                elif pname in ("top", "b", "layer"):
+                    vals[vid] = refs["alt_rgba"]
+                else:
+                    vals[vid] = refs["rgba"]
+            else:
+                vals[vid] = refs["alt_scalar"] if pname in ("b", "slope_map") else refs["height"]
+            inputs[pname] = vid
+
+        params = {p.name: p.default for p in meta.params}
+        if op in _FAST_PREVIEW_PARAMS:
+            params.update(_FAST_PREVIEW_PARAMS[op])
+        if for_anim and op in _ANIM_PREVIEW_OVERRIDES:
+            params.update(_ANIM_PREVIEW_OVERRIDES[op])
+
+        sp = NodeSpec(id="prev", op=op, inputs=inputs, params=params)
+        res = g._eval_node(sp, vals, phase=float(phase))
+        return _to_data_url(res, sz)
+    except Exception:
+        return _fallback_swatch(meta.category, sz)
 
 
 def generate_node_preview_catalog(size: int = 40) -> dict[str, str]:
@@ -205,75 +319,34 @@ def generate_node_preview_catalog(size: int = 40) -> dict[str, str]:
         if sz in _PREVIEW_CACHE:
             return dict(_PREVIEW_CACHE[sz])
 
-    refs = _build_reference_inputs(sz)
-    mesh_ctx = _build_mini_mesh_ctx(sz)
+    refs, mesh_ctx = _get_refs_and_mesh(sz)
     out: dict[str, str] = {}
-
-    for op, meta in NODE_CATALOG.items():
-        try:
-            g = TexGraph(sz, sz, tileable=True, seed=42, name=f"prev_{op}", mesh_context=mesh_ctx)
-            # Pre-seed synthetic input values directly into evaluation dict
-            vals: dict[str, Any] = {}
-            inputs: dict[str, str] = {}
-            for idx, port in enumerate(meta.inputs):
-                pname = port.name
-                if port.optional and pname not in ("mask", "base", "top", "layer"):
-                    continue
-                if port.optional and op in ("region_composite", "material_blend", "material_height_blend", "blend") and pname == "mask":
-                    vals["_in_mask"] = refs["mask"]
-                    inputs[pname] = "_in_mask"
-                    continue
-                if port.optional and pname == "base" and op == "block_edge_transition":
-                    continue
-                if port.optional:
-                    continue
-
-                vid = f"_in_{idx}_{pname}"
-                dt = port.dtype
-                if pname in ("local_u", "span_u"):
-                    vals[vid] = refs["u"]
-                elif pname in ("local_v", "trail_v"):
-                    vals[vid] = refs["v"]
-                elif pname == "side_sign":
-                    vals[vid] = refs["side_sign"]
-                elif dt == "MATERIAL":
-                    vals[vid] = refs["material_top"] if pname in ("top", "layer") else refs["material"]
-                elif dt == "NORMAL":
-                    vals[vid] = refs["normal"]
-                elif dt == "MASK":
-                    vals[vid] = refs["mask"]
-                elif dt == "RGBA":
-                    if op in _SPRITE_INPUT_OPS:
-                        vals[vid] = refs["sprite_rgba"]
-                    elif pname in ("top", "b", "layer", "color"):
-                        vals[vid] = refs["alt_rgba"]
-                    else:
-                        vals[vid] = refs["rgba"]
-                elif dt == "ANY":
-                    if op in _SPRITE_INPUT_OPS:
-                        vals[vid] = refs["sprite_rgba"]
-                    elif pname in ("top", "b"):
-                        vals[vid] = refs["alt_rgba"]
-                    else:
-                        vals[vid] = refs["rgba"]
-                else:
-                    # SCALAR / HEIGHT
-                    vals[vid] = refs["alt_scalar"] if pname in ("b", "disp_y_map") else refs["height"]
-                inputs[pname] = vid
-
-            params = {p.name: p.default for p in meta.params}
-            if op in _FAST_PREVIEW_PARAMS:
-                params.update(_FAST_PREVIEW_PARAMS[op])
-
-            nid = g.add(op, id="target", inputs=inputs, validate_refs=False, **params)
-            res = g._eval_node(g.nodes[nid], vals, 0.25)
-            out[op] = _to_data_url(res, sz)
-        except Exception:
-            out[op] = _fallback_swatch(meta.category, sz)
+    for op in NODE_CATALOG:
+        out[op] = _eval_single_node_preview(op, sz, refs, mesh_ctx, phase=0.20, for_anim=False)
 
     with _CACHE_LOCK:
         _PREVIEW_CACHE[sz] = dict(out)
     return out
 
 
-__all__ = ["generate_node_preview_catalog"]
+def generate_node_anim_preview(op: str, *, size: int = 48, frames: int = 8) -> list[str]:
+    """Generate (and memoize) an N-frame live looping animation preview for any dynamic TexGraph node."""
+    if op not in NODE_CATALOG:
+        raise ValueError(f"Unknown node op: {op!r}")
+    sz = max(24, min(64, int(size)))
+    nf = max(2, min(16, int(frames)))
+    key = (op, sz, nf)
+    with _CACHE_LOCK:
+        hit = _ANIM_CACHE.get(key)
+        if hit is not None:
+            return list(hit)
+
+    refs, mesh_ctx = _get_refs_and_mesh(sz)
+    out_frames: list[str] = []
+    for i in range(nf):
+        ph = float(i) / float(nf)
+        out_frames.append(_eval_single_node_preview(op, sz, refs, mesh_ctx, phase=ph, for_anim=True))
+
+    with _CACHE_LOCK:
+        _ANIM_CACHE[key] = list(out_frames)
+    return out_frames

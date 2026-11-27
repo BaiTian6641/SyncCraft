@@ -22,8 +22,12 @@
     zoom2d: 1.0,
     phase: 0.0,
     animFrames: 8,
+    animFps: 8,
+    animPingPong: false,
+    animDir: 1,
     animPlaying: false,
     animTimer: null,
+    animBusy: false,
     lightAz: -38,
     lightEl: 52,
     lightingPreset: 'studio_hero',
@@ -36,6 +40,10 @@
     paletteCategory: 'ALL',
     libViewMode: 'grid',
     nodePreviews: {},
+    timeAwareOps: new Set(),
+    animPreviews: {},
+    palAnimTimer: null,
+    palAnimOp: null,
     img2d: null,
     img2dBuf: null,
     lastDiagnosis: null,
@@ -95,6 +103,12 @@
         include_thumbs: opts.includeThumbs !== false,
         include_qa: opts.includeQa !== false,
       });
+      if (state.evalData && (!ev.thumbs || !Object.keys(ev.thumbs).length)) {
+        ev.thumbs = state.evalData.thumbs || {};
+      }
+      if (state.evalData && !ev.qa && state.evalData.qa) {
+        ev.qa = state.evalData.qa;
+      }
       state.evalData = ev;
       updatePerfAndQaBadges();
       updateViewportTextures();
@@ -135,6 +149,10 @@
     $('btnUndo').disabled = !st.undo_depth;
     $('btnRedo').disabled = !st.redo_depth;
     $('btnTileable').classList.toggle('active', !!rec.tileable);
+    const seedInp = $('graphSeedInput');
+    if (seedInp && document.activeElement !== seedInp) {
+      seedInp.value = String(rec.seed != null ? rec.seed : 42);
+    }
     const resStr = String(rec.width);
     const resSel = $('resSelect');
     const meshResBadge = $('meshResBadge');
@@ -345,14 +363,36 @@
     if (!node) return;
     const meta = state.opMap[node.op] || { op: node.op, category: 'Custom', description: '', params: [], inputs: [], outputs: [] };
 
-    // Node Banner
+    // Node Banner + Commercial Quick-Action Toolbar
     const banner = document.createElement('div');
     banner.className = 'insp-node-banner';
+    const hasSeedParam = (meta.params || []).some((p) => p.name === 'seed' || p.widget === 'seed');
+    const animTag = meta.time_aware ? '<span class="pill-badge warn" style="margin-left:4px;font-size:9px;">▶ ANIM</span>' : '';
     banner.innerHTML = `
-      <h3><span>${node.id}</span><span class="brand-sub">${node.op}</span></h3>
+      <h3><span>${node.id}${animTag}</span><span class="brand-sub">${node.op}</span></h3>
       <p>${meta.description || meta.category}</p>
+      <div class="insp-action-bar">
+        <button class="btn sm" id="inspBtnInspect" title="Preview this node directly in Viewport">👁 Inspect</button>
+        <button class="btn sm" id="inspBtnDup" title="Duplicate Node (Ctrl/Cmd+D)">⧉ Dup</button>
+        ${hasSeedParam ? '<button class="btn sm" id="inspBtnRandSeed" title="Randomize Node Seed">🎲 Seed</button>' : ''}
+        <button class="btn sm${node.bypassed ? ' active' : ''}" id="inspBtnBypass" title="Bypass / Mute Node (B)">B</button>
+        <button class="btn sm danger-hover" id="inspBtnDelete" title="Delete Node (Del)">✕ Del</button>
+      </div>
     `;
     root.appendChild(banner);
+    banner.querySelector('#inspBtnInspect').onclick = () => {
+      state.channel = 'selected';
+      $('channelSelect').value = 'selected';
+      runEvaluate({ includeThumbs: false, includeQa: false });
+      showToast(`Inspecting '${node.id}' in viewport`, 'ok');
+    };
+    banner.querySelector('#inspBtnDup').onclick = () => mutate({ action: 'duplicate_nodes', ids: [node.id] }, { immediateEval: true });
+    const rsBtn = banner.querySelector('#inspBtnRandSeed');
+    if (rsBtn) {
+      rsBtn.onclick = () => mutate({ action: 'randomize_seed', node_id: node.id }, { immediateEval: true });
+    }
+    banner.querySelector('#inspBtnBypass').onclick = () => mutate({ action: 'toggle_bypass', node_id: node.id }, { immediateEval: true });
+    banner.querySelector('#inspBtnDelete').onclick = () => mutate({ action: 'delete_nodes', ids: [node.id] }, { immediateEval: true });
 
     // Group parameters by Schema v4.0 `group`
     const groups = new Map();
@@ -524,6 +564,52 @@
           wrap.appendChild(bar);
           wrap.appendChild(sw);
           ctrl.appendChild(wrap);
+        } else if (p.widget === 'seed' || p.name === 'seed') {
+          const sVal = Math.max(0, Math.round(Number(curVal != null ? curVal : (state.serverState.recipe.seed || 42))));
+          const sWrap = document.createElement('div');
+          sWrap.className = 'seed-control-row';
+          const rng = document.createElement('input');
+          rng.type = 'range';
+          rng.min = '0';
+          rng.max = '9999';
+          rng.step = '1';
+          rng.value = String(Math.min(9999, sVal));
+          const num = document.createElement('input');
+          num.type = 'number';
+          num.className = 'num-input';
+          num.min = '0';
+          num.max = '99999';
+          num.step = '1';
+          num.value = String(sVal);
+          const dice = document.createElement('button');
+          dice.className = 'btn-dice';
+          dice.textContent = '🎲';
+          dice.title = 'Randomize Seed';
+          rng.oninput = () => {
+            const v = parseInt(rng.value, 10) || 0;
+            num.value = String(v);
+            mutate({ action: 'set_param', node_id: node.id, param: p.name, value: v, undoable: false }, { delayMs: 55 });
+          };
+          rng.onchange = () => {
+            const v = parseInt(rng.value, 10) || 0;
+            mutate({ action: 'set_param', node_id: node.id, param: p.name, value: v, undoable: true }, { immediateEval: true });
+          };
+          num.onchange = () => {
+            const v = Math.max(0, Math.min(99999, parseInt(num.value, 10) || 0));
+            rng.value = String(Math.min(9999, v));
+            mutate({ action: 'set_param', node_id: node.id, param: p.name, value: v, undoable: true }, { immediateEval: true });
+          };
+          dice.onclick = () => {
+            const rnd = Math.floor(1 + Math.random() * 99998);
+            num.value = String(rnd);
+            rng.value = String(Math.min(9999, rnd));
+            mutate({ action: 'set_param', node_id: node.id, param: p.name, value: rnd, undoable: true }, { immediateEval: true });
+            showToast(`${node.id} seed -> ${rnd}`, 'ok');
+          };
+          sWrap.appendChild(rng);
+          sWrap.appendChild(num);
+          sWrap.appendChild(dice);
+          ctrl.appendChild(sWrap);
         } else if (p.widget === 'slider' || p.widget === 'int' || typeof curVal === 'number') {
           const isInt = p.widget === 'int';
           const numVal = Number(curVal != null ? curVal : 0);
@@ -574,6 +660,39 @@
             mutate({ action: 'set_param', node_id: node.id, param: p.name, value: val });
           };
           ctrl.appendChild(inp);
+
+          // Clickable 3D Model Part / Zone Quick-Picker for `part_pattern`!
+          if (p.name === 'part_pattern' && state.serverState && state.serverState.mesh_parts) {
+            const mp = state.serverState.mesh_parts;
+            const chips = document.createElement('div');
+            chips.className = 'part-chips-wrap';
+            const curStr = String(curVal || '');
+            const mkChip = (label, pat, extraCls) => {
+              const b = document.createElement('button');
+              b.type = 'button';
+              b.className = 'part-chip' + (extraCls ? ' ' + extraCls : '') + (curStr === pat ? ' active' : '');
+              b.textContent = label;
+              b.title = pat ? `Click: select '${pat}' · Shift+Click: append |${pat}` : 'Select entire model';
+              b.onclick = (ev) => {
+                let next = pat;
+                if (ev.shiftKey && curStr && pat) {
+                  const parts = curStr.split('|').filter(Boolean);
+                  if (!parts.includes(pat)) parts.push(pat);
+                  next = parts.join('|');
+                }
+                inp.value = next;
+                mutate({ action: 'set_param', node_id: node.id, param: p.name, value: next }, { immediateEval: true });
+              };
+              chips.appendChild(b);
+            };
+            mkChip('All', '', 'zone');
+            for (const z of (mp.zones || [])) mkChip(`zone:${z}`, z, 'zone');
+            for (const elName of (mp.elements || []).slice(0, 26)) mkChip(elName, elName, '');
+            row.appendChild(ctrl);
+            row.appendChild(chips);
+            body.appendChild(row);
+            continue;
+          }
         }
 
         row.appendChild(ctrl);
@@ -617,14 +736,16 @@
     'Gradients & Paths': '#818cf8',
     'Noise': '#38bdf8',
     'Geometric Patterns': '#34d399',
+    '3D Model & UV Masks': '#14b8a6',
+    '3D Mesh Baker': '#06b6d4',
+    'Materials — Metal (PBR)': '#eab308',
+    'Materials — Dielectric & Glass (PBR)': '#38bdf8',
     'Painterly & Bio': '#2dd4bf',
     'Region & Per-UV Pixel Composer': '#c084fc',
     'Pixel Composer FX': '#fb923c',
     'Material Bus (PBR)': '#f59e0b',
-    'Character & Gear PBR': '#a78bfa',
+    'Character & Gear (PBR)': '#a78bfa',
     'World Blocks (PBR)': '#4ade80',
-    'Bio & Creature PBR': '#10b981',
-    'Seamless & Precomputed PBR': '#22d3ee',
     'PBR & Normal': '#60a5fa',
     'Color & Grading': '#f472b6',
     'Denoise & Polish': '#a3e635',
@@ -632,12 +753,66 @@
     'Filter & SDF': '#67e8f9',
     'Simulation': '#fb7185',
     'Animation': '#f43f5e',
-    '3D Mesh & Masks': '#94a3b8',
-    'Compositing & Math': '#94a3b8',
+    'Compositing': '#94a3b8',
+    'Sprites & Masks': '#e879f9',
+    'Scatter & Layout': '#f97316',
   };
 
   function getNodePreviewSrc(op) {
     return (state.nodePreviews && state.nodePreviews[op]) || '';
+  }
+
+  function isOpAnimated(op) {
+    if (state.timeAwareOps && state.timeAwareOps.has(op)) return true;
+    return !!(state.opMap[op] && state.opMap[op].time_aware);
+  }
+
+  function stopPaletteAnimLoop() {
+    if (state.palAnimTimer) {
+      clearInterval(state.palAnimTimer);
+      state.palAnimTimer = null;
+    }
+    state.palAnimOp = null;
+  }
+
+  function startPaletteAnimLoop(op) {
+    stopPaletteAnimLoop();
+    const badge = $('palPrevAnimBadge');
+    const img = $('palPrevImg');
+    if (!isOpAnimated(op)) {
+      if (badge) badge.style.display = 'none';
+      return;
+    }
+    state.palAnimOp = op;
+    if (badge) {
+      badge.style.display = 'inline-block';
+      badge.textContent = '▶ LIVE ANIM';
+    }
+    const playFrames = (frames) => {
+      if (state.palAnimOp !== op || !frames || !frames.length) return;
+      let fIdx = 0;
+      if (img) img.src = frames[0];
+      state.palAnimTimer = setInterval(() => {
+        if (state.palAnimOp !== op || !$('paletteModal').classList.contains('open')) {
+          stopPaletteAnimLoop();
+          return;
+        }
+        fIdx = (fIdx + 1) % frames.length;
+        if (img) img.src = frames[fIdx];
+      }, 150);
+    };
+    if (state.animPreviews[op]) {
+      playFrames(state.animPreviews[op]);
+    } else {
+      apiGet(`/api/schema/preview_anim?op=${encodeURIComponent(op)}&size=48&frames=8`)
+        .then((res) => {
+          if (res && Array.isArray(res.images) && res.images.length) {
+            state.animPreviews[op] = res.images;
+            playFrames(res.images);
+          }
+        })
+        .catch(() => {});
+    }
   }
 
   function renderNodeLibrary() {
@@ -667,7 +842,7 @@
       head.innerHTML = `<span style="display:inline-flex;align-items:center;gap:5px;"><span class="cat-chip-dot" style="background:${catColor};"></span>${cat}</span><span style="color:var(--text-muted);font-family:var(--font-mono);">${filtered.length}</span>`;
       const list = document.createElement('div');
       list.className = 'lib-items' + (isGrid ? '' : ' list-mode');
-      const defaultOpen = !!q || cat.includes('Region') || cat === 'Noise' || cat === 'Geometric Patterns' || cat.includes('Pixel Composer');
+      const defaultOpen = !!q || cat === 'Noise' || cat === '3D Model & UV Masks' || cat === 'Materials — Metal (PBR)' || cat === 'Materials — Dielectric & Glass (PBR)' || cat.includes('Region');
       list.style.display = defaultOpen ? (isGrid ? 'grid' : 'flex') : 'none';
       head.onclick = () => { list.style.display = list.style.display === 'none' ? (isGrid ? 'grid' : 'flex') : 'none'; };
 
@@ -679,15 +854,16 @@
         const outType = n.output_type || (n.outputs && n.outputs[0] && (n.outputs[0].dtype || n.outputs[0].port_type)) || 'RGBA';
         const col = (state.schemaPayload.schema.port_colors || {})[outType] || '#94a3b8';
         const prevSrc = getNodePreviewSrc(n.op);
+        const isAnim = isOpAnimated(n.op);
         if (isGrid) {
           it.innerHTML = `
-            <div class="lib-swatch">${prevSrc ? `<img src="${prevSrc}" alt="${n.op}" loading="lazy" />` : ''}</div>
+            <div class="lib-swatch">${prevSrc ? `<img src="${prevSrc}" alt="${n.op}" loading="lazy" />` : ''}${isAnim ? '<span class="anim-pill-mini">▶</span>' : ''}</div>
             <div class="lib-item-name">${n.op}</div>
           `;
         } else {
           it.innerHTML = `
             <div class="lib-swatch-sm">${prevSrc ? `<img src="${prevSrc}" alt="${n.op}" loading="lazy" />` : ''}</div>
-            <span class="lib-item-name">${n.op}</span>
+            <span class="lib-item-name">${isAnim ? '<span class="tg-anim-dot">▶</span>' : ''}${n.op}</span>
             <span class="lib-dot" style="background:${col};" title="${outType}"></span>
           `;
         }
@@ -716,6 +892,8 @@
     const portsEl = $('palPrevPorts');
     const addBtn = $('btnPalAddSelected');
     if (!item) {
+      stopPaletteAnimLoop();
+      if ($('palPrevAnimBadge')) $('palPrevAnimBadge').style.display = 'none';
       if (img) img.src = '';
       if (title) title.textContent = 'No matching nodes';
       if (opEl) opEl.textContent = '';
@@ -728,6 +906,7 @@
     const meta = state.opMap[item.op] || item;
     const pColors = (state.schemaPayload && state.schemaPayload.schema.port_colors) || {};
     if (img) img.src = getNodePreviewSrc(item.op);
+    startPaletteAnimLoop(item.op);
     if (title) title.textContent = meta.display_name || item.op;
     if (opEl) opEl.textContent = item.op;
     if (catEl) catEl.textContent = item.cat;
@@ -772,7 +951,13 @@
     };
     mk('ALL', 'All Nodes', null);
     for (const c of cats) {
-      const shortLbl = c.replace('Region & Per-UV Pixel Composer', 'Region / Per-UV').replace('Geometric Patterns', 'Patterns').replace('Material Bus (PBR)', 'Material Bus');
+      const shortLbl = c
+        .replace('Region & Per-UV Pixel Composer', 'Region / Per-UV')
+        .replace('Geometric Patterns', 'Patterns')
+        .replace('Material Bus (PBR)', 'Material Bus')
+        .replace('Materials — Metal (PBR)', 'Metals (PBR)')
+        .replace('Materials — Dielectric & Glass (PBR)', 'Glass & Plastic')
+        .replace('3D Model & UV Masks', '3D & UV Masks');
       mk(c, shortLbl, LIB_CAT_COLORS[c] || '#94a3b8');
     }
   }
@@ -786,10 +971,10 @@
     $('paletteModal').classList.add('open');
     const inp = $('paletteInput');
     inp.value = '';
-    const nCount = (state.schemaPayload && state.schemaPayload.schema && state.schemaPayload.schema.node_count) || 149;
+    const nCount = (state.schemaPayload && state.schemaPayload.schema && state.schemaPayload.schema.node_count) || 210;
     inp.placeholder = state.paletteFilterType
       ? `Add node compatible with ${state.paletteFilterType} output...`
-      : `Search ${nCount} TexGraph nodes by name, noise, material or effect...`;
+      : `Search ${nCount} TexGraph nodes by name, noise, brass, crystal, mask or anim...`;
     const cBadge = $('paletteCompatBadge');
     if (cBadge) {
       if (state.paletteFilterType) {
@@ -805,6 +990,7 @@
   }
 
   function closePalette() {
+    stopPaletteAnimLoop();
     $('paletteModal').classList.remove('open');
     state.paletteFilterType = null;
     state.paletteConnectFrom = null;
@@ -855,6 +1041,7 @@
     state.paletteItems.forEach((it, idx) => {
       const prevSrc = getNodePreviewSrc(it.op);
       const accent = LIB_CAT_COLORS[it.cat] || '#64748b';
+      const isAnim = isOpAnimated(it.op);
       const el = document.createElement('div');
       if (isGrid) {
         el.className = 'palette-card' + (idx === state.paletteIdx ? ' sel' : '');
@@ -862,6 +1049,7 @@
         el.innerHTML = `
           <div class="palette-card-thumb">
             ${prevSrc ? `<img src="${prevSrc}" alt="${it.op}" loading="lazy" />` : ''}
+            ${isAnim ? '<span class="anim-pill-mini">▶ ANIM</span>' : ''}
             <span class="palette-port-pill" style="color:${pColors[it.output_type] || '#cbd5e1'};">${it.output_type}</span>
           </div>
           <div class="palette-card-title" title="${it.display_name}">${it.display_name}</div>
@@ -872,7 +1060,7 @@
         el.innerHTML = `
           <div class="palette-list-thumb">${prevSrc ? `<img src="${prevSrc}" alt="${it.op}" loading="lazy" />` : ''}</div>
           <div class="palette-item-main">
-            <span class="palette-item-name">${it.display_name} <span style="font-family:var(--font-mono);font-size:10px;color:var(--text-muted);font-weight:400;">${it.op}</span></span>
+            <span class="palette-item-name">${isAnim ? '<span class="tg-anim-dot">▶</span>' : ''}${it.display_name} <span style="font-family:var(--font-mono);font-size:10px;color:var(--text-muted);font-weight:400;">${it.op}</span></span>
             <span class="palette-item-desc">${it.desc}</span>
           </div>
           <span class="palette-item-cat">${it.cat}</span>
@@ -1373,28 +1561,94 @@
   }
 
   // ------------------------------------------------------------------------
-  // Animation Playback Controls
+  // Floating Right-Click Context Menus (Nodes & Graph Canvas)
   // ------------------------------------------------------------------------
-  function setPhase(ph) {
+  function hideContextMenu() {
+    const m = $('graphContextMenu');
+    if (m) m.style.display = 'none';
+  }
+
+  function showContextMenu(x, y, title, items) {
+    const m = $('graphContextMenu');
+    if (!m) return;
+    m.innerHTML = '';
+    if (title) {
+      const t = document.createElement('div');
+      t.className = 'ctx-menu-title';
+      t.textContent = title;
+      m.appendChild(t);
+    }
+    for (const it of items) {
+      if (it.sep) {
+        const s = document.createElement('div');
+        s.className = 'ctx-menu-sep';
+        m.appendChild(s);
+        continue;
+      }
+      const b = document.createElement('button');
+      b.className = 'ctx-menu-item' + (it.danger ? ' danger' : '');
+      b.innerHTML = `<span>${it.label}</span>${it.kbd ? `<span class="ctx-kbd">${it.kbd}</span>` : ''}`;
+      b.onclick = () => {
+        hideContextMenu();
+        it.action();
+      };
+      m.appendChild(b);
+    }
+    m.style.display = 'block';
+    const mw = m.offsetWidth || 200;
+    const mh = m.offsetHeight || 220;
+    const left = Math.min(window.innerWidth - mw - 10, Math.max(8, x));
+    const top = Math.min(window.innerHeight - mh - 10, Math.max(8, y));
+    m.style.left = `${left}px`;
+    m.style.top = `${top}px`;
+  }
+
+  // ------------------------------------------------------------------------
+  // Animation Playback Controls (Sequential No-Stutter Live Transport)
+  // ------------------------------------------------------------------------
+  function setPhase(ph, immediate) {
     state.phase = ((ph % 1) + 1) % 1;
     $('phaseSlider').value = state.phase.toFixed(2);
     $('phaseLabel').textContent = state.phase.toFixed(2);
     const fIdx = Math.floor(state.phase * state.animFrames);
     $('frameReadout').textContent = `F${fIdx}/${state.animFrames} · φ${state.phase.toFixed(2)}`;
     renderTimelineDrivers();
+    if (immediate) return runEvaluate({ includeThumbs: false, includeQa: false });
     scheduleEvaluate(20);
+    return Promise.resolve();
+  }
+
+  function stopAnimLoop() {
+    state.animPlaying = false;
+    $('btnPlayAnim').textContent = '▶ Play';
+    $('btnPlayAnim').classList.remove('amber');
+    if (state.animTimer) { clearTimeout(state.animTimer); state.animTimer = null; }
   }
 
   function togglePlayAnim() {
-    state.animPlaying = !state.animPlaying;
-    $('btnPlayAnim').textContent = state.animPlaying ? '⏸ Pause' : '▶ Play';
-    $('btnPlayAnim').classList.toggle('amber', state.animPlaying);
-    if (state.animTimer) { clearInterval(state.animTimer); state.animTimer = null; }
     if (state.animPlaying) {
-      state.animTimer = setInterval(() => {
-        setPhase(state.phase + 1.0 / Math.max(2, state.animFrames));
-      }, 260);
+      stopAnimLoop();
+      return;
     }
+    state.animPlaying = true;
+    $('btnPlayAnim').textContent = '⏸ Pause';
+    $('btnPlayAnim').classList.add('amber');
+    const tick = async () => {
+      if (!state.animPlaying) return;
+      const step = 1.0 / Math.max(2, state.animFrames);
+      let nextPh = state.phase + step * state.animDir;
+      if (state.animPingPong) {
+        if (nextPh >= 1.0 - 1e-4) { state.animDir = -1; nextPh = Math.max(0.0, 1.0 - step); }
+        else if (nextPh <= 1e-4) { state.animDir = 1; nextPh = 0.0; }
+      }
+      const t0 = performance.now();
+      await setPhase(nextPh, true);
+      if (!state.animPlaying) return;
+      const targetMs = Math.max(40, Math.round(1000 / Math.max(2, state.animFps)));
+      const waitMs = Math.max(16, targetMs - (performance.now() - t0));
+      state.animTimer = setTimeout(tick, waitMs);
+    };
+    tick();
   }
 
   function triggerDownload(filename, textContent) {
@@ -1440,10 +1694,43 @@
           spawnPos: [Math.round(wPos.x), Math.round(wPos.y)],
         }),
         onOpenAddAt: (wPos) => openPalette({ spawnPos: [Math.round(wPos.x), Math.round(wPos.y)] }),
+        onDeleteNode: (nid) => {
+          mutate({ action: 'delete_nodes', ids: [nid] }, { immediateEval: true });
+          showToast(`Deleted node '${nid}'`, 'ok');
+        },
+        onDuplicateNode: (nid) => mutate({ action: 'duplicate_nodes', ids: [nid] }, { immediateEval: true }),
+        onNodeContextMenu: (nid, cx, cy) => {
+          const nObj = ((state.serverState && state.serverState.recipe && state.serverState.recipe.nodes) || []).find((q) => q.id === nid);
+          const meta = nObj ? state.opMap[nObj.op] : null;
+          const items = [
+            { label: '👁 Inspect in Viewport', kbd: 'Dbl-Clk', action: () => { state.channel = 'selected'; $('channelSelect').value = 'selected'; runEvaluate({ includeThumbs: false, includeQa: false }); } },
+            { label: '★ Set Final Graph Output', action: () => mutate({ action: 'set_output', node_id: nid }, { immediateEval: true }) },
+            { sep: true },
+            { label: '⧉ Duplicate Node', kbd: '⌘D', action: () => mutate({ action: 'duplicate_nodes', ids: [nid] }, { immediateEval: true }) },
+            { label: '🎲 Randomize Seed', action: () => mutate({ action: 'randomize_seed', node_id: nid }, { immediateEval: true }) },
+            { label: nObj && nObj.bypassed ? '✓ Enable Node' : 'B Bypass / Mute', kbd: 'B', action: () => mutate({ action: 'toggle_bypass', node_id: nid }, { immediateEval: true }) },
+            { label: '✂ Disconnect All Wires', action: () => mutate({ action: 'disconnect_all', node_id: nid }, { immediateEval: true }) },
+            { sep: true },
+            { label: '✕ Delete Node', kbd: 'Del', danger: true, action: () => { mutate({ action: 'delete_nodes', ids: [nid] }, { immediateEval: true }); showToast(`Deleted '${nid}'`, 'ok'); } },
+          ];
+          showContextMenu(cx, cy, `${nid}${meta ? ` (${meta.op})` : ''}`, items);
+        },
+        onCanvasContextMenu: (cx, cy, wPos) => {
+          showContextMenu(cx, cy, 'Node Graph Canvas', [
+            { label: '+ Add Node Here...', kbd: 'Tab', action: () => openPalette({ spawnPos: [Math.round(wPos.x), Math.round(wPos.y)] }) },
+            { sep: true },
+            { label: '⊞ Auto-Layout Graph', kbd: 'L', action: () => mutate({ action: 'auto_layout' }, { skipEval: true, fitGraph: true }) },
+            { label: '⌖ Fit All Nodes', kbd: 'F', action: () => graphCanvas.fitToView() },
+            { label: '🎲 Randomize Master Seed', action: () => mutate({ action: 'randomize_seed' }, { immediateEval: true }) },
+          ]);
+        },
         onToggleBypass: (nid) => mutate({ action: 'toggle_bypass', node_id: nid }, { immediateEval: true }),
         onToggleCollapse: (nid) => mutate({ action: 'toggle_collapse', node_id: nid }, { skipEval: true }),
         onSetOutput: (nid) => mutate({ action: 'set_output', node_id: nid }, { immediateEval: true }),
       },
+    });
+    window.addEventListener('pointerdown', (e) => {
+      if (!e.target.closest('#graphContextMenu')) hideContextMenu();
     });
 
     // Focus outline tracking (Pixel Composer convention!)
@@ -1464,11 +1751,12 @@
     ]);
     state.schemaPayload = schemaPayload;
     state.nodePreviews = (prevPayload && prevPayload.previews) || {};
+    state.timeAwareOps = new Set((prevPayload && prevPayload.time_aware_ops) || []);
     for (const [cat, nodes] of Object.entries(schemaPayload.schema.nodes_by_category || {})) {
       for (const n of nodes) state.opMap[n.op] = Object.assign({ category: cat }, n);
     }
     graphCanvas.setSchema(schemaPayload.schema);
-    $('versionBadge').textContent = `v12 · ${schemaPayload.schema.node_count} nodes`;
+    $('versionBadge').textContent = `v13 · ${schemaPayload.schema.node_count} nodes`;
 
     // Populate Project / Preset Dropdown
     const pSel = $('projectSelect');
@@ -1536,6 +1824,19 @@
       const cur = !!(state.serverState && state.serverState.recipe && state.serverState.recipe.tileable);
       mutate({ action: 'set_graph_settings', tileable: !cur }, { immediateEval: true });
     };
+    if ($('graphSeedInput')) {
+      $('graphSeedInput').onchange = (e) => {
+        const s = Math.max(0, Math.min(99999, parseInt(e.target.value, 10) || 0));
+        mutate({ action: 'set_graph_settings', seed: s }, { immediateEval: true });
+      };
+    }
+    if ($('btnRandGraphSeed')) {
+      $('btnRandGraphSeed').onclick = () => {
+        const rnd = Math.floor(1 + Math.random() * 99998);
+        mutate({ action: 'randomize_seed', seed: rnd }, { immediateEval: true });
+        showToast(`Master Graph Seed -> ${rnd}`, 'ok');
+      };
+    }
     $('btnUndo').onclick = () => mutate({ action: 'undo' }, { immediateEval: true });
     $('btnRedo').onclick = () => mutate({ action: 'redo' }, { immediateEval: true });
     $('layoutPresetSelect').onchange = (e) => applyLayoutPreset(e.target.value);
@@ -1614,6 +1915,7 @@
     if ($('btnGraphZoomOut')) $('btnGraphZoomOut').onclick = () => graphCanvas.zoomBy(0.82);
     if ($('btnGraphZoomFit')) $('btnGraphZoomFit').onclick = () => graphCanvas.fitToView();
     $('btnAutoLayout').onclick = () => mutate({ action: 'auto_layout' }, { skipEval: true, fitGraph: true });
+    if ($('btnDupSel')) $('btnDupSel').onclick = () => { if (state.selectedNodeId) mutate({ action: 'duplicate_nodes', ids: [state.selectedNodeId] }, { immediateEval: true }); };
     $('btnFitGraph').onclick = () => graphCanvas.fitToView();
     $('btnBypassSel').onclick = () => { if (state.selectedNodeId) mutate({ action: 'toggle_bypass', node_id: state.selectedNodeId }, { immediateEval: true }); };
     $('btnDeleteSel').onclick = () => { if (state.selectedNodeId) mutate({ action: 'delete_nodes', ids: [state.selectedNodeId] }, { immediateEval: true }); };
@@ -1649,6 +1951,18 @@
     $('btnPlayAnim').onclick = togglePlayAnim;
     $('btnStepPrev').onclick = () => setPhase(state.phase - 1.0 / Math.max(2, state.animFrames));
     $('btnStepNext').onclick = () => setPhase(state.phase + 1.0 / Math.max(2, state.animFrames));
+    if ($('btnAnimPingPong')) {
+      $('btnAnimPingPong').onclick = () => {
+        state.animPingPong = !state.animPingPong;
+        $('btnAnimPingPong').classList.toggle('active', state.animPingPong);
+        $('btnAnimPingPong').title = state.animPingPong ? 'Mode: Ping-Pong (click for Loop)' : 'Mode: Loop (click for Ping-Pong)';
+      };
+    }
+    if ($('animFpsSelect')) {
+      $('animFpsSelect').onchange = (e) => {
+        state.animFps = Math.max(2, Math.min(30, parseInt(e.target.value, 10) || 8));
+      };
+    }
     $('animFramesInput').onchange = (e) => {
       state.animFrames = Math.max(2, Math.min(32, parseInt(e.target.value, 10) || 8));
       setPhase(state.phase);
@@ -1797,17 +2111,25 @@
         mutate({ action: e.shiftKey ? 'redo' : 'undo' }, { immediateEval: true });
         return;
       }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'd') {
+        if (inField || !state.selectedNodeId) return;
+        e.preventDefault();
+        mutate({ action: 'duplicate_nodes', ids: [state.selectedNodeId] }, { immediateEval: true });
+        return;
+      }
       if (e.key === 'Escape') {
+        hideContextMenu();
         closePalette();
         $('exportModal').classList.remove('open');
         $('meshModal').classList.remove('open');
         return;
       }
       if (inField) return;
-      if (e.key === 'Tab') { e.preventDefault(); openPalette(); }
+      if (e.key === 'Tab' || (e.shiftKey && e.key.toLowerCase() === 'a')) { e.preventDefault(); openPalette(); }
+      else if (e.key === ' ') { e.preventDefault(); togglePlayAnim(); }
       else if (e.key.toLowerCase() === 'f') { e.preventDefault(); graphCanvas.fitToView(); }
       else if (e.key.toLowerCase() === 'l') { e.preventDefault(); mutate({ action: 'auto_layout' }, { skipEval: true, fitGraph: true }); }
-      else if (e.key.toLowerCase() === 'b' && state.selectedNodeId) { e.preventDefault(); mutate({ action: 'toggle_bypass', node_id: state.selectedNodeId }, { immediateEval: true }); }
+      else if ((e.key.toLowerCase() === 'b' || e.key.toLowerCase() === 'm') && state.selectedNodeId) { e.preventDefault(); mutate({ action: 'toggle_bypass', node_id: state.selectedNodeId }, { immediateEval: true }); }
       else if ((e.key === 'Delete' || e.key === 'Backspace') && state.selectedNodeId) {
         e.preventDefault();
         mutate({ action: 'delete_nodes', ids: [state.selectedNodeId] }, { immediateEval: true });

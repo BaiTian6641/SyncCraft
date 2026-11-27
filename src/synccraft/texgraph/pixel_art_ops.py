@@ -355,7 +355,7 @@ def selout_outline(
 
     if silhouette:
         op = (alpha > 0.5).astype(np.float32)
-        p_a = np.pad(op, 1, mode=mode, constant_values=0.0)
+        p_a = np.pad(op, 1, mode="wrap") if tileable else np.pad(op, 1, mode="constant", constant_values=0.0)
         nb_min = np.minimum.reduce([p_a[:-2, 1:-1], p_a[2:, 1:-1], p_a[1:-1, :-2], p_a[1:-1, 2:]])
         sil_edge = (op > 0.5) & (nb_min < 0.5)
         edge_mask = np.where(sil_edge, 1.0, edge_mask)

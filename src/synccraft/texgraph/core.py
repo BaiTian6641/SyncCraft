@@ -104,6 +104,75 @@ from .generators_noise import (
     value_noise,
     voronoi_noise,
 )
+from .generators_noise_ext import (
+    blue_noise,
+    bubble_noise,
+    caustic_noise,
+    crystal_noise,
+    curl_flow_noise,
+    fold_marble_noise,
+    grunge_blotch,
+    plasma_wave,
+    scratch_noise,
+    simplex_noise,
+    starfield_sparkle,
+    strand_noise,
+    white_noise,
+)
+from .generators_patterns_ext import (
+    checker_tartan,
+    circuit_runes,
+    clockwork_gears,
+    crosshatch_engrave,
+    crystal_facets,
+    maze_labyrinth,
+    panel_frame_trim,
+    polka_rivets,
+    polygon_star,
+    scallop_shingles,
+    stripes_pattern,
+    weave_chainmail,
+)
+from .mesh_mask_ops import (
+    mask_3d_distance,
+    mask_combine,
+    mask_smart_crevice_dirt,
+    mask_smart_edge_wear,
+    mask_uv_box,
+    mask_uv_part,
+    mask_world_direction,
+    mask_world_position,
+)
+from .pbr_materials_library import (
+    anim_flicker_pulse,
+    anim_flow_warp,
+    anim_shimmer,
+    mat_brass,
+    mat_bronze_copper,
+    mat_ceramic_porcelain,
+    mat_chrome_titanium,
+    mat_crystal_gem,
+    mat_dragon_scales_pbr,
+    mat_glass,
+    mat_glowing_runes_pbr,
+    mat_gold_precious,
+    mat_ice_frost,
+    mat_marble_veined,
+    mat_obsidian_volcanic,
+    mat_painted_enamel,
+    mat_plastic,
+    mat_rubber_grip,
+    mat_steel_iron,
+    mat_velvet_silk,
+    material_region_apply,
+    material_split,
+    material_tweak,
+    material_weathering,
+    normal_bevel,
+    normal_from_height_multi,
+    normal_strength_op,
+    normal_to_curvature,
+)
 from .generators_painterly import (
     anatomical_muscle_scales,
     colossal_dragon_membrane,
@@ -220,6 +289,10 @@ _TIME_AWARE_OPS: frozenset[str] = frozenset(
         "radial_rings", "energy_veins", "scroll", "pulse", "sprite_mask",
         "cosine_gradient", "wave_distort", "caustic_water",
         "iterate_inline", "feedback_loop", "particle_sim", "fluid_smoke_sim", "anim_driver",
+        "simplex_noise", "bubble_noise", "caustic_noise", "curl_flow_noise",
+        "starfield_sparkle", "plasma_wave", "clockwork_gears",
+        "mat_crystal_gem", "mat_obsidian_volcanic", "mat_glowing_runes_pbr",
+        "anim_shimmer", "anim_flicker_pulse", "anim_flow_warp",
     }
 )
 
@@ -231,6 +304,13 @@ _BUS_INPUT_KEYS: dict[str, frozenset[str]] = {
     "material_grade": frozenset({"mat"}),
     "material_set_alpha": frozenset({"mat"}),
     "material_pad_islands": frozenset({"mat"}),
+    "material_split": frozenset({"mat"}),
+    "material_tweak": frozenset({"mat"}),
+    "material_region_apply": frozenset({"base", "top"}),
+    "material_weathering": frozenset({"mat"}),
+    "anim_shimmer": frozenset({"src"}),
+    "anim_flicker_pulse": frozenset({"src"}),
+    "anim_flow_warp": frozenset({"src"}),
     "paint_entity_eyes_and_parts": frozenset({"base"}),
     "bake_emissive_bounce": frozenset({"mat"}),
     "triplanar_project": frozenset({"src"}),
@@ -1621,11 +1701,24 @@ class TexGraph:
         for nid in self.node_order:
             sp = self.nodes[nid]
             is_dyn = nid in driven_ids
-            if sp.op in ("scroll", "pulse", "anim_driver", "feedback_loop", "particle_sim", "fluid_smoke_sim", "iterate_inline"):
+            if sp.op in (
+                "scroll", "pulse", "anim_driver", "feedback_loop", "particle_sim",
+                "fluid_smoke_sim", "iterate_inline", "caustic_water", "caustic_noise",
+                "curl_flow_noise", "starfield_sparkle", "plasma_wave", "clockwork_gears",
+                "mat_crystal_gem", "mat_obsidian_volcanic", "mat_glowing_runes_pbr",
+                "anim_shimmer", "anim_flicker_pulse", "anim_flow_warp",
+            ):
                 is_dyn = True
             elif sp.op in _TIME_AWARE_OPS:
                 p = sp.params
-                if abs(float(p.get("loop_speed", 0.0))) > 1e-6 or abs(float(p.get("flow_speed", 0.0))) > 1e-6:
+                if (
+                    abs(float(p.get("loop_speed", 0.0))) > 1e-6
+                    or abs(float(p.get("flow_speed", 0.0))) > 1e-6
+                    or abs(float(p.get("speed", 0.0))) > 1e-6
+                    or abs(float(p.get("rotate_speed", 0.0))) > 1e-6
+                    or abs(float(p.get("twinkle_speed", 0.0))) > 1e-6
+                    or abs(float(p.get("pulse_speed", 0.0))) > 1e-6
+                ):
                     is_dyn = True
                 if sp.op == "energy_veins" and abs(float(p.get("flow_speed", 1.0))) > 1e-6:
                     is_dyn = True
@@ -1687,11 +1780,11 @@ class TexGraph:
             return v
 
         if op == "value_noise":
-            return value_noise(H, W, scale=p.get("scale", 8.0), scale_y=p.get("scale_y"), seed=seed, tileable=p.get("tileable", tile))
+            return value_noise(H, W, scale=p.get("scale", 8.0), scale_y=p.get("scale_y"), seed=seed, tileable=p.get("tileable", tile), offset_x=p.get("offset_x", 0.0), offset_y=p.get("offset_y", 0.0))
         if op == "perlin":
-            return perlin_noise(H, W, scale=p.get("scale", 8.0), scale_y=p.get("scale_y"), seed=seed, tileable=p.get("tileable", tile), phase=phase, loop_speed=p.get("loop_speed", 0.0))
+            return perlin_noise(H, W, scale=p.get("scale", 8.0), scale_y=p.get("scale_y"), seed=seed, tileable=p.get("tileable", tile), phase=phase, loop_speed=p.get("loop_speed", 0.0), offset_x=p.get("offset_x", 0.0), offset_y=p.get("offset_y", 0.0))
         if op == "fbm":
-            return fbm_noise(H, W, scale=p.get("scale", 6.0), scale_y=p.get("scale_y"), octaves=p.get("octaves", 4), persistence=p.get("persistence", 0.5), lacunarity=p.get("lacunarity", 2.0), mode=p.get("mode", "fbm"), seed=seed, tileable=p.get("tileable", tile), phase=phase, loop_speed=p.get("loop_speed", 0.0))
+            return fbm_noise(H, W, scale=p.get("scale", 6.0), scale_y=p.get("scale_y"), octaves=p.get("octaves", 4), persistence=p.get("persistence", 0.5), lacunarity=p.get("lacunarity", 2.0), mode=p.get("mode", "fbm"), seed=seed, tileable=p.get("tileable", tile), phase=phase, loop_speed=p.get("loop_speed", 0.0), offset_x=p.get("offset_x", 0.0), offset_y=p.get("offset_y", 0.0))
         if op == "voronoi":
             return voronoi_noise(H, W, scale=p.get("scale", 6.0), scale_y=p.get("scale_y"), jitter=p.get("jitter", 0.85), metric=p.get("metric", "euclidean"), output=p.get("output", "edge"), seed=seed, tileable=p.get("tileable", tile), phase=phase, loop_speed=p.get("loop_speed", 0.0))
         if op == "gabor":
@@ -2013,6 +2106,16 @@ class TexGraph:
                 seed=seed,
             )
             sub_k = op.replace("smooth_wing_", "")
+            if sub_k == "multi":
+                return {
+                    "__bus__": np.array([1.0], dtype=np.float32),
+                    "albedo": wd["rgba"],
+                    "rgba": wd["rgba"],
+                    "alpha": wd["alpha"],
+                    "rim_mask": wd["rim_mask"],
+                    "glow_mask": wd["glow_mask"],
+                    "height": wd["height"],
+                }
             if sub_k == "rim":
                 return wd["rim_mask"]
             if sub_k == "glow":
@@ -2807,6 +2910,175 @@ class TexGraph:
         if op == "region_composite":
             kw = {k: v for k, v in p.items() if k != "seed"}
             return region_composite(ins["base"], ins["layer"], self.mesh_context, mask=ins.get("mask"), **kw)
+
+        # --- TexGraph v13 Extended Noise Generators (13 ops) ---
+        if op == "simplex_noise":
+            return simplex_noise(H, W, scale=p.get("scale", 8.0), seed=seed, tileable=p.get("tileable", tile), phase=phase, loop_speed=p.get("loop_speed", 0.0), offset_x=p.get("offset_x", 0.0), offset_y=p.get("offset_y", 0.0))
+        if op == "white_noise":
+            return white_noise(H, W, density=p.get("density", 1.0), contrast=p.get("contrast", 1.0), monochrome=p.get("monochrome", True), seed=seed)
+        if op == "blue_noise":
+            return blue_noise(H, W, scale=p.get("scale", 1.0), seed=seed)
+        if op == "bubble_noise":
+            return bubble_noise(H, W, scale=p.get("scale", 6.0), jitter=p.get("jitter", 0.85), rim_width=p.get("rim_width", 0.28), style=p.get("style", "dome"), seed=seed, tileable=p.get("tileable", tile), phase=phase, loop_speed=p.get("loop_speed", 0.0))
+        if op == "crystal_noise":
+            return crystal_noise(H, W, scale=p.get("scale", 6.0), sharpness=p.get("sharpness", 2.4), facet_contrast=p.get("facet_contrast", 0.72), seed=seed, tileable=p.get("tileable", tile))
+        if op == "scratch_noise":
+            return scratch_noise(H, W, count=p.get("count", 36), length=p.get("length", 0.28), width_px=p.get("width_px", 1.0), angle_deg=p.get("angle_deg", -28.0), angle_jitter=p.get("angle_jitter", 35.0), seed=seed, tileable=p.get("tileable", tile))
+        if op == "strand_noise":
+            return strand_noise(H, W, scale=p.get("scale", 12.0), flow_strength=p.get("flow_strength", 0.14), angle_deg=p.get("angle_deg", 0.0), seed=seed, tileable=p.get("tileable", tile))
+        if op == "caustic_noise":
+            return caustic_noise(H, W, scale=p.get("scale", 5.0), sharpness=p.get("sharpness", 2.8), seed=seed, tileable=p.get("tileable", tile), phase=phase, loop_speed=p.get("loop_speed", 1.0))
+        if op == "fold_marble_noise":
+            return fold_marble_noise(H, W, scale=p.get("scale", 4.0), veins=p.get("veins", 5.0), turbulence=p.get("turbulence", 2.6), angle_deg=p.get("angle_deg", 32.0), seed=seed, tileable=p.get("tileable", tile))
+        if op == "curl_flow_noise":
+            return curl_flow_noise(H, W, scale=p.get("scale", 5.0), octaves=p.get("octaves", 3), seed=seed, tileable=p.get("tileable", tile), phase=phase, loop_speed=p.get("loop_speed", 1.0))
+        if op == "grunge_blotch":
+            return grunge_blotch(H, W, scale=p.get("scale", 5.0), contrast=p.get("contrast", 1.45), speckle=p.get("speckle", 0.28), seed=seed, tileable=p.get("tileable", tile))
+        if op == "starfield_sparkle":
+            return starfield_sparkle(H, W, density=p.get("density", 0.08), twinkle_speed=p.get("twinkle_speed", 1.0), cross_glint=p.get("cross_glint", True), seed=seed, phase=phase)
+        if op == "plasma_wave":
+            return plasma_wave(H, W, freq=p.get("freq", 3.0), distortion=p.get("distortion", 1.4), speed=p.get("speed", 1.0), seed=seed, tileable=p.get("tileable", tile), phase=phase)
+
+        # --- TexGraph v13 Extended Geometric Patterns (12 ops) ---
+        if op == "stripes_pattern":
+            return stripes_pattern(H, W, count=p.get("count", 8), angle_deg=p.get("angle_deg", 0.0), ratio=p.get("ratio", 0.5), wave_amp=p.get("wave_amp", 0.0), softness=p.get("softness", 0.08), seed=seed, tileable=p.get("tileable", tile))
+        if op == "checker_tartan":
+            return checker_tartan(H, W, cols=p.get("cols", 8), rows=p.get("rows", 8), style=p.get("style", "checker"), seed=seed)
+        if op == "polka_rivets":
+            return polka_rivets(H, W, cols=p.get("cols", 6), rows=p.get("rows", 6), radius=p.get("radius", 0.28), stagger=p.get("stagger", True), style=p.get("style", "dome"), seed=seed)
+        if op == "weave_chainmail":
+            return weave_chainmail(H, W, cols=p.get("cols", 8), rows=p.get("rows", 8), style=p.get("style", "weave"), thickness=p.get("thickness", 0.34), seed=seed)
+        if op == "clockwork_gears":
+            return clockwork_gears(H, W, teeth=p.get("teeth", 12), rings=p.get("rings", 2), style=p.get("style", "single"), rotate_speed=p.get("rotate_speed", 1.0), seed=seed, phase=phase)
+        if op == "circuit_runes":
+            return circuit_runes(H, W, scale=p.get("scale", 8), density=p.get("density", 0.55), style=p.get("style", "circuit"), seed=seed)
+        if op == "panel_frame_trim":
+            return panel_frame_trim(H, W, border_width=p.get("border_width", 0.14), corner_size=p.get("corner_size", 0.24), style=p.get("style", "bevel_frame"), rivets=p.get("rivets", True), seed=seed)
+        if op == "polygon_star":
+            return polygon_star(H, W, sides=p.get("sides", 6), inner_radius=p.get("inner_radius", 0.5), radius=p.get("radius", 0.38), rotation_deg=p.get("rotation_deg", 0.0), repeat=p.get("repeat", 1), bevel=p.get("bevel", 0.22), seed=seed)
+        if op == "crosshatch_engrave":
+            return crosshatch_engrave(H, W, freq=p.get("freq", 12.0), angle_deg=p.get("angle_deg", 45.0), cross=p.get("cross", True), weight=p.get("weight", 0.26), seed=seed, tileable=p.get("tileable", tile))
+        if op == "crystal_facets":
+            return crystal_facets(H, W, scale=p.get("scale", 5.0), facet_contrast=p.get("facet_contrast", 0.78), rim_width=p.get("rim_width", 0.14), seed=seed, tileable=p.get("tileable", tile))
+        if op == "maze_labyrinth":
+            return maze_labyrinth(H, W, cols=p.get("cols", 8), rows=p.get("rows", 8), wall_width=p.get("wall_width", 0.28), style=p.get("style", "orthogonal"), seed=seed)
+        if op == "scallop_shingles":
+            return scallop_shingles(H, W, cols=p.get("cols", 6), rows=p.get("rows", 8), overlap=p.get("overlap", 0.45), bevel=p.get("bevel", 0.18), seed=seed)
+
+        # --- TexGraph v13 3D Model, Spatial, Direction & Smart Masks (8 ops) ---
+        if op == "mask_uv_part":
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return mask_uv_part(H, W, self.mesh_context, **kw)
+        if op == "mask_world_position":
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return mask_world_position(H, W, self.mesh_context, seed=seed, **kw)
+        if op == "mask_world_direction":
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return mask_world_direction(H, W, self.mesh_context, seed=seed, **kw)
+        if op == "mask_uv_box":
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return mask_uv_box(H, W, self.mesh_context, **kw)
+        if op == "mask_3d_distance":
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return mask_3d_distance(H, W, self.mesh_context, **kw)
+        if op == "mask_smart_edge_wear":
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return mask_smart_edge_wear(H, W, self.mesh_context, seed=seed, **kw)
+        if op == "mask_smart_crevice_dirt":
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return mask_smart_crevice_dirt(H, W, self.mesh_context, seed=seed, **kw)
+        if op == "mask_combine":
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return mask_combine(ins["mask_a"], ins.get("mask_b"), **kw)
+
+        # --- TexGraph v13 Industry PBR Material Library (17 ops) ---
+        if op == "mat_brass":
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return mat_brass(H, W, seed=seed, tileable=p.get("tileable", tile), **kw)
+        if op == "mat_bronze_copper":
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return mat_bronze_copper(H, W, seed=seed, tileable=p.get("tileable", tile), **kw)
+        if op == "mat_gold_precious":
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return mat_gold_precious(H, W, seed=seed, tileable=p.get("tileable", tile), **kw)
+        if op == "mat_steel_iron":
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return mat_steel_iron(H, W, seed=seed, tileable=p.get("tileable", tile), **kw)
+        if op == "mat_chrome_titanium":
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return mat_chrome_titanium(H, W, seed=seed, tileable=p.get("tileable", tile), **kw)
+        if op == "mat_plastic":
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return mat_plastic(H, W, seed=seed, tileable=p.get("tileable", tile), **kw)
+        if op == "mat_painted_enamel":
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return mat_painted_enamel(H, W, seed=seed, tileable=p.get("tileable", tile), **kw)
+        if op == "mat_ceramic_porcelain":
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return mat_ceramic_porcelain(H, W, seed=seed, tileable=p.get("tileable", tile), **kw)
+        if op == "mat_rubber_grip":
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return mat_rubber_grip(H, W, seed=seed, tileable=p.get("tileable", tile), **kw)
+        if op == "mat_glass":
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return mat_glass(H, W, seed=seed, tileable=p.get("tileable", tile), **kw)
+        if op == "mat_crystal_gem":
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return mat_crystal_gem(H, W, seed=seed, tileable=p.get("tileable", tile), phase=phase, **kw)
+        if op == "mat_ice_frost":
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return mat_ice_frost(H, W, seed=seed, tileable=p.get("tileable", tile), **kw)
+        if op == "mat_dragon_scales_pbr":
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return mat_dragon_scales_pbr(H, W, seed=seed, tileable=p.get("tileable", tile), **kw)
+        if op == "mat_marble_veined":
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return mat_marble_veined(H, W, seed=seed, tileable=p.get("tileable", tile), **kw)
+        if op == "mat_obsidian_volcanic":
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return mat_obsidian_volcanic(H, W, seed=seed, tileable=p.get("tileable", tile), phase=phase, **kw)
+        if op == "mat_velvet_silk":
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return mat_velvet_silk(H, W, seed=seed, tileable=p.get("tileable", tile), **kw)
+        if op == "mat_glowing_runes_pbr":
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return mat_glowing_runes_pbr(H, W, seed=seed, tileable=p.get("tileable", tile), phase=phase, **kw)
+
+        # --- TexGraph v13 Material Bus Sequencer & PBR Normal Utilities (8 ops) ---
+        if op == "material_split":
+            return material_split(ins["mat"], tileable=tile)
+        if op == "material_tweak":
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return material_tweak(ins["mat"], tileable=tile, **kw)
+        if op == "material_region_apply":
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return material_region_apply(ins["base"], ins["top"], mask=ins.get("mask"), mesh_ctx=self.mesh_context, tileable=tile, **kw)
+        if op == "material_weathering":
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return material_weathering(ins["mat"], mesh_ctx=self.mesh_context, seed=seed, tileable=tile, **kw)
+        if op == "normal_from_height_multi":
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return normal_from_height_multi(ins["height"], tileable=p.get("tileable", tile), **kw)
+        if op == "normal_bevel":
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return normal_bevel(ins["src"], tileable=p.get("tileable", tile), **kw)
+        if op == "normal_to_curvature":
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return normal_to_curvature(ins["normal"], tileable=p.get("tileable", tile), **kw)
+        if op == "normal_strength":
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return normal_strength_op(ins["normal"], **kw)
+
+        # --- TexGraph v13 Dynamic Animation FX (3 ops) ---
+        if op == "anim_shimmer":
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return anim_shimmer(ins["src"], phase=phase, tileable=tile, **kw)
+        if op == "anim_flicker_pulse":
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return anim_flicker_pulse(ins["src"], seed=seed, phase=phase, tileable=tile, **kw)
+        if op == "anim_flow_warp":
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return anim_flow_warp(ins["src"], seed=seed, phase=phase, tileable=tile, **kw)
 
         raise ValueError(f"Unsupported TexGraph op: {op!r}")
 

@@ -188,11 +188,11 @@
 
     void main() {
       vec4 baseSample = texture2D(uAlbedo, vUv);
-      if (baseSample.a < 0.12) discard;
+      if (baseSample.a < 0.04) discard;
 
       if (uDirectMode == 1) {
         vec4 disp = texture2D(uDisplay, vUv);
-        gl_FragColor = vec4(disp.rgb, 1.0);
+        gl_FragColor = vec4(disp.rgb, clamp(disp.a, 0.08, 1.0));
         return;
       }
 
@@ -230,20 +230,24 @@
 
       // Key light modulated by true 3D ray-traced shadow map!
       float vis = mix(0.28, 1.0, sh);
-      vec3 direct = (kD * alb / PI + spec * 0.65) * uKeyColor * ndl * vis * 2.35;
+      vec3 direct = (kD * alb / PI + spec * 0.72) * uKeyColor * ndl * vis * 2.35;
 
-      // Hemisphere studio IBL + crisp rim fill
+      // Hemisphere studio IBL + crisp rim fill + Fresnel glass/crystal translucency sheen
       float hemi = N.y * 0.5 + 0.5;
       vec3 envDiff = mix(uGroundColor, uSkyColor, hemi) * alb * (1.0 - metal * 0.65) * ao * 0.72;
-      vec3 envSpec = mix(uGroundColor, uSkyColor, hemi) * f0 * (1.0 - rough * 0.75) * ao * 0.35;
-      float rim = pow(clamp(1.0 - ndv, 0.0, 1.0), 3.0) * max(0.2, 0.5 + 0.5 * N.y);
-      vec3 rimCol = uSkyColor * rim * 0.24 * ao;
+      vec3 envSpec = mix(uGroundColor, uSkyColor, hemi) * f0 * (1.0 - rough * 0.75) * ao * 0.38;
+      float fresnelRim = pow(clamp(1.0 - ndv, 0.0, 1.0), 3.0);
+      float rim = fresnelRim * max(0.2, 0.5 + 0.5 * N.y);
+      vec3 rimCol = uSkyColor * rim * 0.26 * ao;
+      float isTranslucent = step(baseSample.a, 0.97);
+      vec3 glassSpec = uKeyColor * fresnelRim * (1.0 - rough * 0.7) * 0.55 * isTranslucent;
 
-      vec3 col = direct + envDiff + envSpec + rimCol + pow(em.rgb, vec3(2.2)) * em.a * 1.65;
+      vec3 col = direct + envDiff + envSpec + rimCol + glassSpec + pow(em.rgb, vec3(2.2)) * em.a * 1.65;
       // Soft ACES-like filmic curve + sRGB encode
       col = (col * (2.51 * col + 0.03)) / (col * (2.43 * col + 0.59) + 0.14);
       col = pow(clamp(col, 0.0, 1.0), vec3(1.0 / 2.2));
-      gl_FragColor = vec4(col, 1.0);
+      float outAlpha = mix(1.0, clamp(baseSample.a + fresnelRim * 0.24, 0.12, 0.98), isTranslucent);
+      gl_FragColor = vec4(col, outAlpha);
     }
   `;
 
@@ -510,6 +514,8 @@
       gl.clearColor(0.095, 0.11, 0.138, 1.0);
       gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
       gl.enable(gl.DEPTH_TEST);
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
       const eye = [
         Math.cos(this.pitch) * Math.sin(this.yaw) * this.dist,

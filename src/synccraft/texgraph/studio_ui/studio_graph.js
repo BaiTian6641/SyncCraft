@@ -15,8 +15,13 @@
     'Patterns & Biology': '#34d399',
     'Painterly & Bio': '#2dd4bf',
     'Region & Per-UV Pixel Composer': '#c084fc',
+    '3D Model & UV Masks': '#14b8a6',
+    '3D Mesh Baker': '#06b6d4',
+    'Materials — Metal (PBR)': '#eab308',
+    'Materials — Dielectric & Glass (PBR)': '#38bdf8',
     'Pixel Composer FX': '#fb923c',
     'Material Bus (PBR)': '#f59e0b',
+    'Character & Gear (PBR)': '#a78bfa',
     'Character & Gear PBR': '#a78bfa',
     'World Blocks (PBR)': '#4ade80',
     'Bio & Creature PBR': '#10b981',
@@ -29,7 +34,10 @@
     'Simulation': '#fb7185',
     'Animation': '#f43f5e',
     '3D Mesh & Masks': '#94a3b8',
+    'Compositing': '#94a3b8',
     'Compositing & Math': '#94a3b8',
+    'Sprites & Masks': '#e879f9',
+    'Scatter & Layout': '#f97316',
     'Substance & Geometry': '#2dd4bf',
   };
 
@@ -242,12 +250,20 @@
           return b;
         };
 
+        acts.appendChild(mkMini('👁', 'Inspect Output in Viewport', 'eye-btn', () => this.callbacks.onSelectNode(n.id, true)));
         acts.appendChild(mkMini(n.collapsed ? '▸' : '▾', 'Collapse/Expand', '', () => this.callbacks.onToggleCollapse(n.id)));
         acts.appendChild(mkMini('B', 'Bypass Node (B)', n.bypassed ? 'on' : '', () => this.callbacks.onToggleBypass(n.id)));
         acts.appendChild(mkMini('★', 'Set Final Output', isOut ? 'out-on' : '', () => this.callbacks.onSetOutput(n.id)));
+        acts.appendChild(mkMini('✕', 'Delete Node (Del)', 'del-corner', () => {
+          if (this.callbacks.onDeleteNode) this.callbacks.onDeleteNode(n.id);
+        }));
 
         head.appendChild(title);
         head.appendChild(acts);
+        head.addEventListener('dblclick', (e) => {
+          e.stopPropagation();
+          this.callbacks.onSelectNode(n.id, true);
+        });
         el.appendChild(head);
 
         // Body: Inputs | Thumbnail | Outputs
@@ -268,7 +284,14 @@
           sock.dataset.nodeId = n.id;
           sock.dataset.port = inp.name;
           sock.dataset.portType = pType;
-          sock.title = `Input ${inp.name} (${pType})`;
+          sock.title = `Input ${inp.name} (${pType}) — Alt+Click to sever wire`;
+          sock.addEventListener('pointerdown', (e) => {
+            if (e.altKey) {
+              e.stopPropagation();
+              e.preventDefault();
+              this.callbacks.onDisconnect(n.id, inp.name);
+            }
+          });
           row.appendChild(sock);
           const lbl = document.createElement('span');
           lbl.textContent = inp.name;
@@ -331,11 +354,15 @@
         body.appendChild(outCol);
         el.appendChild(body);
 
-        // Footer with op name, resolution & timing
+        // Footer with op name, live-anim dot, & timing
         const foot = document.createElement('div');
         foot.className = 'tg-node-foot';
         const opSpan = document.createElement('span');
-        opSpan.textContent = n.op;
+        if (meta.time_aware) {
+          opSpan.innerHTML = `<span class="tg-anim-dot" title="Dynamic / Animated Node">▶</span>${n.op}`;
+        } else {
+          opSpan.textContent = n.op;
+        }
         const ms = this.evalData && this.evalData.timings_ms ? this.evalData.timings_ms[n.id] : null;
         const msSpan = document.createElement('span');
         if (ms !== null && ms !== undefined) {
@@ -345,6 +372,16 @@
         foot.appendChild(opSpan);
         foot.appendChild(msSpan);
         el.appendChild(foot);
+
+        // Right-click Node Context Menu
+        el.addEventListener('contextmenu', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          this.callbacks.onSelectNode(n.id, false);
+          if (this.callbacks.onNodeContextMenu) {
+            this.callbacks.onNodeContextMenu(n.id, e.clientX, e.clientY);
+          }
+        });
 
         // Selection + Drag handling
         el.addEventListener('pointerdown', (e) => {
@@ -564,6 +601,15 @@
         if (e.target.closest('.tg-node') || e.target.closest('.graph-minimap') || e.target.closest('.graph-zoom-hud')) return;
         const wPos = this.screenToWorld(e.clientX, e.clientY);
         if (this.callbacks.onOpenAddAt) this.callbacks.onOpenAddAt(wPos);
+      });
+
+      this.stage.addEventListener('contextmenu', (e) => {
+        if (e.target.closest('.tg-node') || e.target.closest('.graph-minimap')) return;
+        e.preventDefault();
+        const wPos = this.screenToWorld(e.clientX, e.clientY);
+        if (this.callbacks.onCanvasContextMenu) {
+          this.callbacks.onCanvasContextMenu(e.clientX, e.clientY, wPos);
+        }
       });
 
       window.addEventListener('pointermove', (e) => {

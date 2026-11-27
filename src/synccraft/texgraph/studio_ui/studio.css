@@ -1745,3 +1745,240 @@ input[type="range"]::-webkit-slider-thumb:hover {
   padding: 0 4px;
   margin-left: 4px;
 }
+
+/* ==========================================================================
+   Milestone v13 — Delete Corner, Seed Dice, 3D Part Chips, Context Menu & Live Anim Badges
+   ========================================================================== */
+.seed-top-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 4px 1px 7px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: 5px;
+  flex-shrink: 0;
+}
+.seed-top-lbl {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+.seed-top-input {
+  width: 56px !important;
+  height: 20px !important;
+  border: none !important;
+  background: transparent !important;
+  padding: 0 2px !important;
+  text-align: right;
+}
+
+.tg-mini-btn.del-corner {
+  color: #94a3b8;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.tg-mini-btn.del-corner:hover {
+  background: rgba(239, 68, 68, 0.25) !important;
+  border-color: rgba(239, 68, 68, 0.72) !important;
+  color: #fca5a5 !important;
+}
+.tg-mini-btn.eye-btn:hover {
+  background: rgba(56, 189, 248, 0.22);
+  border-color: rgba(56, 189, 248, 0.65);
+  color: #7dd3fc;
+}
+.btn.danger-hover:hover {
+  background: rgba(239, 68, 68, 0.20);
+  border-color: rgba(239, 68, 68, 0.65);
+  color: #fca5a5;
+}
+
+.insp-action-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 7px;
+  padding-top: 7px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+.insp-action-bar .btn.sm {
+  flex: 1 1 auto;
+  justify-content: center;
+  min-width: 48px;
+}
+
+.seed-control-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+}
+.seed-control-row input[type="range"] {
+  flex: 1;
+}
+.seed-control-row .num-input {
+  width: 64px;
+}
+.btn-dice {
+  height: 24px;
+  min-width: 28px;
+  padding: 0 6px;
+  background: linear-gradient(180deg, #2b3242, #212735);
+  border: 1px solid var(--border-med);
+  border-radius: 4px;
+  color: #f8fafc;
+  cursor: pointer;
+  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.1s, border-color 0.12s, background 0.12s;
+}
+.btn-dice:hover {
+  border-color: var(--focus-amber);
+  background: linear-gradient(180deg, #363e52, #283042);
+}
+.btn-dice:active {
+  transform: scale(0.92);
+}
+
+.part-chips-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin-top: 5px;
+  max-height: 92px;
+  overflow-y: auto;
+  padding: 4px;
+  background: rgba(15, 17, 22, 0.65);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+}
+.part-chip {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.1s, border-color 0.1s, color 0.1s;
+}
+.part-chip:hover {
+  background: var(--bg-hover);
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+.part-chip.active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: #bfdbfe;
+}
+.part-chip.zone {
+  border-color: rgba(45, 212, 191, 0.35);
+  color: #5eead4;
+}
+
+.anim-pill-mini {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: rgba(244, 63, 94, 0.88);
+  color: #fff;
+  font-family: var(--font-mono);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  pointer-events: none;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.45);
+}
+.lib-swatch, .palette-card-thumb, .pal-prev-img-wrap {
+  position: relative;
+}
+.pal-anim-live-badge {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(244, 63, 94, 0.90);
+  color: #fff;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  box-shadow: 0 2px 8px rgba(244, 63, 94, 0.45);
+  animation: pulseBadge 1.4s ease-in-out infinite;
+}
+@keyframes pulseBadge {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.62; }
+}
+.tg-anim-dot {
+  color: #fb7185;
+  font-weight: 700;
+  margin-right: 4px;
+}
+
+.ctx-menu {
+  position: fixed;
+  min-width: 196px;
+  background: rgba(24, 28, 36, 0.97);
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.68);
+  padding: 4px;
+  z-index: 2500;
+  backdrop-filter: blur(8px);
+}
+.ctx-menu-title {
+  padding: 4px 8px 5px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  margin-bottom: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ctx-menu-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 8px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 11.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.ctx-menu-item:hover {
+  background: var(--accent-soft);
+  color: #fff;
+}
+.ctx-menu-item.danger {
+  color: #fca5a5;
+}
+.ctx-menu-item.danger:hover {
+  background: rgba(239, 68, 68, 0.25);
+  color: #fecaca;
+}
+.ctx-menu-sep {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.07);
+  margin: 4px 2px;
+}
+.ctx-kbd {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  color: var(--text-muted);
+}

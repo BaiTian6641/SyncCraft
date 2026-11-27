@@ -15,10 +15,10 @@
       <div class="brand">
         <div class="brand-mark">SC</div>
         <span>SyncCraft Studio</span>
-        <span class="brand-sub" id="versionBadge">v11 · 149 nodes</span>
+        <span class="brand-sub" id="versionBadge">v13 · 210 nodes</span>
       </div>
 
-      <select id="projectSelect" class="sel-input" title="Load Flagship Sample or Built-in Preset" style="width: 192px;"></select>
+      <select id="projectSelect" class="sel-input" title="Load Flagship Sample or Built-in Preset" style="width: 172px;"></select>
       <button class="btn" id="btnLoadMesh" title="Load or attach a 3D Blockbench .bbmodel for live UV-seam &amp; ray-traced PBR baking">3D Mesh ▾</button>
       <input type="file" id="bbmodelFileInput" accept=".bbmodel,.json" style="display:none" />
 
@@ -31,22 +31,26 @@
       </select>
       <span class="pill-badge" id="meshResBadge" style="display:none;" title="Active 3D .bbmodel UV Atlas Resolution">256×192 UV</span>
       <button class="btn" id="btnTileable" title="Toggle seamless toroidal tiling">Tileable</button>
+      <div class="seed-top-wrap" title="Master Graph Seed — click dice to randomize all unpinned generators">
+        <span class="seed-top-lbl">Seed</span>
+        <input type="number" id="graphSeedInput" class="num-input seed-top-input" value="42" min="0" max="99999" />
+        <button class="btn sm icon-only" id="btnRandGraphSeed" title="Randomize Master Graph Seed">🎲</button>
+      </div>
     </div>
 
     <div class="topbar-group">
       <button class="btn icon-only" id="btnUndo" title="Undo (Ctrl/Cmd+Z)" disabled>↶</button>
       <button class="btn icon-only" id="btnRedo" title="Redo (Ctrl/Cmd+Shift+Z)" disabled>↷</button>
       <div class="sep"></div>
-      <select id="layoutPresetSelect" class="sel-input" title="Workspace Docking Layout" style="width: 112px;">
-        <option value="default">5-Pane Studio</option>
+      <select id="layoutPresetSelect" class="sel-input" title="Workspace Docking Layout" style="width: 98px;">
+        <option value="default">5-Pane</option>
         <option value="lookdev">3D Lookdev</option>
-        <option value="graph">Graph Focus</option>
-        <option value="code">TexDSL Split</option>
+        <option value="graph">Graph</option>
+        <option value="code">TexDSL</option>
       </select>
-      <div class="sep"></div>
       <span class="pill-badge" id="perfBadge" title="Evaluation Time &amp; Content-Addressed Cache Hit Rate">0.0 ms</span>
       <span class="pill-badge ok" id="qaBadge" title="Automated Multi-Domain Texture QA Score">QA —</span>
-      <button class="btn primary" id="btnOpenExport">Export PBR v2.0</button>
+      <button class="btn primary" id="btnOpenExport" title="Export Commercial PBR v2.0 Bundle">Export PBR</button>
     </div>
   </header>
 
@@ -137,17 +141,17 @@
       <!-- PANE 2: NODE LIBRARY & SUBGRAPHS -->
       <div class="pane pane-library" id="paneLibrary" data-pane="library">
         <div class="pane-header">
-          <span class="pane-title">Node Library (<span id="libCount">149</span>)</span>
+          <span class="pane-title">Node Library (<span id="libCount">210</span>)</span>
           <div class="topbar-group">
             <div class="seg-group" title="Toggle Node Library List / Visual Grid View">
               <button class="seg-btn" id="btnLibList" title="Compact List View">☰</button>
               <button class="seg-btn active" id="btnLibGrid" title="Visual Preview Grid">⊞</button>
             </div>
-            <button class="btn sm" id="btnOpenPaletteLib" title="Visual Node Browser (Tab / ⌘K)">⌘K</button>
+            <button class="btn sm" id="btnOpenPaletteLib" title="Visual Node Browser (Tab / Shift+A / ⌘K)">⌘K</button>
           </div>
         </div>
         <div class="lib-search-row">
-          <input type="text" id="libSearch" class="txt-input" placeholder="Filter 149 nodes (noise, brick, scales, region, dither)..." />
+          <input type="text" id="libSearch" class="txt-input" placeholder="Filter 210 nodes (noise, brass, crystal, glass, mask, anim)..." />
         </div>
         <div class="lib-body" id="libBody"></div>
       </div>
@@ -161,11 +165,12 @@
       <div class="pane pane-graph focused" id="paneGraph" data-pane="graph">
         <div class="graph-toolbar">
           <div class="topbar-group">
-            <button class="btn sm primary" id="btnAddNode" title="Spawn Node (Tab / Space)">+ Add Node</button>
+            <button class="btn sm primary" id="btnAddNode" title="Spawn Node (Tab / Shift+A / Double-Click Canvas)">+ Add Node</button>
+            <button class="btn sm" id="btnDupSel" title="Duplicate Selected Node (Ctrl/Cmd+D)">⧉ Dup</button>
             <button class="btn sm" id="btnAutoLayout" title="Topological Sugiyama Auto-Layout (L)">Auto-Layout</button>
             <button class="btn sm" id="btnFitGraph" title="Frame All Nodes (F)">Fit View</button>
             <button class="btn sm" id="btnBypassSel" title="Bypass Selected Node (B)">Bypass (B)</button>
-            <button class="btn sm" id="btnDeleteSel" title="Delete Selected Node (Del)">Delete</button>
+            <button class="btn sm danger-hover" id="btnDeleteSel" title="Delete Selected Node (Del / Node ✕ Corner)">✕ Delete</button>
           </div>
           <div class="topbar-group" id="passFilterBar"></div>
           <div class="topbar-group">
@@ -186,7 +191,7 @@
             <button class="btn sm" id="btnGraphZoomFit" title="Fit Graph (F)">Fit</button>
           </div>
           <div class="graph-hint-hud" id="graphHintHud">
-            Tab / Double-Click: Add Node · Drag Socket: Wire · Click Wire: Sever · Drag Canvas: Pan · F: Fit
+            Tab / Right-Click / Dbl-Click: Add · Node ✕: Delete · Alt+Socket / Click Wire: Sever · ⌘D: Dup · F: Fit
           </div>
           <div class="graph-minimap" id="graphMinimap" title="Click or drag to pan graph viewport">
             <canvas id="minimapCanvas" width="176" height="112"></canvas>
@@ -204,14 +209,21 @@
             <button class="pane-tab" data-bot-tab="exposed" id="tabExposed">Exposed (<span id="exposedCount">0</span>)</button>
             <button class="pane-tab" data-bot-tab="console" id="tabConsole">Log</button>
           </div>
-          <div class="topbar-group">
-            <button class="btn sm" id="btnPlayAnim" title="Play / Pause Animation">▶ Play</button>
-            <button class="btn sm" id="btnStepPrev" title="Previous Frame">⏮</button>
-            <button class="btn sm" id="btnStepNext" title="Next Frame">⏭</button>
-            <span class="pill-badge" id="frameReadout">F0/8 · φ0.00</span>
-            <label style="font-size:10.5px;color:var(--text-secondary);display:flex;align-items:center;gap:4px;white-space:nowrap;">
+          <div class="topbar-group" style="gap:4px;">
+            <button class="btn sm" id="btnPlayAnim" title="Play / Pause Live Animation (Space)">▶ Play</button>
+            <button class="btn sm icon-only" id="btnStepPrev" title="Previous Frame">⏮</button>
+            <button class="btn sm icon-only" id="btnStepNext" title="Next Frame">⏭</button>
+            <button class="btn sm" id="btnAnimPingPong" title="Toggle Loop / Ping-Pong Playback">⇄</button>
+            <select id="animFpsSelect" class="sel-input" style="height:22px;font-size:10px;width:54px;padding:0 4px;" title="Live Preview Playback FPS">
+              <option value="4">4fps</option>
+              <option value="8" selected>8fps</option>
+              <option value="12">12fps</option>
+              <option value="24">24fps</option>
+            </select>
+            <span class="pill-badge" id="frameReadout" style="font-size:10px;padding:1px 5px;">F0/8 · φ0.00</span>
+            <label style="font-size:10px;color:var(--text-secondary);display:flex;align-items:center;gap:3px;white-space:nowrap;">
               N
-              <input type="number" id="animFramesInput" class="num-input" value="8" min="2" max="32" style="width:42px;height:22px;" />
+              <input type="number" id="animFramesInput" class="num-input" value="8" min="2" max="32" style="width:36px;height:22px;padding:0 3px;" />
             </label>
           </div>
         </div>
@@ -304,6 +316,7 @@
         <aside class="palette-preview-pane" id="palettePreviewPane">
           <div class="pal-prev-img-wrap">
             <img id="palPrevImg" alt="Node preview" />
+            <span class="pal-anim-live-badge" id="palPrevAnimBadge" style="display:none;">▶ LIVE ANIM</span>
           </div>
           <div class="pal-prev-head">
             <div class="pal-prev-title" id="palPrevTitle">Select a Node</div>
@@ -316,11 +329,16 @@
         </aside>
       </div>
       <div class="palette-footer">
-        <span id="paletteCountLabel">149 nodes</span>
+        <span id="paletteCountLabel">210 nodes</span>
         <span>↑↓←→ Navigate · Enter Add · Esc Close</span>
       </div>
     </div>
   </div>
+
+  <!-- =================================================================== -->
+  <!-- FLOATING RIGHT-CLICK CONTEXT MENU (NODES & GRAPH CANVAS)            -->
+  <!-- =================================================================== -->
+  <div class="ctx-menu" id="graphContextMenu" style="display:none;"></div>
 
   <!-- =================================================================== -->
   <!-- MULTI-ENGINE EXPORT MODAL                                           -->
