@@ -227,6 +227,24 @@ from .syncmat_and_mtlx import (
     list_all_syncmats,
     save_user_syncmat,
 )
+from .ctm_tileset import CTM_47_MASKS, WANG_16_MASKS, generate_ctm_tileset
+from .math_utility_ops import (
+    checker_basic,
+    clamp_value,
+    color_constant,
+    float_constant,
+    fresnel_weight,
+    invert_field,
+    map_range,
+    math_scalar,
+    mix_blend,
+    paint_mask,
+    rgb_combine,
+    rgb_separate,
+    tex_coord,
+    uv_mapping,
+    vector_math,
+)
 from .ai_copilot import BUILT_IN_STYLE_PRESETS, apply_surgical_patch, diagnose_asset, extract_style_dna
 from .syncproj import DEFAULT_CHRONO_VARIANTS, SyncProject, apply_variant_to_graph, generate_variant_pack
 from .studio_server import (

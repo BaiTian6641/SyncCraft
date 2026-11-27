@@ -281,6 +281,23 @@ from .simulation_filters import (
     total_variation_denoise,
     weathering_drip,
 )
+from .math_utility_ops import (
+    checker_basic,
+    clamp_value,
+    color_constant,
+    float_constant,
+    fresnel_weight,
+    invert_field,
+    map_range,
+    math_scalar,
+    mix_blend,
+    paint_mask,
+    rgb_combine,
+    rgb_separate,
+    tex_coord,
+    uv_mapping,
+    vector_math,
+)
 
 # Nodes whose output depends on animation `phase` (re-evaluated per flipbook frame; others cached!)
 _TIME_AWARE_OPS: frozenset[str] = frozenset(
@@ -293,6 +310,7 @@ _TIME_AWARE_OPS: frozenset[str] = frozenset(
         "starfield_sparkle", "plasma_wave", "clockwork_gears",
         "mat_crystal_gem", "mat_obsidian_volcanic", "mat_glowing_runes_pbr",
         "anim_shimmer", "anim_flicker_pulse", "anim_flow_warp",
+        "subgraph_group",
     }
 )
 
@@ -312,6 +330,7 @@ _BUS_INPUT_KEYS: dict[str, frozenset[str]] = {
     "anim_flicker_pulse": frozenset({"src"}),
     "anim_flow_warp": frozenset({"src"}),
     "reroute": frozenset({"in"}),
+    "subgraph_group": frozenset({"in_0", "in_1", "in_2", "in_3", "in_4", "in_5"}),
     "paint_entity_eyes_and_parts": frozenset({"base"}),
     "bake_emissive_bounce": frozenset({"mat"}),
     "triplanar_project": frozenset({"src"}),
@@ -458,6 +477,7 @@ class TexGraph:
         self.param_drivers: list[dict[str, Any]] = []
         self.groups: list[dict[str, Any]] = []
         self.frames: list[dict[str, Any]] = []
+        self._external_inputs: dict[str, Any] = {}
         self.domain: str = "block"
         self.animation_config: dict[str, Any] = {"frames": 1, "frametime": 2, "interpolate": False, "frames_schedule": None}
         self._counter = 0
@@ -3091,7 +3111,287 @@ class TexGraph:
             kw = {k: v for k, v in p.items() if k != "seed"}
             return anim_flow_warp(ins["src"], seed=seed, phase=phase, tileable=tile, **kw)
 
+        # --- TexGraph v15 Blender-Style Math, Vector, Mapping, Utility & 3D/2D Brush Paint Mask (15 ops) ---
+        if op == "math_scalar":
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return math_scalar(H, W, ins.get("a"), ins.get("b"), **kw)
+        if op == "map_range":
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return map_range(H, W, ins.get("value"), **kw)
+        if op == "clamp_value":
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return clamp_value(H, W, ins.get("value"), **kw)
+        if op == "mix_blend":
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return mix_blend(H, W, ins.get("a"), ins.get("b"), ins.get("factor"), **kw)
+        if op == "rgb_combine":
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return rgb_combine(H, W, ins.get("r"), ins.get("g"), ins.get("b"), ins.get("a"), **kw)
+        if op == "rgb_separate":
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return rgb_separate(H, W, ins.get("color"), **kw)
+        if op == "vector_math":
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return vector_math(H, W, ins.get("vec_a"), ins.get("vec_b"), **kw)
+        if op == "uv_mapping":
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return uv_mapping(H, W, ins.get("src"), tileable=p.get("tileable", tile), **kw)
+        if op == "tex_coord":
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return tex_coord(H, W, self.mesh_context, **kw)
+        if op == "float_constant":
+            return float_constant(H, W, value=p.get("value", 0.5))
+        if op == "color_constant":
+            return color_constant(H, W, color=p.get("color", "#3B82F6"), alpha=p.get("alpha", 1.0))
+        if op == "invert_field":
+            return invert_field(H, W, ins.get("src"), fac=p.get("fac", 1.0))
+        if op == "fresnel_weight":
+            return fresnel_weight(H, W, ins.get("normal"), self.mesh_context, ior=p.get("ior", 1.45), power=p.get("power", 3.0))
+        if op == "checker_basic":
+            return checker_basic(H, W, scale_x=p.get("scale_x", 8), scale_y=p.get("scale_y", 8), color_a=p.get("color_a", "#E2E8F0"), color_b=p.get("color_b", "#1E293B"))
+        if op == "paint_mask":
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return paint_mask(H, W, **kw)
+
+        # --- TexGraph v15 Nested Compound Subgraph Group (`group_input` / `subgraph_group`) ---
+        if op == "group_input":
+            pname = str(p.get("port_name", "in_0"))
+            if pname in self._external_inputs:
+                return self._external_inputs[pname]
+            return np.full((H, W, 4), 0.5, dtype=np.float32)
+
+        if op == "subgraph_group":
+            sub_rec = p.get("sub_recipe")
+            if not isinstance(sub_rec, dict) or not sub_rec.get("nodes"):
+                return next(iter(ins.values())) if ins else np.full((H, W, 4), 0.35, dtype=np.float32)
+            rec_copy = copy.deepcopy(sub_rec)
+            rec_copy["width"] = W
+            rec_copy["height"] = H
+            rec_copy["tileable"] = tile
+            sub_g = TexGraph.from_recipe(rec_copy, mesh_context=self.mesh_context)
+            sub_g._external_inputs = dict(ins)
+            sub_ev = sub_g.evaluate(phase=phase, capture_intermediates=True, build_pbr=False, allow_orphan_errors=True)
+            out_id = sub_g.output_material_node or (
+                _parse_ref(sub_g.output_node)[0] if sub_g.output_node else (sub_g.node_order[-1] if sub_g.node_order else None)
+            )
+            if out_id and out_id in sub_ev.intermediates:
+                return sub_ev.intermediates[out_id]
+            return sub_ev.output
+
         raise ValueError(f"Unsupported TexGraph op: {op!r}")
+
+    def group_nodes_into_subgraph(
+        self,
+        node_ids: list[str],
+        *,
+        title: str = "Node Group",
+        color: str = "#7E22CE",
+    ) -> str:
+        """Collapse selected nodes into a single nested `subgraph_group` compound node (Ctrl+G)."""
+        sel_ordered = [nid for nid in self.node_order if nid in set(node_ids) and nid in self.nodes]
+        if len(sel_ordered) < 1:
+            raise ValueError("Select at least one node to group into a compound subgraph")
+        sel_set = set(sel_ordered)
+
+        # Detect external inputs entering sel_set and primary output leaving sel_set
+        ext_in_refs: dict[str, str] = {}  # ext_ref -> port_name (in_0, in_1, ...)
+        parent_inputs: dict[str, str] = {}
+        sub_nodes: list[dict[str, Any]] = []
+
+        # Compute centroid position of grouped nodes
+        xs = [float(self.nodes[nid].pos[0]) for nid in sel_ordered if self.nodes[nid].pos is not None]
+        ys = [float(self.nodes[nid].pos[1]) for nid in sel_ordered if self.nodes[nid].pos is not None]
+        cx = sum(xs) / len(xs) if xs else 260.0
+        cy = sum(ys) / len(ys) if ys else 160.0
+
+        # Find output node inside sel_set (referenced by outside node or graph output, else last selected)
+        out_candidates: list[str] = []
+        for nid, sp in self.nodes.items():
+            if nid in sel_set:
+                continue
+            for ref in sp.inputs.values():
+                base, _ = _parse_ref(ref)
+                if base in sel_set and base not in out_candidates:
+                    out_candidates.append(base)
+        for g_ref in (self.output_material_node, self.output_node):
+            if g_ref and _parse_ref(g_ref)[0] in sel_set:
+                b = _parse_ref(g_ref)[0]
+                if b not in out_candidates:
+                    out_candidates.append(b)
+        sub_out_id = out_candidates[-1] if out_candidates else sel_ordered[-1]
+
+        # Build internal sub_recipe nodes, replacing incoming external edges with `group_input` nodes
+        for nid in sel_ordered:
+            sp = self.nodes[nid]
+            nd = copy.deepcopy(sp.to_dict())
+            new_ins: dict[str, str] = {}
+            for pk, raw_ref in (sp.inputs or {}).items():
+                base, _ = _parse_ref(raw_ref)
+                if base in sel_set:
+                    new_ins[pk] = raw_ref
+                else:
+                    if raw_ref not in ext_in_refs:
+                        p_slot = f"in_{len(ext_in_refs)}"
+                        ext_in_refs[raw_ref] = p_slot
+                        parent_inputs[p_slot] = raw_ref
+                        gin_id = f"group_{p_slot}"
+                        sub_nodes.append({
+                            "id": gin_id,
+                            "op": "group_input",
+                            "inputs": {},
+                            "params": {"port_name": p_slot},
+                            "pos": [40.0, 80.0 + len(ext_in_refs) * 140.0],
+                            "label": f"In: {raw_ref}",
+                        })
+                    new_ins[pk] = f"group_{ext_in_refs[raw_ref]}"
+            nd["inputs"] = new_ins
+            sub_nodes.append(nd)
+
+        from .registry import NODE_CATALOG as _NC
+
+        out_meta = _NC.get(self.nodes[sub_out_id].op)
+        is_mat_out = (
+            self.output_material_node == sub_out_id
+            or (out_meta is not None and out_meta.output_type == "MATERIAL")
+        )
+        sub_recipe: dict[str, Any] = {
+            "name": title,
+            "width": self.width,
+            "height": self.height,
+            "tileable": self.tileable,
+            "seed": self.seed,
+            "nodes": sub_nodes,
+            "output": sub_out_id,
+            "output_material": sub_out_id if is_mat_out else None,
+        }
+
+        base_gid = "group"
+        gid = base_gid
+        idx = 1
+        while gid in self.nodes:
+            gid = f"{base_gid}_{idx}"
+            idx += 1
+
+        grp_spec = NodeSpec(
+            id=gid,
+            op="subgraph_group",
+            inputs=parent_inputs,
+            params={"title": title, "color": color, "sub_recipe": sub_recipe},
+            pos=(round(cx, 1), round(cy, 1)),
+            label=title,
+        )
+
+        # Replace grouped nodes in parent graph and rewire outgoing references to gid
+        first_idx = min(self.node_order.index(nid) for nid in sel_ordered)
+        for nid in sel_ordered:
+            self.nodes.pop(nid, None)
+        self.node_order = [nid for nid in self.node_order if nid not in sel_set]
+        self.nodes[gid] = grp_spec
+        self.node_order.insert(min(first_idx, len(self.node_order)), gid)
+
+        for sp in self.nodes.values():
+            if sp.id == gid:
+                continue
+            for pk, raw_ref in list(sp.inputs.items()):
+                base, subp = _parse_ref(raw_ref)
+                if base in sel_set:
+                    sp.inputs[pk] = f"{gid}.{subp}" if subp else gid
+
+        if self.output_node and _parse_ref(self.output_node)[0] in sel_set:
+            subp = _parse_ref(self.output_node)[1]
+            self.output_node = f"{gid}.{subp}" if subp else gid
+        if self.output_material_node and self.output_material_node in sel_set:
+            self.output_material_node = gid
+            self.pbr_nodes = {k: f"{gid}.{k}" for k in ("height", "normal", "roughness", "metallic", "ao", "shadow", "bent_normal", "thickness", "sss", "porosity")}
+            self.emissive_node = f"{gid}.emissive"
+        for fr in self.frames:
+            fr["node_ids"] = [nid for nid in (fr.get("node_ids") or []) if nid not in sel_set]
+        self.frames = [fr for fr in self.frames if fr.get("node_ids")]
+        self._static_cache.clear()
+        self._content_cache.clear()
+        return gid
+
+    def ungroup_subgraph_node(self, group_node_id: str) -> list[str]:
+        """Expand a `subgraph_group` compound node cleanly back into its parent graph (Ctrl+Alt+G)."""
+        if group_node_id not in self.nodes or self.nodes[group_node_id].op != "subgraph_group":
+            raise ValueError(f"Node {group_node_id!r} is not a subgraph_group")
+        grp = self.nodes[group_node_id]
+        sub_rec = grp.params.get("sub_recipe") or {}
+        raw_nodes = [n for n in (sub_rec.get("nodes") or []) if n.get("op") != "group_input"]
+        if not raw_nodes:
+            return []
+
+        # Map internal `group_in_k` node IDs back to parent wire refs
+        gin_map: dict[str, str] = {}
+        for n in (sub_rec.get("nodes") or []):
+            if n.get("op") == "group_input":
+                p_slot = str((n.get("params") or {}).get("port_name", "in_0"))
+                if p_slot in grp.inputs:
+                    gin_map[str(n["id"])] = grp.inputs[p_slot]
+
+        id_map: dict[str, str] = {}
+        for nd in raw_nodes:
+            orig = str(nd["id"])
+            nid = orig
+            idx = 1
+            while nid in self.nodes or nid in id_map.values():
+                nid = f"{orig}_{idx}"
+                idx += 1
+            id_map[orig] = nid
+
+        insert_idx = self.node_order.index(group_node_id)
+        self.nodes.pop(group_node_id, None)
+        self.node_order.remove(group_node_id)
+
+        restored: list[str] = []
+        for offset, nd in enumerate(raw_nodes):
+            nid = id_map[str(nd["id"])]
+            mapped_in: dict[str, str] = {}
+            for pk, raw_ref in (nd.get("inputs") or {}).items():
+                base, subp = _parse_ref(str(raw_ref))
+                if base in gin_map:
+                    mapped_in[pk] = gin_map[base]
+                elif base in id_map:
+                    mapped_in[pk] = f"{id_map[base]}.{subp}" if subp else id_map[base]
+            pos = nd.get("pos") or [(grp.pos[0] if grp.pos else 200.0) + offset * 240.0, grp.pos[1] if grp.pos else 140.0]
+            sp = NodeSpec(
+                id=nid,
+                op=str(nd["op"]),
+                inputs=mapped_in,
+                params=copy.deepcopy(nd.get("params") or {}),
+                pos=(float(pos[0]), float(pos[1])),
+                label=str(nd.get("label") or ""),
+            )
+            self.nodes[nid] = sp
+            self.node_order.insert(insert_idx + offset, nid)
+            restored.append(nid)
+
+        sub_out_orig = str(
+            sub_rec.get("output_material")
+            or sub_rec.get("output")
+            or sub_rec.get("output_material_node")
+            or sub_rec.get("output_node")
+            or raw_nodes[-1]["id"]
+        )
+        sub_out_new = id_map.get(_parse_ref(sub_out_orig)[0], restored[-1])
+
+        for sp in self.nodes.values():
+            for pk, raw_ref in list(sp.inputs.items()):
+                base, subp = _parse_ref(raw_ref)
+                if base == group_node_id:
+                    sp.inputs[pk] = f"{sub_out_new}.{subp}" if subp else sub_out_new
+
+        if self.output_node and _parse_ref(self.output_node)[0] == group_node_id:
+            subp = _parse_ref(self.output_node)[1]
+            self.output_node = f"{sub_out_new}.{subp}" if subp else sub_out_new
+        if self.output_material_node == group_node_id:
+            self.output_material_node = sub_out_new
+            self.pbr_nodes = {k: f"{sub_out_new}.{k}" for k in ("height", "normal", "roughness", "metallic", "ao", "shadow", "bent_normal", "thickness", "sss", "porosity")}
+            self.emissive_node = f"{sub_out_new}.emissive"
+
+        self._static_cache.clear()
+        self._content_cache.clear()
+        return restored
 
     def evaluate(
         self,

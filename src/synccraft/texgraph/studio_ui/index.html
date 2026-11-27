@@ -15,7 +15,7 @@
       <div class="brand">
         <div class="brand-mark">SC</div>
         <span>SyncCraft Studio</span>
-        <span class="brand-sub" id="versionBadge">v14 · 211 nodes</span>
+        <span class="brand-sub" id="versionBadge">v15 · 228 nodes</span>
       </div>
 
       <select id="projectSelect" class="sel-input" title="Load Flagship Sample or Built-in Preset" style="width: 172px;"></select>
@@ -48,6 +48,7 @@
         <option value="graph">Graph</option>
         <option value="code">TexDSL</option>
       </select>
+      <span class="pill-badge" id="bridgeBadge" title="Blockbench 5 Live Link SSE Bridge (127.0.0.1:18790/api/bridge/events)" style="cursor:pointer;">BB5 Link</span>
       <span class="pill-badge" id="perfBadge" title="Evaluation Time &amp; Content-Addressed Cache Hit Rate">0.0 ms</span>
       <span class="pill-badge ok" id="qaBadge" title="Automated Multi-Domain Texture QA Score">QA —</span>
       <button class="btn primary" id="btnOpenExport" title="Export Commercial PBR v2.0 Bundle">Export PBR</button>
@@ -95,40 +96,67 @@
 
         <div class="viewport-toolbar">
           <div class="topbar-group vp-tools-wrap" id="vpTools3d">
-            <select id="primSelect" class="sel-input" style="height:22px;font-size:10.5px;max-width:104px;" title="3D Preview Geometry">
-              <option value="bbmodel">Loaded .bbmodel</option>
+            <select id="primSelect" class="sel-input" style="height:21px;font-size:10px;max-width:86px;padding:0 4px;" title="3D Preview Geometry">
+              <option value="bbmodel">.bbmodel</option>
               <option value="cube">Block Cube</option>
-              <option value="wall">3×3 Wall Slab</option>
-              <option value="pillar">Bevel Pillar</option>
-              <option value="sphere">Lookdev Sphere</option>
+              <option value="wall">3×3 Wall</option>
+              <option value="pillar">Pillar</option>
+              <option value="sphere">Sphere</option>
             </select>
-            <button class="btn sm" id="btnPickPart" title="Click directly on the 3D model or 2D UV atlas to mask that exact body part! (Or Alt+Click any part)">🎯 Pick Part</button>
+            <button class="btn sm" id="btnPickPart" title="Click 3D model to mask that exact body part (or Alt+Click)">🎯 Pick</button>
+            <button class="btn sm" id="btnBrush3d" title="Paint custom grayscale mask directly onto the 3D model surface!">🖌 Brush</button>
+            <button class="btn sm" id="btnLightDrag" title="Drag in 3D viewport to spin HDRI &amp; Key Light Direction (or Shift+Drag)">☀ Light</button>
+            <button class="btn sm" id="btnSplitWipe" title="Toggle Split Before/After Channel Comparison Wipe">◧ Wipe</button>
+            <button class="btn sm" id="btnRecordGif" title="Record 360° 3D Turntable Animated GIF">🎬 GIF</button>
             <button class="btn sm" id="btnSpin3d" title="Auto-Turntable">Spin</button>
             <button class="btn sm" id="btnWire3d" title="Toggle Mesh Edges">Wire</button>
             <button class="btn sm active" id="btnEnvBg3d" title="Toggle Procedural HDRI Environment Backdrop">Env</button>
             <button class="btn sm" id="btnResetCam3d" title="Reset Orbit Camera">Reset</button>
+            <select id="lightingPresetSelect" class="sel-input" style="height:21px;font-size:10px;max-width:88px;padding:0 4px;margin-left:auto;" title="Procedural Studio HDRI Lighting Rig">
+              <option value="studio_hero">Studio HDRI</option>
+              <option value="sunset_forge">Sunset Forge</option>
+              <option value="cyber_neon">Cyber Neon</option>
+              <option value="dramatic_rim">Dramatic Rim</option>
+              <option value="high_noon">High Noon</option>
+              <option value="moonlit_obsidian">Moonlit</option>
+            </select>
           </div>
           <div class="topbar-group vp-tools-wrap" id="vpTools2d" style="display:none;">
             <button class="btn sm" id="btnPickPart2d" title="Click any UV island on 2D canvas to mask that 3D body part!">🎯 Pick UV</button>
+            <button class="btn sm" id="btnBrush2d" title="Paint custom grayscale mask directly onto 2D UV Canvas!">🖌 Brush</button>
+            <button class="btn sm" id="btnUvWire2d" title="Toggle 3D .bbmodel UV Wireframe Overlay">UV Wire</button>
             <button class="btn sm" id="btnTile3x3" title="Toggle 3x3 Seamless Wrap Verification">3×3 Tile</button>
             <button class="btn sm" id="btnZoom2dFit" title="Fit 2D View">Fit</button>
             <button class="btn sm" id="btnZoom2dIn">+</button>
             <button class="btn sm" id="btnZoom2dOut">−</button>
           </div>
-          <select id="lightingPresetSelect" class="sel-input" style="height:22px;font-size:10.5px;max-width:104px;" title="Procedural Studio HDRI Lighting Rig">
-            <option value="studio_hero">Studio HDRI</option>
-            <option value="sunset_forge">Sunset Forge</option>
-            <option value="cyber_neon">Cyber Neon</option>
-            <option value="dramatic_rim">Dramatic Rim</option>
-            <option value="high_noon">High Noon</option>
-            <option value="moonlit_obsidian">Moonlit</option>
-          </select>
+        </div>
+
+        <div class="brush-subbar" id="brushToolbar" style="display:none;">
+          <span class="vp-lbl">Brush</span>
+          <input type="range" id="brushSizeSlider" min="2" max="24" value="6" style="width:66px;" />
+          <span class="vp-val" id="brushSizeVal">6px</span>
+          <button class="btn sm active" id="btnBrushAdd" title="Paint White (Mask Include)">+ Add</button>
+          <button class="btn sm" id="btnBrushErase" title="Erase Black (Mask Exclude)">− Erase</button>
+          <button class="btn sm danger-hover" id="btnBrushClear" title="Clear Mask Buffer">Clear</button>
         </div>
 
         <div class="viewport-stage" id="viewportStage">
           <canvas id="gl3dCanvas"></canvas>
           <canvas id="canvas2d" style="display:none;"></canvas>
-          <div class="vp-hud" id="vpHud">Ready · Drag to Orbit · Scroll to Zoom · Alt+Click: Pick 3D Part</div>
+          <div class="split-wipe-bar" id="splitWipeBar" style="display:none;">
+            <select id="splitRightSelect" class="sel-input" style="height:20px;font-size:10px;padding:0 4px;" title="Right-Side Wipe Comparison Channel">
+              <option value="normal">Right: Normal</option>
+              <option value="albedo">Right: Albedo</option>
+              <option value="roughness">Right: Roughness</option>
+              <option value="metallic">Right: Metallic</option>
+              <option value="ao">Right: AO</option>
+              <option value="shadow">Right: Shadow</option>
+              <option value="emissive">Right: Emissive</option>
+            </select>
+          </div>
+          <div class="split-wipe-handle" id="splitWipeHandle" style="display:none;left:50%;" title="Drag horizontally to wipe Before/After PBR channel">⋮</div>
+          <div class="vp-hud" id="vpHud">Ready · Drag: Orbit · Shift+Drag: Spin Light/HDRI · Alt+Click: Pick Part</div>
         </div>
 
         <div class="vp-light-strip">
@@ -138,6 +166,12 @@
           <span class="vp-lbl">El</span>
           <input type="range" id="lightElSlider" min="10" max="85" value="52" />
           <span class="vp-val" id="lightElVal">52°</span>
+          <span class="vp-lbl" title="Rotate Studio HDRI Environment Sky &amp; Reflections">Env°</span>
+          <input type="range" id="envRotSlider" min="0" max="360" step="2" value="0" />
+          <span class="vp-val" id="envRotVal">0°</span>
+          <span class="vp-lbl" title="Key &amp; Environment Light Intensity">Int</span>
+          <input type="range" id="lightIntSlider" min="0.2" max="2.0" step="0.05" value="1.0" />
+          <span class="vp-val" id="lightIntVal">1.00</span>
           <span class="vp-lbl" title="Dual-Lobe Clearcoat Gloss">Coat</span>
           <input type="range" id="coatSlider" min="0" max="1" step="0.05" value="0.25" />
           <span class="vp-val" id="coatVal">0.25</span>
@@ -153,7 +187,7 @@
       <div class="pane pane-library" id="paneLibrary" data-pane="library">
         <div class="pane-header">
           <div class="pane-tabs">
-            <button class="pane-tab active" data-lib-tab="nodes" id="tabLibNodes">Nodes (<span id="libCount">211</span>)</button>
+            <button class="pane-tab active" data-lib-tab="nodes" id="tabLibNodes">Nodes (<span id="libCount">228</span>)</button>
             <button class="pane-tab" data-lib-tab="syncmat" id="tabLibSyncmat">.syncmat (<span id="syncmatCount">6</span>)</button>
           </div>
           <div class="topbar-group">
@@ -166,7 +200,7 @@
           </div>
         </div>
         <div class="lib-search-row" id="libNodesSearchRow">
-          <input type="text" id="libSearch" class="txt-input" placeholder="Filter 211 nodes (noise, brass, crystal, glass, mask, anim)..." />
+          <input type="text" id="libSearch" class="txt-input" placeholder="Filter 228 nodes (math, map_range, paint_mask, noise, brass, crystal)..." />
         </div>
         <div class="lib-body" id="libBody"></div>
         <div class="lib-body" id="syncmatBody" style="display:none;">
@@ -193,11 +227,13 @@
               <button class="seg-btn" id="btnToolPan" title="Hand Pan Tool">✋</button>
             </div>
             <button class="btn sm primary" id="btnAddNode" title="Spawn Node (Tab / Shift+A / Double-Click Canvas)">+ Node</button>
+            <button class="btn sm" id="btnGroupSel" title="Collapse Selected Nodes into Compound Subgraph Group (Ctrl+G)">⊞ Group</button>
+            <button class="btn sm" id="btnUngroupSel" title="Expand Selected Compound Subgraph (Ctrl+Alt+G)" style="display:none;">⊟ Ungrp</button>
             <button class="btn sm" id="btnFrameSel" title="Wrap Selected Nodes into Comment Frame (Ctrl+J / C)">▭ Frame</button>
-            <button class="btn sm" id="btnDupSel" title="Duplicate Selected Node(s) (Ctrl/Cmd+D)">⧉ Dup</button>
+            <button class="btn sm" id="btnDupSel" title="Duplicate Selected Node(s) (Ctrl/Cmd+D)">⧉</button>
             <button class="btn sm" id="btnAutoLayout" title="Topological Sugiyama Auto-Layout (L)">Layout</button>
             <button class="btn sm" id="btnFitGraph" title="Frame All Nodes (F)">Fit</button>
-            <button class="btn sm" id="btnBypassSel" title="Bypass Selected Node(s) (B)">Bypass</button>
+            <button class="btn sm" id="btnBypassSel" title="Bypass Selected Node(s) (B)">B</button>
             <button class="btn sm danger-hover" id="btnDeleteSel" title="Delete Selected Node(s) (Del / Node ✕ Corner)">✕ Del</button>
           </div>
           <div class="topbar-group" id="passFilterBar"></div>
@@ -206,6 +242,7 @@
             <span class="pill-badge" id="graphZoomBadge">100%</span>
           </div>
         </div>
+        <div class="subgraph-breadcrumbs" id="subgraphBreadcrumbs" style="display:none;"></div>
 
         <div class="graph-stage" id="graphStage">
           <div class="graph-grid-bg" id="graphGridBg"></div>
@@ -243,16 +280,17 @@
             <button class="btn sm icon-only" id="btnStepPrev" title="Previous Frame">⏮</button>
             <button class="btn sm icon-only" id="btnStepNext" title="Next Frame">⏭</button>
             <button class="btn sm" id="btnAnimPingPong" title="Toggle Loop / Ping-Pong Playback">⇄</button>
-            <select id="animFpsSelect" class="sel-input" style="height:22px;font-size:10px;width:54px;padding:0 4px;" title="Live Preview Playback FPS">
-              <option value="4">4fps</option>
-              <option value="8" selected>8fps</option>
+            <select id="animFpsSelect" class="sel-input" style="height:22px;font-size:10px;width:58px;padding:0 4px;" title="Real-Time GPU Ring-Buffer Playback FPS (30-60 FPS zero-lag!)">
+              <option value="8">8fps</option>
               <option value="12">12fps</option>
               <option value="24">24fps</option>
+              <option value="30" selected>30fps</option>
+              <option value="60">60fps</option>
             </select>
-            <span class="pill-badge" id="frameReadout" style="font-size:10px;padding:1px 5px;">F0/8 · φ0.00</span>
-            <label style="font-size:10px;color:var(--text-secondary);display:flex;align-items:center;gap:3px;white-space:nowrap;">
+            <span class="pill-badge" id="frameReadout" style="font-size:9.5px;padding:1px 5px;white-space:nowrap;">F0/12 · φ0.00</span>
+            <label style="font-size:10px;color:var(--text-secondary);display:flex;align-items:center;gap:3px;white-space:nowrap;flex-shrink:0;">
               N
-              <input type="number" id="animFramesInput" class="num-input" value="8" min="2" max="32" style="width:36px;height:22px;padding:0 3px;" />
+              <input type="number" id="animFramesInput" class="num-input" value="12" min="2" max="32" style="width:44px;height:22px;padding:0 4px;text-align:center;" />
             </label>
           </div>
         </div>
@@ -408,8 +446,10 @@
         </div>
         <pre id="exportResultPre" style="display:none;max-height:140px;overflow:auto;background:var(--bg-input);border:1px solid var(--border-subtle);border-radius:4px;padding:8px;font-family:var(--font-mono);font-size:10.5px;color:#86efac;margin:0;"></pre>
       </div>
-      <div class="modal-foot">
-        <button class="btn" id="btnDownloadMtlx">Download MaterialX (.mtlx)</button>
+      <div class="modal-foot" style="flex-wrap:wrap;">
+        <button class="btn" id="btnExportCtm47" title="Generate 47-Tile Connected Block Sprite Sheet + OptiFine/Continuity .properties">CTM 47-Tile</button>
+        <button class="btn" id="btnExportWang16" title="Generate 16-Tile Wang 4-Bit Autotile Sheet">Wang 16</button>
+        <button class="btn" id="btnDownloadMtlx">MaterialX (.mtlx)</button>
         <button class="btn" id="btnDownloadTexdsl">.texdsl</button>
         <button class="btn" id="btnDownloadRecipe">.json</button>
         <button class="btn primary" id="btnRunExport">Export Full PBR v2.0</button>

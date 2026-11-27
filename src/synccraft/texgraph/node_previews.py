@@ -187,6 +187,17 @@ _FAST_PREVIEW_PARAMS: dict[str, dict[str, Any]] = {
     "mask_uv_box": {"mode": "uv_rect", "u_min": 0.18, "u_max": 0.82, "v_min": 0.18, "v_max": 0.82},
     "mask_combine": {"mode": "xor"},
     "material_region_apply": {"opacity": 1.0, "seam_ao_strength": 0.30},
+    "math_scalar": {"math_op": "sin", "value_b": 12.0},
+    "map_range": {"from_min": 0.25, "from_max": 0.78, "interpolation": "smoothstep"},
+    "clamp_value": {"min_val": 0.22, "max_val": 0.78},
+    "mix_blend": {"blend_mode": "overlay", "fac_value": 0.65},
+    "vector_math": {"vec_op": "normalize"},
+    "fresnel_weight": {"ior": 1.65},
+    "tex_coord": {"coord_type": "generated_uv"},
+    "checker_basic": {"scale_x": 6, "scale_y": 6},
+    "paint_mask": {"base_value": 0.08},
+    "float_constant": {"value": 0.72},
+    "color_constant": {"color": "#38BDF8"},
 }
 
 # For animated multi-frame previews, ensure time-capable nodes visibly animate even if default speed is 0
@@ -251,10 +262,48 @@ def _eval_single_node_preview(
             fb_id = g.add("feedback_loop", inputs={"src": s_id}, loop_frames=4, pre_roll=2, decay=0.82, drift_y_px=-1.0)
             g.set_output(fb_id)
             return _to_data_url(g.evaluate(phase=float(phase)).output, sz)
+        if op == "paint_mask":
+            u, v = refs["u"], refs["v"]
+            d_curve = np.abs((v - 0.5) - 0.24 * np.sin((u - 0.15) * 5.2))
+            stroke = np.clip(1.0 - d_curve / 0.15, 0.0, 1.0) * ((u > 0.12) & (u < 0.88))
+            m = np.clip(0.10 + 0.90 * (stroke ** 0.7), 0.0, 1.0).astype(np.float32)
+            return _to_data_url(m, sz)
+        if op == "float_constant":
+            u, v = refs["u"], refs["v"]
+            ramp = np.clip(0.18 + 0.72 * u, 0.0, 1.0).astype(np.float32)
+            bar = ((np.abs(v - 0.5) < 0.14) & (u < 0.72)).astype(np.float32)
+            out_fc = np.clip(ramp * 0.35 + bar * 0.65, 0.0, 1.0).astype(np.float32)
+            return _to_data_url(out_fc, sz)
+
+        _WIRE_OPT_OPS = frozenset({
+            "math_scalar", "map_range", "clamp_value", "invert_field",
+            "mix_blend", "rgb_combine", "rgb_separate", "vector_math",
+            "uv_mapping", "fresnel_weight",
+        })
         vals: dict[str, Any] = {}
         inputs: dict[str, str] = {}
         for idx, port in enumerate(meta.inputs):
             pname = port.name
+            if port.optional and op in _WIRE_OPT_OPS:
+                vid = f"_in_{idx}_{pname}"
+                if pname in ("a", "src"):
+                    vals[vid] = refs["rgba"] if op in ("mix_blend", "rgb_separate", "uv_mapping") else refs["height"]
+                elif pname == "b":
+                    vals[vid] = refs["alt_rgba"] if op == "mix_blend" else (refs["v"] if op == "rgb_combine" else refs["alt_scalar"])
+                elif pname == "r":
+                    vals[vid] = refs["u"]
+                elif pname == "g":
+                    vals[vid] = refs["v"]
+                elif pname == "fac":
+                    vals[vid] = refs["height"]
+                elif pname in ("vec_a", "normal"):
+                    vals[vid] = refs["normal"]
+                elif pname == "vec_b":
+                    vals[vid] = refs["alt_rgba"]
+                else:
+                    continue
+                inputs[pname] = vid
+                continue
             if port.optional and pname not in ("mask", "mask_b", "base", "top", "layer"):
                 continue
             if port.optional and op in ("region_composite", "material_blend", "material_height_blend", "material_region_apply", "blend") and pname == "mask":

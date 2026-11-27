@@ -40,6 +40,7 @@
     'Sprites & Masks': '#e879f9',
     'Scatter & Layout': '#f97316',
     'Substance & Geometry': '#2dd4bf',
+    'Math & Utility': '#a855f7',
   };
 
   const FRAME_PALETTE = ['#2563EB', '#0F766E', '#B45309', '#7E22CE', '#BE123C', '#475569'];
@@ -446,18 +447,20 @@
         }
 
         const el = document.createElement('div');
-        el.className = 'tg-node' + (isSel ? ' selected' : '') + (isOut ? ' is-output' : '') + (n.bypassed ? ' bypassed' : '') + (n.collapsed ? ' collapsed' : '');
+        const isGroup = n.op === 'subgraph_group';
+        el.className = 'tg-node' + (isSel ? ' selected' : '') + (isOut ? ' is-output' : '') + (isGroup ? ' is-group' : '') + (n.bypassed ? ' bypassed' : '') + (n.collapsed ? ' collapsed' : '');
         el.dataset.nodeId = n.id;
         el.style.left = `${x}px`;
         el.style.top = `${y}px`;
-        el.style.setProperty('--node-accent', accent);
+        el.style.setProperty('--node-accent', isGroup ? ((n.params && n.params.color) || '#7e22ce') : accent);
 
         const head = document.createElement('div');
         head.className = 'tg-node-head';
         const title = document.createElement('div');
         title.className = 'tg-node-title';
-        title.textContent = n.label || n.id;
-        title.title = `${n.id} (${n.op})`;
+        const grpCount = isGroup && n.params && n.params.sub_recipe && Array.isArray(n.params.sub_recipe.nodes) ? n.params.sub_recipe.nodes.length : 0;
+        title.textContent = isGroup ? `⊞ ${(n.params && n.params.title) || n.label || n.id} (${grpCount})` : (n.label || n.id);
+        title.title = isGroup ? `Compound Subgraph (${grpCount} nodes) — Double-click to step inside!` : `${n.id} (${n.op})`;
 
         const acts = document.createElement('div');
         acts.className = 'tg-node-actions';
@@ -472,6 +475,11 @@
           return b;
         };
 
+        if (isGroup) {
+          acts.appendChild(mkMini('↗', 'Enter Compound Subgraph', 'out-on', () => {
+            if (this.callbacks.onEnterGroup) this.callbacks.onEnterGroup(n.id);
+          }));
+        }
         acts.appendChild(mkMini('👁', 'Inspect Output in Viewport', 'eye-btn', () => this.callbacks.onSelectNode(n.id, true)));
         acts.appendChild(mkMini(n.collapsed ? '▸' : '▾', 'Collapse/Expand', '', () => this.callbacks.onToggleCollapse(n.id)));
         acts.appendChild(mkMini('B', 'Bypass Node (B)', n.bypassed ? 'on' : '', () => this.callbacks.onToggleBypass(n.id)));
@@ -484,7 +492,11 @@
         head.appendChild(acts);
         head.addEventListener('dblclick', (e) => {
           e.stopPropagation();
-          this.callbacks.onSelectNode(n.id, true);
+          if (isGroup && this.callbacks.onEnterGroup) {
+            this.callbacks.onEnterGroup(n.id);
+          } else {
+            this.callbacks.onSelectNode(n.id, true);
+          }
         });
         el.appendChild(head);
 
@@ -505,12 +517,22 @@
           sock.dataset.nodeId = n.id;
           sock.dataset.port = inp.name;
           sock.dataset.portType = pType;
-          sock.title = `Input ${inp.name} (${pType}) — Alt+Click to sever wire`;
+          sock.title = `Input ${inp.name} (${pType}) — Drag to re-plug · Alt+Click to sever`;
           sock.addEventListener('pointerdown', (e) => {
             if (e.altKey) {
               e.stopPropagation();
               e.preventDefault();
               this.callbacks.onDisconnect(n.id, inp.name);
+              return;
+            }
+            // Blender-style drag-off connected input socket to re-plug it smoothly!
+            const rawRef = n.inputs && n.inputs[inp.name];
+            if (e.button === 0 && rawRef) {
+              const parts = String(rawRef).split('.');
+              const srcId = parts[0];
+              const srcPort = parts[1] || 'out';
+              this.callbacks.onDisconnect(n.id, inp.name);
+              this._startWireDrag(e, srcId, srcPort, pType);
             }
           });
           row.appendChild(sock);
@@ -774,9 +796,29 @@
       this.renderWires();
     }
 
+    _findNearestCompatSocket(wx, wy) {
+      if (!this._wireDrag) return null;
+      const compat = new Set(((this.schema && this.schema.port_compatibility) || {})[this._wireDrag.portType] || [this._wireDrag.portType]);
+      let best = null;
+      let bestDist = 44 / Math.max(0.35, this.zoom);
+      for (const [key, sock] of this._socketEls.entries()) {
+        if (!key.startsWith('in:')) continue;
+        if (sock.dataset.nodeId === this._wireDrag.srcNode) continue;
+        if (!compat.has(sock.dataset.portType) && sock.dataset.portType !== 'ANY' && this._wireDrag.portType !== 'ANY') continue;
+        const c = this._socketWorldCenter(sock);
+        if (!c) continue;
+        const d = Math.hypot(c.x - wx, c.y - wy);
+        if (d < bestDist) {
+          bestDist = d;
+          best = { sock, x: c.x, y: c.y, nodeId: sock.dataset.nodeId, port: sock.dataset.port };
+        }
+      }
+      return best;
+    }
+
     _clearWireHighlights() {
       for (const sock of this._socketEls.values()) {
-        sock.classList.remove('compat-ok', 'compat-dim');
+        sock.classList.remove('compat-ok', 'compat-dim', 'snap-target');
       }
     }
 
@@ -908,8 +950,18 @@
       window.addEventListener('pointermove', (e) => {
         if (this._wireDrag) {
           const w = this.screenToWorld(e.clientX, e.clientY);
-          this._wireDrag.x2 = w.x;
-          this._wireDrag.y2 = w.y;
+          const snap = this._findNearestCompatSocket(w.x, w.y);
+          for (const sock of this._socketEls.values()) sock.classList.remove('snap-target');
+          if (snap) {
+            snap.sock.classList.add('snap-target');
+            this._wireDrag.x2 = snap.x;
+            this._wireDrag.y2 = snap.y;
+            this._wireDrag.snapTarget = snap;
+          } else {
+            this._wireDrag.x2 = w.x;
+            this._wireDrag.y2 = w.y;
+            this._wireDrag.snapTarget = null;
+          }
           this.renderWires();
           return;
         }
@@ -975,6 +1027,8 @@
           const target = document.elementFromPoint(e.clientX, e.clientY);
           if (target && target.classList && target.classList.contains('tg-socket') && target.dataset.dir === 'in') {
             this.callbacks.onConnect(drag.srcNode, drag.srcPort, target.dataset.nodeId, target.dataset.port);
+          } else if (drag.snapTarget) {
+            this.callbacks.onConnect(drag.srcNode, drag.srcPort, drag.snapTarget.nodeId, drag.snapTarget.port);
           } else {
             const wPos = this.screenToWorld(e.clientX, e.clientY);
             this.callbacks.onDropWireEmpty(drag.srcNode, drag.srcPort, drag.portType, wPos);
@@ -994,6 +1048,30 @@
               this.callbacks.onMoveNodes(positions);
             } else if (dn.items.length === 1 && this.callbacks.onMoveNode) {
               this.callbacks.onMoveNode(dn.items[0].id, dn.items[0].nObj.pos);
+            }
+            // Smart Drop-on-Wire: if a single unconnected node was dropped near a wire midpoint, auto-wire it inline!
+            if (dn.items.length === 1 && this.callbacks.onInsertNodeOnWire) {
+              const dropped = dn.items[0].nObj;
+              if (dropped && dropped.pos && (!dropped.inputs || !Object.keys(dropped.inputs).length)) {
+                const cx = dropped.pos[0] + 105;
+                const cy = dropped.pos[1] + 55;
+                for (const dstN of (this._visibleNodes || [])) {
+                  if (dstN.id === dropped.id) continue;
+                  for (const [inP, rawR] of Object.entries(dstN.inputs || {})) {
+                    const srcId = String(rawR).split('.')[0];
+                    if (srcId === dropped.id) continue;
+                    const sEl = this._socketEls.get(`out:${srcId}:out`) || this._socketEls.get(`out:${srcId}:mat`);
+                    const dEl = this._socketEls.get(`in:${dstN.id}:${inP}`);
+                    const p1 = this._socketWorldCenter(sEl) || this._nodeFallbackPortPos(srcId, 'out');
+                    const p2 = this._socketWorldCenter(dEl) || this._nodeFallbackPortPos(dstN.id, 'in');
+                    const mx = (p1.x + p2.x) * 0.5, my = (p1.y + p2.y) * 0.5;
+                    if (Math.hypot(cx - mx, cy - my) < 42) {
+                      this.callbacks.onInsertNodeOnWire(dropped.id, dstN.id, inP);
+                      return;
+                    }
+                  }
+                }
+              }
             }
           }
           return;

@@ -20,15 +20,29 @@
     vpMode: '3d',
     channel: 'pbr_lit',
     pickMode: false,
+    brushMode: false,
+    brushRadius: 6,
+    brushValue: 1.0,
+    brushPending: [],
+    brushFlushTimer: null,
+    lightDragMode: false,
+    envRotDeg: 0,
+    lightIntensity: 1.0,
+    splitWipe: false,
+    splitPos: 0.5,
+    splitRightChannel: 'normal',
+    uvWire2d: false,
     tile3x3: false,
     zoom2d: 1.0,
     phase: 0.0,
-    animFrames: 8,
-    animFps: 8,
+    animFrames: 12,
+    animFps: 30,
     animPingPong: false,
     animDir: 1,
     animPlaying: false,
     animTimer: null,
+    animRafId: null,
+    animSeqKey: null,
     animBusy: false,
     lightAz: -38,
     lightEl: 52,
@@ -106,6 +120,66 @@
         badge.style.display = 'none';
       }
     }
+    const ungrpBtn = $('btnUngroupSel');
+    if (ungrpBtn && state.serverState && state.serverState.recipe) {
+      const selNode = (state.serverState.recipe.nodes || []).find((n) => n.id === state.selectedNodeId);
+      ungrpBtn.style.display = (selNode && selNode.op === 'subgraph_group') ? 'inline-flex' : 'none';
+    }
+  }
+
+  function invalidateAnimRing() {
+    state.animSeqKey = null;
+    if (gl3d) gl3d.clearAnimFrames();
+  }
+
+  function updateBridgeBadge(bridge) {
+    const el = $('bridgeBadge');
+    if (!el || !bridge) return;
+    const c = bridge.clients || 0;
+    if (c > 0) {
+      el.textContent = `BB5 Live (${c})`;
+      el.className = 'pill-badge ok';
+    } else {
+      el.textContent = `BB5 Link · r${bridge.rev || 0}`;
+      el.className = 'pill-badge';
+    }
+  }
+
+  function renderBreadcrumbs() {
+    const bar = $('subgraphBreadcrumbs');
+    if (!bar || !state.serverState) return;
+    const crumbs = state.serverState.breadcrumbs || [];
+    if (!state.serverState.in_subgraph || crumbs.length <= 1) {
+      bar.style.display = 'none';
+      bar.innerHTML = '';
+      return;
+    }
+    bar.style.display = 'flex';
+    bar.innerHTML = '';
+    const backBtn = document.createElement('button');
+    backBtn.className = 'crumb-btn';
+    backBtn.textContent = '← Back to Parent';
+    backBtn.onclick = () => mutate({ action: 'exit_group', level: crumbs.length - 2 }, { immediateEval: true, fitGraph: true });
+    bar.appendChild(backBtn);
+    crumbs.forEach((cr, idx) => {
+      if (idx > 0) {
+        const sep = document.createElement('span');
+        sep.className = 'crumb-sep';
+        sep.textContent = '›';
+        bar.appendChild(sep);
+      }
+      if (idx < crumbs.length - 1) {
+        const b = document.createElement('button');
+        b.className = 'crumb-btn';
+        b.textContent = cr.title;
+        b.onclick = () => mutate({ action: 'exit_group', level: cr.level }, { immediateEval: true, fitGraph: true });
+        bar.appendChild(b);
+      } else {
+        const cur = document.createElement('strong');
+        cur.textContent = `⊞ ${cr.title}`;
+        bar.appendChild(cur);
+      }
+    });
   }
 
   function getActiveSelectionIds() {
@@ -239,6 +313,8 @@
     }
 
     renderPassFilterBar();
+    renderBreadcrumbs();
+    updateBridgeBadge(st.bridge);
     renderInspector();
     renderTimelineDrivers();
     renderExposedParams();
@@ -252,6 +328,7 @@
 
   async function mutate(payload, opts) {
     opts = opts || {};
+    invalidateAnimRing();
     try {
       const st = await apiPost('/api/graph/mutate', payload);
       applyServerState(st, opts);
@@ -284,6 +361,7 @@
       qb.textContent = `QA ${Math.round(qa.score)}/100`;
       qb.className = 'pill-badge ' + (qa.passed ? 'ok' : (qa.score >= 70 ? 'warn' : 'err'));
     }
+    if (ev.bridge) updateBridgeBadge(ev.bridge);
   }
 
   // ------------------------------------------------------------------------
@@ -357,6 +435,22 @@
     ctx.strokeStyle = 'rgba(255,255,255,0.18)';
     ctx.lineWidth = dpr;
     ctx.strokeRect(ox, oy, drawW, drawH);
+
+    // Optional 3D .bbmodel UV Island Wireframe Overlay (`UV Wire` toggle!)
+    if (state.uvWire2d && state.serverState && state.serverState.mesh && Array.isArray(state.serverState.mesh.uv_rects)) {
+      ctx.save();
+      ctx.strokeStyle = 'rgba(56, 224, 255, 0.72)';
+      ctx.lineWidth = Math.max(1, dpr * 0.85);
+      for (const rect of state.serverState.mesh.uv_rects) {
+        const [u0, v0, u1, v1] = rect;
+        for (let ty = 0; ty < tiles; ty++) {
+          for (let tx = 0; tx < tiles; tx++) {
+            ctx.strokeRect(ox + (tx + u0) * tw, oy + (ty + v0) * th, (u1 - u0) * tw, (v1 - v0) * th);
+          }
+        }
+      }
+      ctx.restore();
+    }
   }
 
   function updateViewportHud(extraInfo) {
@@ -376,11 +470,83 @@
 
   function setPickMode(on) {
     state.pickMode = !!on;
+    if (state.pickMode) { setBrushMode(false); setLightDragMode(false); }
     if (gl3d) gl3d.pickMode = state.pickMode;
     if ($('btnPickPart')) $('btnPickPart').classList.toggle('pick-on', state.pickMode);
     if ($('btnPickPart2d')) $('btnPickPart2d').classList.toggle('pick-on', state.pickMode);
-    if ($('viewportStage')) $('viewportStage').classList.toggle('pick-active', state.pickMode);
+    if ($('viewportStage')) $('viewportStage').classList.toggle('pick-active', state.pickMode || state.brushMode);
     updateViewportHud();
+  }
+
+  function setBrushMode(on) {
+    state.brushMode = !!on;
+    if (state.brushMode) {
+      state.pickMode = false;
+      setLightDragMode(false);
+      if (gl3d) gl3d.pickMode = false;
+      if ($('btnPickPart')) $('btnPickPart').classList.remove('pick-on');
+      if ($('btnPickPart2d')) $('btnPickPart2d').classList.remove('pick-on');
+    }
+    if (gl3d) gl3d.brushMode = state.brushMode;
+    if ($('btnBrush3d')) $('btnBrush3d').classList.toggle('brush-on', state.brushMode);
+    if ($('btnBrush2d')) $('btnBrush2d').classList.toggle('brush-on', state.brushMode);
+    if ($('brushToolbar')) $('brushToolbar').style.display = state.brushMode ? 'flex' : 'none';
+    if ($('viewportStage')) $('viewportStage').classList.toggle('pick-active', state.pickMode || state.brushMode);
+    updateViewportHud(state.brushMode ? '🖌 BRUSH PAINT' : null);
+  }
+
+  function setLightDragMode(on) {
+    state.lightDragMode = !!on;
+    if (state.lightDragMode) {
+      state.pickMode = false;
+      state.brushMode = false;
+      if (gl3d) { gl3d.pickMode = false; gl3d.brushMode = false; }
+      if ($('btnPickPart')) $('btnPickPart').classList.remove('pick-on');
+      if ($('btnBrush3d')) $('btnBrush3d').classList.remove('brush-on');
+      if ($('brushToolbar')) $('brushToolbar').style.display = 'none';
+    }
+    if (gl3d) gl3d.lightDragMode = state.lightDragMode;
+    if ($('btnLightDrag')) $('btnLightDrag').classList.toggle('light-on', state.lightDragMode);
+    updateViewportHud(state.lightDragMode ? '☀ DRAG LIGHT/HDRI' : null);
+  }
+
+  function queueBrushStroke(u, v, isStart) {
+    state.brushPending.push({ u, v, radius_px: state.brushRadius, value: state.brushValue, softness: 0.35, opacity: 0.95 });
+    if (isStart) state._brushUndoNext = true;
+    if (!state.brushFlushTimer) {
+      state.brushFlushTimer = setTimeout(flushBrushStrokes, 60);
+    }
+  }
+
+  async function flushBrushStrokes() {
+    state.brushFlushTimer = null;
+    if (!state.brushPending.length) return;
+    const strokes = state.brushPending.splice(0, state.brushPending.length);
+    const undoable = !!state._brushUndoNext;
+    state._brushUndoNext = false;
+    const rec = state.serverState && state.serverState.recipe;
+    const sel = rec && (rec.nodes || []).find((n) => n.id === state.selectedNodeId);
+    const targetId = (sel && sel.op === 'paint_mask') ? sel.id : null;
+    try {
+      const cx = Math.round((-graphCanvas.panX + graphCanvas.stage.clientWidth * 0.45) / graphCanvas.zoom - 90);
+      const cy = Math.round((-graphCanvas.panY + graphCanvas.stage.clientHeight * 0.42) / graphCanvas.zoom - 50);
+      const st = await apiPost('/api/paint_mask/stroke', {
+        node_id: targetId,
+        strokes,
+        undoable,
+        pos: [cx, cy],
+      });
+      invalidateAnimRing();
+      applyServerState(st, { autoPrim: false });
+      if (st.created_node_id) {
+        state.channel = 'selected';
+        $('channelSelect').value = 'selected';
+        showToast(`🖌 Spawned 3D/2D Brush Mask '${st.created_node_id}'`, 'ok');
+      }
+      await runEvaluate({ includeThumbsMode: 'all', includeQa: false });
+    } catch (err) {
+      showToast(err.message, 'err');
+    }
   }
 
   async function handlePickedPart(partShortName, additive) {
@@ -854,6 +1020,7 @@
     'Compositing': '#94a3b8',
     'Sprites & Masks': '#e879f9',
     'Scatter & Layout': '#f97316',
+    'Math & Utility': '#a855f7',
   };
 
   function getNodePreviewSrc(op) {
@@ -1028,7 +1195,7 @@
       head.innerHTML = `<span style="display:inline-flex;align-items:center;gap:5px;"><span class="cat-chip-dot" style="background:${catColor};"></span>${cat}</span><span style="color:var(--text-muted);font-family:var(--font-mono);">${filtered.length}</span>`;
       const list = document.createElement('div');
       list.className = 'lib-items' + (isGrid ? '' : ' list-mode');
-      const defaultOpen = !!q || cat === 'Noise' || cat === '3D Model & UV Masks' || cat === 'Materials — Metal (PBR)' || cat === 'Materials — Dielectric & Glass (PBR)' || cat.includes('Region');
+      const defaultOpen = !!q || cat === 'Noise' || cat === 'Math & Utility' || cat === '3D Model & UV Masks' || cat === 'Materials — Metal (PBR)' || cat.includes('Region');
       list.style.display = defaultOpen ? (isGrid ? 'grid' : 'flex') : 'none';
       head.onclick = () => { list.style.display = list.style.display === 'none' ? (isGrid ? 'grid' : 'flex') : 'none'; };
 
@@ -1812,32 +1979,93 @@
     $('btnPlayAnim').textContent = '▶ Play';
     $('btnPlayAnim').classList.remove('amber');
     if (state.animTimer) { clearTimeout(state.animTimer); state.animTimer = null; }
+    if (state.animRafId) { cancelAnimationFrame(state.animRafId); state.animRafId = null; }
+    if (gl3d) gl3d.setAnimFrameIdx(-1);
   }
 
-  function togglePlayAnim() {
+  async function togglePlayAnim() {
     if (state.animPlaying) {
       stopAnimLoop();
       return;
     }
     state.animPlaying = true;
-    $('btnPlayAnim').textContent = '⏸ Pause';
-    $('btnPlayAnim').classList.add('amber');
-    const tick = async () => {
-      if (!state.animPlaying) return;
-      const step = 1.0 / Math.max(2, state.animFrames);
-      let nextPh = state.phase + step * state.animDir;
-      if (state.animPingPong) {
-        if (nextPh >= 1.0 - 1e-4) { state.animDir = -1; nextPh = Math.max(0.0, 1.0 - step); }
-        else if (nextPh <= 1e-4) { state.animDir = 1; nextPh = 0.0; }
+    const btn = $('btnPlayAnim');
+    btn.classList.add('amber');
+
+    const rec = state.serverState && state.serverState.recipe;
+    const seqKey = `${rec ? rec.name : ''}:${rec ? (rec.nodes || []).length : 0}:${state.animFrames}:${state.channel}:${state.lightAz}:${state.lightEl}:${state.selectedNodeId || ''}`;
+    const tileable = !!(rec && rec.tileable);
+
+    if (state.animSeqKey !== seqKey || !gl3d || !gl3d.animRing.length) {
+      btn.textContent = `⏳ ${state.animFrames}f...`;
+      try {
+        const res = await apiPost('/api/evaluate_anim_sequence', {
+          frames: state.animFrames,
+          channel: state.channel,
+          light_az: state.lightAz,
+          light_el: state.lightEl,
+          preview_node: state.selectedNodeId,
+          max_dim: 256,
+        });
+        if (!state.animPlaying) return;
+        await gl3d.uploadAnimFrames(res.sequence || [], tileable);
+        state.animSeqKey = seqKey;
+        showToast(`⚡ GPU Ring Ready: ${res.frames}f baked in ${Math.round(res.bake_ms)}ms -> ${state.animFps}fps!`, 'ok');
+      } catch (err) {
+        stopAnimLoop();
+        showToast(`Anim bake error: ${err.message}`, 'err');
+        return;
       }
-      const t0 = performance.now();
-      await setPhase(nextPh, true);
+    }
+
+    if (!state.animPlaying || !gl3d || !gl3d.animRing.length) {
+      stopAnimLoop();
+      return;
+    }
+
+    btn.textContent = '⏸ Pause';
+    let lastStamp = performance.now();
+    let curIdx = Math.floor(state.phase * gl3d.animRing.length) % gl3d.animRing.length;
+    let dir = 1;
+
+    const rafTick = (now) => {
       if (!state.animPlaying) return;
-      const targetMs = Math.max(40, Math.round(1000 / Math.max(2, state.animFps)));
-      const waitMs = Math.max(16, targetMs - (performance.now() - t0));
-      state.animTimer = setTimeout(tick, waitMs);
+      const intervalMs = 1000 / Math.max(4, state.animFps);
+      if (now - lastStamp >= intervalMs - 1.5) {
+        lastStamp = now;
+        const nF = gl3d.animRing.length;
+        curIdx += dir;
+        if (state.animPingPong) {
+          if (curIdx >= nF) { dir = -1; curIdx = Math.max(0, nF - 2); }
+          else if (curIdx < 0) { dir = 1; curIdx = Math.min(nF - 1, 1); }
+        } else {
+          curIdx = ((curIdx % nF) + nF) % nF;
+        }
+        const entry = gl3d.setAnimFrameIdx(curIdx);
+        if (entry) {
+          state.phase = entry.phase;
+          $('phaseSlider').value = state.phase.toFixed(2);
+          $('phaseLabel').textContent = state.phase.toFixed(2);
+          $('frameReadout').textContent = `⚡ F${curIdx}/${nF} · ${state.animFps}fps`;
+          if (state.vpMode === '2d' && entry.displayImg) {
+            state.img2d = entry.displayImg;
+            render2DCanvas();
+          }
+          if (entry.thumbs && Object.keys(entry.thumbs).length) {
+            graphCanvas.updateNodeThumbs(entry.thumbs);
+          }
+        }
+      }
+      state.animRafId = requestAnimationFrame(rafTick);
     };
-    tick();
+    state.animRafId = requestAnimationFrame(rafTick);
+  }
+
+  function triggerDataUrlDownload(filename, dataUrl) {
+    const a = document.createElement('a');
+    a.href = dataUrl;
+    a.download = filename;
+    a.click();
   }
 
   function triggerDownload(filename, textContent) {
@@ -1860,6 +2088,17 @@
     showToast(`Wrapped ${ids.length} node(s) in Comment Frame`, 'ok');
   }
 
+  async function groupSelectionIntoSubgraph() {
+    const ids = getActiveSelectionIds();
+    if (!ids.length) {
+      showToast('Select one or more nodes first to collapse into a Compound Subgraph', 'err');
+      return;
+    }
+    const title = ids.length > 1 ? `Subgraph (${ids.length}n)` : `${ids[0]} Group`;
+    await mutate({ action: 'group_nodes', ids, title }, { immediateEval: true });
+    showToast(`Collapsed ${ids.length} node(s) into Compound Subgraph (double-click to edit inside!)`, 'ok');
+  }
+
   // ------------------------------------------------------------------------
   // Bootstrap Studio Application
   // ------------------------------------------------------------------------
@@ -1867,6 +2106,18 @@
     gl3d = new StudioGL3DViewport($('gl3dCanvas'), $('vpHud'));
     gl3d.onPickPart = (hit, shift) => handlePickedPart(hit.short, shift);
     gl3d.onHoverPart = (hit) => updateViewportHud(hit ? `🎯 ${hit.short}` : null);
+    gl3d.onBrush3d = (u, v, isStart) => queueBrushStroke(u, v, isStart);
+    gl3d.onLightChange = (az, el, envRot) => {
+      state.lightAz = az;
+      state.lightEl = el;
+      state.envRotDeg = envRot;
+      if ($('lightAzSlider')) $('lightAzSlider').value = String(az);
+      if ($('lightAzVal')) $('lightAzVal').textContent = `${az}°`;
+      if ($('lightElSlider')) $('lightElSlider').value = String(el);
+      if ($('lightElVal')) $('lightElVal').textContent = `${el}°`;
+      if ($('envRotSlider')) $('envRotSlider').value = String(envRot);
+      if ($('envRotVal')) $('envRotVal').textContent = `${envRot}°`;
+    };
 
     graphCanvas = new StudioGraphCanvas({
       stage: $('graphStage'),
@@ -1905,6 +2156,13 @@
           mutate({ action: 'insert_reroute', dst_node: dst, dst_port: dstPort, pos }, { immediateEval: true });
           showToast('Inserted Reroute Dot on wire', 'ok');
         },
+        onInsertNodeOnWire: (nid, dst, dstPort) => {
+          mutate({ action: 'insert_node_on_wire', node_id: nid, dst_node: dst, dst_port: dstPort }, { immediateEval: true });
+          showToast(`Auto-wired '${nid}' inline on wire!`, 'ok');
+        },
+        onEnterGroup: (gid) => {
+          mutate({ action: 'enter_group', node_id: gid }, { immediateEval: true, fitGraph: true });
+        },
         onUpdateFrame: (fid, patch) => mutate(Object.assign({ action: 'update_frame', frame_id: fid }, patch), { skipEval: true }),
         onDeleteFrame: (fid) => {
           mutate({ action: 'delete_frame', frame_id: fid }, { skipEval: true });
@@ -1928,8 +2186,13 @@
           const meta = nObj ? state.opMap[nObj.op] : null;
           const items = [
             { label: '👁 Inspect in Viewport', kbd: 'Dbl-Clk', action: () => { state.channel = 'selected'; $('channelSelect').value = 'selected'; runEvaluate({ includeThumbs: false, includeQa: false }); } },
+            ...(nObj && nObj.op === 'subgraph_group' ? [
+              { label: '↗ Enter Compound Subgraph', kbd: 'Dbl-Clk', action: () => mutate({ action: 'enter_group', node_id: nid }, { immediateEval: true, fitGraph: true }) },
+              { label: '⊟ Ungroup Subgraph', kbd: 'Ctrl+Alt+G', action: () => mutate({ action: 'ungroup_node', node_id: nid }, { immediateEval: true }) },
+            ] : []),
             { label: '★ Set Final Graph Output', action: () => mutate({ action: 'set_output', node_id: nid }, { immediateEval: true }) },
             { sep: true },
+            { label: `⊞ Group ${multi ? targetIds.length + ' Nodes' : 'Node'} into Subgraph`, kbd: 'Ctrl+G', action: () => groupSelectionIntoSubgraph() },
             { label: `▭ Wrap ${multi ? targetIds.length + ' Nodes' : 'Node'} in Frame`, kbd: 'Ctrl+J', action: () => createFrameFromSelection() },
             { label: `⧉ Duplicate ${multi ? targetIds.length + ' Nodes' : 'Node'}`, kbd: '⌘D', action: () => mutate({ action: 'duplicate_nodes', ids: targetIds }, { immediateEval: true }) },
             { label: '🎲 Randomize Seed', action: () => mutate({ action: 'randomize_seed', node_id: nid }, { immediateEval: true }) },
@@ -1987,12 +2250,12 @@
       for (const n of nodes) state.opMap[n.op] = Object.assign({ category: cat }, n);
     }
     graphCanvas.setSchema(schemaPayload.schema);
-    $('versionBadge').textContent = `v14 · ${schemaPayload.schema.node_count} nodes`;
+    $('versionBadge').textContent = `v15 · ${schemaPayload.schema.node_count} nodes`;
 
     // Populate Project / Preset Dropdown
     const pSel = $('projectSelect');
     const ogSamples = document.createElement('optgroup');
-    ogSamples.label = 'Flagship 3D Studio Projects (v14)';
+    ogSamples.label = 'Flagship 3D Studio Projects (v15)';
     for (const s of schemaPayload.samples) {
       const o = document.createElement('option');
       o.value = `sample:${s.id}`;
@@ -2101,6 +2364,111 @@
     }
     if ($('btnPickPart')) $('btnPickPart').onclick = () => setPickMode(!state.pickMode);
     if ($('btnPickPart2d')) $('btnPickPart2d').onclick = () => setPickMode(!state.pickMode);
+    if ($('btnBrush3d')) $('btnBrush3d').onclick = () => setBrushMode(!state.brushMode);
+    if ($('btnBrush2d')) $('btnBrush2d').onclick = () => setBrushMode(!state.brushMode);
+    if ($('btnLightDrag')) $('btnLightDrag').onclick = () => setLightDragMode(!state.lightDragMode);
+    if ($('btnUvWire2d')) {
+      $('btnUvWire2d').onclick = () => {
+        state.uvWire2d = !state.uvWire2d;
+        $('btnUvWire2d').classList.toggle('active', state.uvWire2d);
+        render2DCanvas();
+      };
+    }
+    if ($('bridgeBadge')) {
+      $('bridgeBadge').onclick = () => {
+        showToast('Blockbench 5 Live Link ready on http://127.0.0.1:18790/api/bridge/events — toggle in BB5 Tools menu!', 'ok');
+      };
+    }
+    if ($('brushSizeSlider')) {
+      $('brushSizeSlider').oninput = (e) => {
+        state.brushRadius = parseInt(e.target.value, 10) || 6;
+        if ($('brushSizeVal')) $('brushSizeVal').textContent = `${state.brushRadius}px`;
+      };
+    }
+    if ($('btnBrushAdd')) {
+      $('btnBrushAdd').onclick = () => {
+        state.brushValue = 1.0;
+        $('btnBrushAdd').classList.add('active');
+        if ($('btnBrushErase')) $('btnBrushErase').classList.remove('active');
+      };
+    }
+    if ($('btnBrushErase')) {
+      $('btnBrushErase').onclick = () => {
+        state.brushValue = 0.0;
+        $('btnBrushErase').classList.add('active');
+        if ($('btnBrushAdd')) $('btnBrushAdd').classList.remove('active');
+      };
+    }
+    if ($('btnBrushClear')) {
+      $('btnBrushClear').onclick = async () => {
+        const rec = state.serverState && state.serverState.recipe;
+        const sel = rec && (rec.nodes || []).find((n) => n.id === state.selectedNodeId);
+        if (!sel || sel.op !== 'paint_mask') return;
+        const st = await apiPost('/api/paint_mask/stroke', { node_id: sel.id, clear: true });
+        invalidateAnimRing();
+        applyServerState(st, { autoPrim: false });
+        await runEvaluate({ includeThumbsMode: 'all', includeQa: false });
+        showToast(`Cleared brush mask '${sel.id}'`, 'ok');
+      };
+    }
+    if ($('btnSplitWipe')) {
+      $('btnSplitWipe').onclick = () => {
+        state.splitWipe = !state.splitWipe;
+        $('btnSplitWipe').classList.toggle('active', state.splitWipe);
+        if ($('splitWipeBar')) $('splitWipeBar').style.display = state.splitWipe ? 'block' : 'none';
+        if ($('splitWipeHandle')) $('splitWipeHandle').style.display = state.splitWipe ? 'flex' : 'none';
+        if (gl3d) {
+          gl3d.splitWipe = state.splitWipe;
+          gl3d.splitPos = state.splitPos;
+          gl3d.splitRightChannel = state.splitRightChannel;
+        }
+        updateViewportTextures();
+      };
+    }
+    if ($('splitRightSelect')) {
+      $('splitRightSelect').onchange = (e) => {
+        state.splitRightChannel = e.target.value;
+        if (gl3d) gl3d.splitRightChannel = state.splitRightChannel;
+        updateViewportTextures();
+      };
+    }
+    if ($('splitWipeHandle')) {
+      let wiping = false;
+      $('splitWipeHandle').addEventListener('pointerdown', (e) => {
+        e.stopPropagation();
+        wiping = true;
+        $('splitWipeHandle').setPointerCapture(e.pointerId);
+      });
+      window.addEventListener('pointermove', (e) => {
+        if (!wiping) return;
+        const sr = $('viewportStage').getBoundingClientRect();
+        const nx = Math.max(0.05, Math.min(0.95, (e.clientX - sr.left) / Math.max(1, sr.width)));
+        state.splitPos = nx;
+        $('splitWipeHandle').style.left = `${(nx * 100).toFixed(1)}%`;
+        if (gl3d) gl3d.splitPos = nx;
+      });
+      window.addEventListener('pointerup', () => { wiping = false; });
+    }
+    if ($('btnRecordGif')) {
+      $('btnRecordGif').onclick = async () => {
+        if (!gl3d) return;
+        const btn = $('btnRecordGif');
+        btn.disabled = true;
+        btn.textContent = '⏳ GIF';
+        try {
+          const frames = gl3d.captureTurntableFrames(18);
+          const stem = (state.serverState && state.serverState.recipe && state.serverState.recipe.name) || 'synccraft_3d';
+          const res = await apiPost('/api/export/turntable_gif', { frames, fps: 14, stem });
+          triggerDataUrlDownload(res.filename, res.gif_data_url);
+          showToast(`🎬 Exported 360° Turntable GIF (${res.frame_count}f -> ${res.filename})`, 'ok');
+        } catch (err) {
+          showToast(`GIF error: ${err.message}`, 'err');
+        } finally {
+          btn.disabled = false;
+          btn.textContent = '🎬 GIF';
+        }
+      };
+    }
     $('btnResetCam3d').onclick = () => gl3d.resetCamera();
     $('btnTile3x3').onclick = () => {
       state.tile3x3 = !state.tile3x3;
@@ -2128,6 +2496,22 @@
       if (gl3d) gl3d.lightEl = state.lightEl;
       scheduleEvaluate(90);
     };
+    if ($('envRotSlider')) {
+      $('envRotSlider').oninput = (e) => {
+        const v = parseFloat(e.target.value);
+        state.envRotDeg = v;
+        if ($('envRotVal')) $('envRotVal').textContent = `${Math.round(v)}°`;
+        if (gl3d) gl3d.envRotDeg = v;
+      };
+    }
+    if ($('lightIntSlider')) {
+      $('lightIntSlider').oninput = (e) => {
+        const v = parseFloat(e.target.value);
+        state.lightIntensity = v;
+        if ($('lightIntVal')) $('lightIntVal').textContent = v.toFixed(2);
+        if (gl3d) gl3d.lightIntensity = v;
+      };
+    }
     if ($('coatSlider')) {
       $('coatSlider').oninput = (e) => {
         const v = parseFloat(e.target.value);
@@ -2142,6 +2526,32 @@
         if (gl3d) gl3d.bloomStrength = v;
       };
     }
+
+    // 2D Canvas Direct Brush Painting
+    let brush2dDown = false;
+    const sample2dUv = (e) => {
+      const dr = state._draw2dRect;
+      if (!dr) return null;
+      const r = $('canvas2d').getBoundingClientRect();
+      const cx = (e.clientX - r.left) * dr.dpr;
+      const cy = (e.clientY - r.top) * dr.dpr;
+      const u = (((cx - dr.ox) / dr.drawW) * dr.tiles) % 1;
+      const v = (((cy - dr.oy) / dr.drawH) * dr.tiles) % 1;
+      if (u < 0 || v < 0 || u >= 1 || v >= 1) return null;
+      return { u, v };
+    };
+    $('canvas2d').addEventListener('pointerdown', (e) => {
+      if (!state.brushMode || e.button !== 0) return;
+      const pt = sample2dUv(e);
+      if (pt) { brush2dDown = true; queueBrushStroke(pt.u, pt.v, true); }
+    });
+    $('canvas2d').addEventListener('pointermove', (e) => {
+      if (brush2dDown && state.brushMode) {
+        const pt = sample2dUv(e);
+        if (pt) queueBrushStroke(pt.u, pt.v, false);
+      }
+    });
+    window.addEventListener('pointerup', () => { brush2dDown = false; });
 
     // 2D Pixel Eyedropper HUD + 2D UV Island Click-to-Mask!
     $('canvas2d').addEventListener('pointermove', (e) => {
@@ -2248,6 +2658,12 @@
         if ($('btnToolSelect')) $('btnToolSelect').classList.remove('active');
       };
     }
+    if ($('btnGroupSel')) $('btnGroupSel').onclick = () => groupSelectionIntoSubgraph();
+    if ($('btnUngroupSel')) {
+      $('btnUngroupSel').onclick = () => {
+        if (state.selectedNodeId) mutate({ action: 'ungroup_node', node_id: state.selectedNodeId }, { immediateEval: true });
+      };
+    }
     if ($('btnFrameSel')) $('btnFrameSel').onclick = () => createFrameFromSelection();
     $('btnAddNode').onclick = () => openPalette();
     $('btnOpenPaletteLib').onclick = () => openPalette();
@@ -2306,11 +2722,12 @@
     }
     if ($('animFpsSelect')) {
       $('animFpsSelect').onchange = (e) => {
-        state.animFps = Math.max(2, Math.min(30, parseInt(e.target.value, 10) || 8));
+        state.animFps = Math.max(4, Math.min(60, parseInt(e.target.value, 10) || 30));
       };
     }
     $('animFramesInput').onchange = (e) => {
-      state.animFrames = Math.max(2, Math.min(32, parseInt(e.target.value, 10) || 8));
+      state.animFrames = Math.max(2, Math.min(32, parseInt(e.target.value, 10) || 12));
+      invalidateAnimRing();
       setPhase(state.phase);
     };
 
@@ -2410,6 +2827,25 @@
     };
     $('btnCloseExport').onclick = () => $('exportModal').classList.remove('open');
     $('exportModal').addEventListener('click', (e) => { if (e.target === $('exportModal')) $('exportModal').classList.remove('open'); });
+    const runCtmExport = async (mode) => {
+      const stem = $('exportStemInput').value.trim() || 'synccraft_block';
+      const outDir = $('exportDirInput').value.trim();
+      try {
+        const res = await apiPost('/api/export/ctm', { mode, stem, out_dir: outDir || null, style: 'metal_frame' });
+        const pre = $('exportResultPre');
+        if (pre) {
+          pre.style.display = 'block';
+          pre.textContent = `Generated ${res.mode.toUpperCase()} Connected Tileset (${res.tile_count} tiles, ${res.grid_cols}×${res.grid_rows} sheet)\n\n${res.optifine_properties}`;
+        }
+        triggerDataUrlDownload(res.sheet_filename, res.sheet_data_url);
+        triggerDownload(res.props_filename, res.optifine_properties);
+        showToast(`Exported ${res.mode.toUpperCase()} (${res.tile_count} tiles + .properties)!`, 'ok');
+      } catch (err) {
+        showToast(err.message, 'err');
+      }
+    };
+    if ($('btnExportCtm47')) $('btnExportCtm47').onclick = () => runCtmExport('ctm47');
+    if ($('btnExportWang16')) $('btnExportWang16').onclick = () => runCtmExport('wang16');
     if ($('btnDownloadMtlx')) {
       $('btnDownloadMtlx').onclick = async () => {
         const stem = $('exportStemInput').value.trim() || 'asset';
@@ -2488,6 +2924,16 @@
         graphCanvas.setData(state.serverState.recipe, state.evalData, state.selectedNodeId, state.activePass, state.selectedIds);
         return;
       }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'g') {
+        if (inField) return;
+        e.preventDefault();
+        if (e.altKey && state.selectedNodeId) {
+          mutate({ action: 'ungroup_node', node_id: state.selectedNodeId }, { immediateEval: true });
+        } else {
+          groupSelectionIntoSubgraph();
+        }
+        return;
+      }
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'j') {
         if (inField) return;
         e.preventDefault();
@@ -2505,6 +2951,8 @@
         hideContextMenu();
         closePalette();
         if (state.pickMode) setPickMode(false);
+        if (state.brushMode) setBrushMode(false);
+        if (state.lightDragMode) setLightDragMode(false);
         $('exportModal').classList.remove('open');
         $('meshModal').classList.remove('open');
         return;

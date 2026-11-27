@@ -1373,6 +1373,91 @@ NODE_CATALOG: dict[str, NodeMeta] = {
         ParamSchema("angle_deg", "slider", 0.0, -180.0, 180.0, 5.0, group="Flow"),
         ParamSchema("seed", "seed", 42, 0, 99999, 1, group="Randomness"),
     ), time_aware=True),
+
+    # --- TexGraph v15 Blender-Style Math, Vector, Mapping, Utility, Paint Mask & Compound Subgraph Nodes (17 ops -> 228 total!) ---
+    "math_scalar": NodeMeta("math_scalar", "Math & Utility", "Math (Blender)", "Blender-style scalar math node supporting 21 arithmetic, trig, smooth-min & comparison operations.", (PortSchema("a", "SCALAR", True), PortSchema("b", "SCALAR", True)), "SCALAR", params=(
+        ParamSchema("math_op", "select", "multiply", choices=("add", "subtract", "multiply", "divide", "power", "sqrt", "abs", "min", "max", "smooth_min", "modulo", "pingpong", "sin", "cos", "greater_than", "less_than", "round", "floor", "ceil", "fract", "sign"), group="Math"),
+        ParamSchema("value_a", "slider", 0.5, -4.0, 4.0, 0.05, group="Values"),
+        ParamSchema("value_b", "slider", 0.5, -4.0, 4.0, 0.05, group="Values"),
+        ParamSchema("clamp_out", "checkbox", True, group="Output"),
+    )),
+    "map_range": NodeMeta("map_range", "Math & Utility", "Map Range", "Blender-style Map Range remapping values with linear, stepped, smoothstep, or smootherstep curves.", (PortSchema("value", "SCALAR", True),), "SCALAR", params=(
+        ParamSchema("from_min", "slider", 0.0, -2.0, 2.0, 0.02, group="Input Range"),
+        ParamSchema("from_max", "slider", 1.0, -2.0, 2.0, 0.02, group="Input Range"),
+        ParamSchema("to_min", "slider", 0.0, -2.0, 2.0, 0.02, group="Output Range"),
+        ParamSchema("to_max", "slider", 1.0, -2.0, 2.0, 0.02, group="Output Range"),
+        ParamSchema("interpolation", "select", "linear", choices=("linear", "stepped", "smoothstep", "smootherstep"), group="Curve"),
+        ParamSchema("steps", "int", 4, 1, 16, 1, group="Curve", visible_if={"interpolation": "stepped"}),
+        ParamSchema("clamp_out", "checkbox", True, group="Output"),
+    )),
+    "clamp_value": NodeMeta("clamp_value", "Math & Utility", "Clamp", "Constrain any scalar, mask, or RGBA field cleanly within [min_val, max_val].", (PortSchema("value", "ANY", True),), "ANY", params=(
+        ParamSchema("min_val", "slider", 0.0, 0.0, 1.0, 0.02, group="Clamp"),
+        ParamSchema("max_val", "slider", 1.0, 0.0, 1.0, 0.02, group="Clamp"),
+    )),
+    "mix_blend": NodeMeta("mix_blend", "Math & Utility", "Mix / Blend (Blender)", "Blender-style Mix Color / Blend node with factor mask and 10 blend modes.", (PortSchema("a", "RGBA", True), PortSchema("b", "RGBA", True), PortSchema("factor", "MASK", True)), "RGBA", params=(
+        ParamSchema("blend_mode", "select", "mix", choices=("mix", "add", "subtract", "multiply", "screen", "overlay", "darken", "lighten", "difference", "divide"), group="Blend"),
+        ParamSchema("fac_value", "slider", 0.5, 0.0, 1.0, 0.02, group="Blend"),
+        ParamSchema("color_a", "color", "#3B82F6", group="Fallback Colors"),
+        ParamSchema("color_b", "color", "#F59E0B", group="Fallback Colors"),
+        ParamSchema("clamp_out", "checkbox", True, group="Output"),
+    )),
+    "rgb_combine": NodeMeta("rgb_combine", "Math & Utility", "Combine Color (RGB/HSV)", "Pack scalar R/G/B/A (or H/S/V/A) channels into a unified RGBA texture.", (PortSchema("r", "SCALAR", True), PortSchema("g", "SCALAR", True), PortSchema("b", "SCALAR", True), PortSchema("a", "SCALAR", True)), "RGBA", params=(
+        ParamSchema("mode", "select", "rgb", choices=("rgb", "hsv"), group="Color Space"),
+        ParamSchema("r_val", "slider", 0.5, 0.0, 1.0, 0.02, group="Defaults"),
+        ParamSchema("g_val", "slider", 0.5, 0.0, 1.0, 0.02, group="Defaults"),
+        ParamSchema("b_val", "slider", 0.5, 0.0, 1.0, 0.02, group="Defaults"),
+        ParamSchema("a_val", "slider", 1.0, 0.0, 1.0, 0.02, group="Defaults"),
+    )),
+    "rgb_separate": NodeMeta("rgb_separate", "Math & Utility", "Separate Color", "Extract R, G, B, A, Luma, Hue, Saturation, or Value from any RGBA texture.", (PortSchema("color", "RGBA", True),), "SCALAR", params=(
+        ParamSchema("channel", "select", "luma", choices=("r", "g", "b", "a", "luma", "hue", "sat", "val"), group="Extract"),
+    )),
+    "vector_math": NodeMeta("vector_math", "Math & Utility", "Vector Math (Blender)", "3-channel Vector/Normal math: normalize, add, subtract, multiply, dot, cross, reflect, length & scale.", (PortSchema("vec_a", "NORMAL", True), PortSchema("vec_b", "NORMAL", True)), "NORMAL", params=(
+        ParamSchema("vec_op", "select", "normalize", choices=("normalize", "add", "subtract", "multiply", "scale", "dot", "cross", "reflect", "length", "invert", "abs"), group="Vector"),
+        ParamSchema("scale", "slider", 1.0, -4.0, 4.0, 0.05, group="Vector", visible_if={"vec_op": "scale"}),
+    )),
+    "uv_mapping": NodeMeta("uv_mapping", "Math & Utility", "Mapping (UV Transform)", "Blender Mapping node: offset, rotate, and scale/tile any scalar or RGBA texture.", (PortSchema("src", "ANY", True),), "ANY", params=(
+        ParamSchema("offset_x", "slider", 0.0, -1.0, 1.0, 0.02, group="Location"),
+        ParamSchema("offset_y", "slider", 0.0, -1.0, 1.0, 0.02, group="Location"),
+        ParamSchema("rotation_deg", "slider", 0.0, -180.0, 180.0, 5.0, group="Rotation"),
+        ParamSchema("scale_x", "slider", 1.0, 0.1, 8.0, 0.05, group="Scale"),
+        ParamSchema("scale_y", "slider", 1.0, 0.1, 8.0, 0.05, group="Scale"),
+    )),
+    "tex_coord": NodeMeta("tex_coord", "Math & Utility", "Texture Coordinate", "Blender Texture Coordinate generator: UV, Radial Distance/Angle, 3D World Position & World Normal.", (), "RGBA", params=(
+        ParamSchema("coord_type", "select", "generated_uv", choices=("generated_uv", "uv_x", "uv_y", "radial_dist", "radial_angle", "world_pos", "world_normal"), group="Coordinate"),
+    )),
+    "float_constant": NodeMeta("float_constant", "Math & Utility", "Value Constant", "Blender constant scalar Value generator for driving shared graph inputs.", (), "SCALAR", params=(
+        ParamSchema("value", "slider", 0.5, 0.0, 1.0, 0.01, group="Value"),
+    )),
+    "color_constant": NodeMeta("color_constant", "Math & Utility", "RGB Color Constant", "Blender constant RGBA color swatch generator.", (), "RGBA", params=(
+        ParamSchema("color", "color", "#3B82F6", group="Color"),
+        ParamSchema("alpha", "slider", 1.0, 0.0, 1.0, 0.02, group="Color"),
+    )),
+    "invert_field": NodeMeta("invert_field", "Math & Utility", "Invert Color / Mask", "Blender Invert node blending cleanly between input and 1 - input.", (PortSchema("src", "ANY", True),), "ANY", params=(
+        ParamSchema("fac", "slider", 1.0, 0.0, 1.0, 0.02, group="Invert"),
+    )),
+    "fresnel_weight": NodeMeta("fresnel_weight", "Math & Utility", "Fresnel / Layer Weight", "Blender Fresnel / grazing-angle rim falloff computed from Normal or 3D Mesh surface.", (PortSchema("normal", "NORMAL", True),), "SCALAR", params=(
+        ParamSchema("ior", "slider", 1.45, 1.0, 3.0, 0.05, group="Optics"),
+        ParamSchema("power", "slider", 3.0, 0.5, 8.0, 0.2, group="Optics"),
+    )),
+    "checker_basic": NodeMeta("checker_basic", "Math & Utility", "Checker Texture", "Classic Blender two-color procedural Checker texture.", (), "RGBA", params=(
+        ParamSchema("scale_x", "int", 8, 1, 32, 1, group="Checker"),
+        ParamSchema("scale_y", "int", 8, 1, 32, 1, group="Checker"),
+        ParamSchema("color_a", "color", "#E2E8F0", group="Colors"),
+        ParamSchema("color_b", "color", "#1E293B", group="Colors"),
+    )),
+    "paint_mask": NodeMeta("paint_mask", "3D Model & UV Masks", "3D / 2D Brush Paint Mask", "Interactive brush-painted grayscale mask authored directly on the 3D WebGL model or 2D UV canvas!", (), "MASK", params=(
+        ParamSchema("base_value", "slider", 0.0, 0.0, 1.0, 0.05, group="Canvas"),
+        ParamSchema("blur_px", "int", 0, 0, 8, 1, group="Refine"),
+        ParamSchema("invert", "checkbox", False, group="Refine"),
+        ParamSchema("mask_data_url", "text", "", group="Brush Buffer", tooltip="Auto-populated by the 3D/2D Brush Paint tool"),
+    )),
+    "group_input": NodeMeta("group_input", "Compositing", "Group Input Port", "Exposes an external parent-graph wire inside a nested Compound Subgraph Group.", (), "ANY", params=(
+        ParamSchema("port_name", "text", "in", group="Group Port"),
+    )),
+    "subgraph_group": NodeMeta("subgraph_group", "Compositing", "Compound Subgraph Group", "Collapsed reusable node group (Ctrl+G). Double-click to step inside and edit its internal node graph!", (PortSchema("in_0", "ANY", True), PortSchema("in_1", "ANY", True), PortSchema("in_2", "ANY", True), PortSchema("in_3", "ANY", True)), "ANY", params=(
+        ParamSchema("title", "text", "Node Group", group="Group"),
+        ParamSchema("color", "color", "#7E22CE", group="Group"),
+    )),
 }
 
 

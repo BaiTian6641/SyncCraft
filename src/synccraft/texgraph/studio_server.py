@@ -53,6 +53,7 @@ from .syncmat_and_mtlx import (
     list_all_syncmats,
     save_user_syncmat,
 )
+from .ctm_tileset import generate_ctm_tileset
 from .syncproj import DEFAULT_CHRONO_VARIANTS, SyncProject, apply_variant_to_graph, generate_variant_pack
 from .texdsl import TexDslError as TexDSLParseError, export_texdsl, parse_texdsl
 
@@ -162,6 +163,7 @@ def extract_bbmodel_webgl_mesh(bb_doc: dict[str, Any]) -> dict[str, Any]:
     uvs: list[float] = []
     pick_ids: list[float] = []
     elem_meta: list[dict[str, str]] = []
+    uv_rects: list[list[float]] = []
 
     pmin = np.array([1e9, 1e9, 1e9], dtype=np.float64)
     pmax = np.array([-1e9, -1e9, -1e9], dtype=np.float64)
@@ -218,6 +220,7 @@ def extract_bbmodel_webgl_mesh(bb_doc: dict[str, Any]) -> dict[str, Any]:
             u0, v0, u1, v1 = (float(uv_rect[0]) / tw, float(uv_rect[1]) / th, float(uv_rect[2]) / tw, float(uv_rect[3]) / th)
             if abs(u1 - u0) < 1e-6 or abs(v1 - v0) < 1e-6:
                 continue
+            uv_rects.append([round(min(u0, u1), 5), round(min(v0, v1), 5), round(max(u0, u1), 5), round(max(v0, v1), 5)])
 
             tu_v = np.array(tu_l, dtype=np.float64)
             tv_v = np.array(tv_l, dtype=np.float64)
@@ -285,6 +288,7 @@ def extract_bbmodel_webgl_mesh(bb_doc: dict[str, Any]) -> dict[str, Any]:
         "uvs": uvs,
         "pick_ids": pick_ids,
         "elem_meta": elem_meta,
+        "uv_rects": uv_rects,
     }
 
 
@@ -603,6 +607,11 @@ class StudioSession:
         self.artist_overrides: dict[str, Any] = {}
         self.active_variant: str = "chronos_prime"
         self.active_source: str = f"sample:{initial_sample}"
+        self._group_stack: list[dict[str, Any]] = []
+        self._bridge_rev: int = 0
+        self._bridge_payload: dict[str, Any] = {}
+        self._bridge_clients: int = 0
+        self._bridge_cond = threading.Condition()
 
         g, bb = build_studio_sample(initial_sample, size=size)
         self._set_workspace(g, bb, source=self.active_source, clear_history=True)
@@ -643,6 +652,7 @@ class StudioSession:
             self._redo_stack.clear()
             self.artist_overrides.clear()
             self.active_variant = "chronos_prime"
+            self._group_stack.clear()
         self._thumb_cache.clear()
         self._log("info", f"Loaded workspace '{graph.name}' ({len(graph.nodes)} nodes, {graph.width}x{graph.height})")
 
@@ -739,6 +749,14 @@ class StudioSession:
                     else None
                 ),
                 "log": self._event_log[-30:],
+                "breadcrumbs": (
+                    [{"level": 0, "title": self._group_stack[0]["parent_title"]}]
+                    + [{"level": i + 1, "title": fr["title"]} for i, fr in enumerate(self._group_stack)]
+                    if self._group_stack
+                    else [{"level": 0, "title": self.graph.name}]
+                ),
+                "in_subgraph": bool(self._group_stack),
+                "bridge": {"rev": self._bridge_rev, "clients": self._bridge_clients},
             }
 
     def load_project(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -1069,6 +1087,103 @@ class StudioSession:
                 out = self.get_state_payload()
                 out["created_node_id"] = nid
                 return out
+
+            if action == "insert_node_on_wire":
+                nid = str(payload.get("node_id") or "")
+                dst = str(payload.get("dst_node") or "")
+                dst_port = str(payload.get("dst_port") or "")
+                if nid not in g.nodes or dst not in g.nodes or dst_port not in g.nodes[dst].inputs:
+                    raise ValueError("Node or target wire does not exist")
+                if nid == dst:
+                    return self.get_state_payload()
+                meta = NODE_REGISTRY.get(g.nodes[nid].op)
+                if not meta or not meta.inputs:
+                    return self.get_state_payload()
+                orig_ref = g.nodes[dst].inputs[dst_port]
+                if _parse_ref(orig_ref)[0] == nid:
+                    return self.get_state_payload()
+                self._push_undo()
+                in_port = meta.inputs[0].name
+                g.nodes[nid].inputs[in_port] = orig_ref
+                g.nodes[dst].inputs[dst_port] = nid
+                vrep = g.validate_graph()
+                if any("cycle" in e.lower() for e in vrep.errors):
+                    rec = self._undo_stack.pop()
+                    self._restore_recipe(rec)
+                    raise ValueError("Inserting node on wire would introduce a cycle")
+                g._static_cache.clear()
+                self._log("info", f"Auto-wired '{nid}' inline on {orig_ref} -> {dst}.{dst_port}")
+                return self.get_state_payload()
+
+            if action == "group_nodes":
+                ids = [str(x) for x in (payload.get("ids") or []) if str(x) in g.nodes]
+                if not ids:
+                    raise ValueError("Select at least one node to group")
+                self._push_undo()
+                title = str(payload.get("title") or f"Node Group ({len(ids)})").strip()
+                color = str(payload.get("color") or "#7E22CE")
+                gid = g.group_nodes_into_subgraph(ids, title=title, color=color)
+                self._log("info", f"Collapsed {len(ids)} node(s) into Compound Subgraph '{gid}'")
+                out = self.get_state_payload()
+                out["created_node_id"] = gid
+                return out
+
+            if action == "ungroup_node":
+                gid = str(payload.get("node_id") or "")
+                if gid not in g.nodes or g.nodes[gid].op != "subgraph_group":
+                    raise ValueError("Selected node is not a Compound Subgraph Group")
+                self._push_undo()
+                restored = g.ungroup_subgraph_node(gid)
+                self._log("info", f"Expanded Compound Subgraph '{gid}' -> {len(restored)} node(s)")
+                out = self.get_state_payload()
+                out["created_node_ids"] = restored
+                if restored:
+                    out["created_node_id"] = restored[-1]
+                return out
+
+            if action == "enter_group":
+                gid = str(payload.get("node_id") or "")
+                if gid not in g.nodes or g.nodes[gid].op != "subgraph_group":
+                    raise ValueError("Target node is not a Compound Subgraph Group")
+                sp = g.nodes[gid]
+                sub_rec = copy.deepcopy(sp.params.get("sub_recipe") or {})
+                if not sub_rec.get("nodes"):
+                    raise ValueError("Compound Subgraph contains no internal nodes")
+                self._group_stack.append(
+                    {
+                        "parent_recipe": copy.deepcopy(g.to_recipe()),
+                        "parent_title": g.name,
+                        "group_node_id": gid,
+                        "title": str(sp.params.get("title") or sp.label or gid),
+                    }
+                )
+                sub_rec["width"] = g.width
+                sub_rec["height"] = g.height
+                sub_rec["tileable"] = g.tileable
+                sub_g = TexGraph.from_recipe(sub_rec, mesh_context=self.mesh_ctx)
+                self.graph = sub_g
+                self._ensure_positions()
+                self._log("info", f"Entered Compound Subgraph '{self._group_stack[-1]['title']}'")
+                return self.get_state_payload()
+
+            if action == "exit_group":
+                if not self._group_stack:
+                    return self.get_state_payload()
+                target_level = int(payload.get("level", len(self._group_stack) - 1))
+                target_level = max(0, min(len(self._group_stack) - 1, target_level))
+                while len(self._group_stack) > target_level:
+                    edited_sub_rec = copy.deepcopy(self.graph.to_recipe())
+                    frame = self._group_stack.pop()
+                    parent_g = TexGraph.from_recipe(frame["parent_recipe"], mesh_context=self.mesh_ctx)
+                    gid = frame["group_node_id"]
+                    if gid in parent_g.nodes:
+                        parent_g.nodes[gid].params["sub_recipe"] = edited_sub_rec
+                    parent_g._static_cache.clear()
+                    parent_g._content_cache.clear()
+                    self.graph = parent_g
+                self._ensure_positions()
+                self._log("info", f"Returned to '{self.graph.name}' (synced subgraph edits)")
+                return self.get_state_payload()
 
             if action == "set_param":
                 nid = str(payload.get("node_id", ""))
@@ -1414,6 +1529,24 @@ class StudioSession:
             total_ms = round((time.perf_counter() - t_start) * 1000.0, 2)
             eval_ms = round(sum(ev.timings_ms.values()), 2)
 
+            # Broadcast live evaluated textures to any connected Blockbench 5 Live Link clients!
+            with self._bridge_cond:
+                self._bridge_rev += 1
+                self._bridge_payload = {
+                    "ok": True,
+                    "rev": self._bridge_rev,
+                    "graph_name": self.graph.name,
+                    "width": int(out_u8.shape[1]),
+                    "height": int(out_u8.shape[0]),
+                    "phase": round(phase, 4),
+                    "channels": {
+                        k: channels[k]
+                        for k in ("baked", "albedo", "pbr_lit", "normal", "labpbr_n", "labpbr_s", "bedrock_mer", "emissive")
+                        if k in channels
+                    },
+                }
+                self._bridge_cond.notify_all()
+
             return {
                 "ok": True,
                 "width": int(out_u8.shape[1]),
@@ -1430,6 +1563,7 @@ class StudioSession:
                 "selected_preview": selected_preview,
                 "validation": val.to_dict(),
                 "qa": qa_dict,
+                "bridge": {"rev": self._bridge_rev, "clients": self._bridge_clients},
             }
 
     def export_package(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -1694,6 +1828,231 @@ class StudioSession:
             )
             return {"ok": True, "filename": f"{stem}.mtlx", "shader_model": shader, "xml": xml}
 
+    # -----------------------------------------------------------------------
+    # Milestone v15: 30-60 FPS Pre-Baked Anim Sequence, 3D/2D Brush Painting,
+    # CTM 47-Tile / Wang 16-Tile Export, Turntable GIF & BB5 Live Link Bridge
+    # -----------------------------------------------------------------------
+
+    def evaluate_anim_sequence(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Pre-bake all N frames of the active animated graph into a GPU-ready frame ring buffer (for 30-60 FPS zero-lag playback!)."""
+        with self._lock:
+            n_frames = max(2, min(32, int(payload.get("frames", 12))))
+            channel = str(payload.get("channel") or "pbr_lit")
+            light_az = float(payload.get("light_az", -38.0))
+            light_el = float(payload.get("light_el", 52.0))
+            preview_node = payload.get("preview_node")
+            max_dim = max(64, min(512, int(payload.get("max_dim", 256))))
+
+            t0 = time.perf_counter()
+            dyn_set = self.graph._compute_dynamic_set()
+            seq: list[dict[str, Any]] = []
+            w_out, h_out = self.graph.width, self.graph.height
+
+            for fi in range(n_frames):
+                ph = float(fi) / float(n_frames)
+                ev = self.graph.evaluate(
+                    phase=ph,
+                    capture_intermediates=True,
+                    build_pbr=(channel not in ("albedo", "selected")),
+                    light_az_deg=light_az,
+                    light_el_deg=light_el,
+                    allow_orphan_errors=True,
+                )
+                out_u8 = _arr_to_u8_rgba(ev.output)
+                w_out, h_out = int(out_u8.shape[1]), int(out_u8.shape[0])
+                alb_url = _u8_to_data_url(out_u8, max_dim=max_dim)
+                lit_url = _u8_to_data_url(_arr_to_u8_rgba(ev.pbr_preview), max_dim=max_dim) if ev.pbr_preview is not None else alb_url
+                if ev.emissive is not None:
+                    em_url = _u8_to_data_url(_arr_to_u8_rgba(ev.emissive), max_dim=max_dim)
+                else:
+                    em_url = None
+                sel_url = None
+                if channel == "selected" and preview_node and preview_node in ev.intermediates:
+                    sel_url = _u8_to_data_url(_arr_to_u8_rgba(ev.intermediates[preview_node]), max_dim=max_dim)
+
+                disp_url = sel_url or (alb_url if channel == "albedo" else lit_url)
+                dyn_thumbs: dict[str, str] = {}
+                for nid in dyn_set:
+                    if nid in ev.intermediates:
+                        dyn_thumbs[nid] = _u8_to_data_url(_arr_to_u8_rgba(ev.intermediates[nid]), max_dim=96, min_dim=48)
+
+                seq.append(
+                    {
+                        "phase": round(ph, 4),
+                        "albedo": alb_url,
+                        "pbr_lit": lit_url,
+                        "emissive": em_url,
+                        "display": disp_url,
+                        "thumbs": dyn_thumbs,
+                    }
+                )
+
+            return {
+                "ok": True,
+                "frames": n_frames,
+                "width": w_out,
+                "height": h_out,
+                "bake_ms": round((time.perf_counter() - t0) * 1000.0, 2),
+                "sequence": seq,
+            }
+
+    def paint_mask_stroke(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Paint 3D/2D brush strokes directly onto a `paint_mask` node's grayscale buffer (spawning one if needed)."""
+        with self._lock:
+            g = self.graph
+            nid = payload.get("node_id")
+            created_id = None
+            if not nid or str(nid) not in g.nodes or g.nodes[str(nid)].op != "paint_mask":
+                # Auto-spawn a ready-to-wire `paint_mask` node
+                self._push_undo()
+                base_id = "paint_mask"
+                nid_s = base_id
+                idx = 1
+                while nid_s in g.nodes:
+                    nid_s = f"{base_id}_{idx}"
+                    idx += 1
+                pos = payload.get("pos") or [240.0, 140.0]
+                sp = NodeSpec(
+                    id=nid_s,
+                    op="paint_mask",
+                    inputs={},
+                    params={"base_value": 0.0, "blur_px": 0, "invert": False, "mask_data_url": ""},
+                    pos=(float(pos[0]), float(pos[1])),
+                )
+                g.nodes[nid_s] = sp
+                g.node_order.append(nid_s)
+                nid = nid_s
+                created_id = nid_s
+                self._log("info", f"Created 3D/2D Brush Paint Mask node '{nid_s}'")
+
+            sp = g.nodes[str(nid)]
+            H, W = g.height, g.width
+
+            if payload.get("clear"):
+                self._push_undo()
+                arr = np.zeros((H, W), dtype=np.float32)
+            elif isinstance(payload.get("mask_data_url"), str) and "," in payload["mask_data_url"]:
+                if payload.get("undoable"):
+                    self._push_undo()
+                sp.params["mask_data_url"] = payload["mask_data_url"]
+                g._static_cache.clear()
+                st = self.get_state_payload()
+                if created_id:
+                    st["created_node_id"] = created_id
+                return st
+            else:
+                cur_url = str(sp.params.get("mask_data_url") or "")
+                if cur_url and "," in cur_url:
+                    raw = base64.b64decode(cur_url.split(",", 1)[1])
+                    im = Image.open(io.BytesIO(raw)).convert("L")
+                    if im.size != (W, H):
+                        im = im.resize((W, H), Image.Resampling.BILINEAR)
+                    arr = np.asarray(im, dtype=np.float32) / 255.0
+                else:
+                    arr = np.full((H, W), float(sp.params.get("base_value", 0.0)), dtype=np.float32)
+
+                strokes = payload.get("strokes") or []
+                if strokes and payload.get("undoable"):
+                    self._push_undo()
+                yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
+                for st_pt in strokes:
+                    u = float(st_pt.get("u", 0.5))
+                    v = float(st_pt.get("v", 0.5))
+                    rad = max(1.0, float(st_pt.get("radius_px", 5.0)))
+                    val = float(np.clip(st_pt.get("value", 1.0), 0.0, 1.0))
+                    soft = float(np.clip(st_pt.get("softness", 0.35), 0.0, 0.95))
+                    opac = float(np.clip(st_pt.get("opacity", 1.0), 0.05, 1.0))
+                    cx = u * (W - 1)
+                    cy = v * (H - 1)
+                    d = np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2)
+                    inner = rad * (1.0 - soft)
+                    w_m = np.clip(1.0 - (d - inner) / max(0.5, rad - inner), 0.0, 1.0)
+                    w_m = w_m * w_m * (3.0 - 2.0 * w_m) * opac
+                    arr = arr * (1.0 - w_m) + val * w_m
+
+            u8 = np.clip(np.round(arr * 255.0), 0, 255).astype(np.uint8)
+            buf = io.BytesIO()
+            Image.fromarray(u8, mode="L").save(buf, format="PNG", compress_level=3)
+            sp.params["mask_data_url"] = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+            g._static_cache.clear()
+            st = self.get_state_payload()
+            st["painted_node_id"] = str(nid)
+            if created_id:
+                st["created_node_id"] = created_id
+            return st
+
+    def export_ctm(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Generate a Connected Block Tileset (CTM 47-Tile or Wang 16-Tile) from the active graph output."""
+        with self._lock:
+            mode = str(payload.get("mode") or "ctm47")
+            style = str(payload.get("style") or "metal_frame")
+            edge_w = int(payload.get("edge_width_px", 3))
+            edge_col = str(payload.get("edge_color") or "#D4A84A")
+            strength = float(payload.get("strength", 0.85))
+            stem = str(payload.get("stem") or self.graph.name or "synccraft_block")
+            out_dir = payload.get("out_dir") or None
+
+            ev = self.graph.evaluate(phase=0.0, build_pbr=False, allow_orphan_errors=True)
+            res = generate_ctm_tileset(
+                ev.output,
+                mode=mode,
+                style=style,
+                edge_width_px=edge_w,
+                edge_color=edge_col,
+                strength=strength,
+                seed=self.graph.seed,
+                out_dir=out_dir,
+                stem=stem,
+            )
+            self._log("info", f"Generated {res['mode'].upper()} tileset ({res['tile_count']} tiles, {res['grid_cols']}x{res['grid_rows']} sheet)")
+            return {
+                "ok": True,
+                "mode": res["mode"],
+                "tile_count": res["tile_count"],
+                "grid_cols": res["grid_cols"],
+                "grid_rows": res["grid_rows"],
+                "sheet_filename": f"{stem}_{res['mode']}_sheet.png",
+                "props_filename": f"{stem}.properties",
+                "sheet_data_url": res["sheet_data_url"],
+                "optifine_properties": res["optifine_properties"],
+                "manifest": res["manifest"],
+                "files": res["files"],
+            }
+
+    def export_turntable_gif(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Assemble captured WebGL PNG frames into an optimized looping 360° Turntable GIF."""
+        frames_b64 = payload.get("frames") or []
+        if not isinstance(frames_b64, list) or len(frames_b64) < 2:
+            raise ValueError("Expected at least 2 captured PNG frames for Turntable GIF")
+        fps = max(4, min(30, int(payload.get("fps", 16))))
+        stem = str(payload.get("stem") or self.graph.name or "synccraft_turntable")
+        pil_frames: list[Image.Image] = []
+        for data_url in frames_b64[:48]:
+            if not isinstance(data_url, str) or "," not in data_url:
+                continue
+            raw = base64.b64decode(data_url.split(",", 1)[1])
+            im = Image.open(io.BytesIO(raw)).convert("RGB")
+            if max(im.size) > 480:
+                im.thumbnail((480, 480), Image.Resampling.LANCZOS)
+            pil_frames.append(im.convert("P", palette=Image.Palette.ADAPTIVE, colors=256))
+        if len(pil_frames) < 2:
+            raise ValueError("Could not decode captured PNG frames")
+        buf = io.BytesIO()
+        dur_ms = max(30, int(round(1000.0 / fps)))
+        pil_frames[0].save(buf, format="GIF", save_all=True, append_images=pil_frames[1:], duration=dur_ms, loop=0, optimize=True)
+        gif_url = "data:image/gif;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+        self._log("info", f"Encoded 360° Turntable GIF ({len(pil_frames)} frames @ {fps}fps)")
+        return {"ok": True, "filename": f"{stem}_turntable.gif", "frame_count": len(pil_frames), "gif_data_url": gif_url}
+
+    def get_bridge_latest(self, since_rev: int = -1) -> dict[str, Any]:
+        with self._bridge_cond:
+            if not self._bridge_payload or self._bridge_rev <= since_rev:
+                return {"ok": True, "changed": False, "rev": self._bridge_rev, "clients": self._bridge_clients}
+            out = dict(self._bridge_payload)
+            out["changed"] = True
+            out["clients"] = self._bridge_clients
+            return out
+
 
 # ---------------------------------------------------------------------------
 # HTTP Server & Handler
@@ -1718,17 +2077,26 @@ def create_studio_server(
         def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
             return
 
-        def _send_bytes(self, body: bytes, *, status: int = 200, content_type: str = "application/octet-stream") -> None:
+        def _send_bytes(
+            self,
+            body: bytes,
+            *,
+            status: int = 200,
+            content_type: str = "application/octet-stream",
+            cors: bool = False,
+        ) -> None:
             self.send_response(status)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
+            if cors:
+                self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(body)
 
-        def _send_json(self, obj: dict[str, Any], *, status: int = 200) -> None:
+        def _send_json(self, obj: dict[str, Any], *, status: int = 200, cors: bool = False) -> None:
             raw = json.dumps(obj, ensure_ascii=False, allow_nan=False).encode("utf-8")
-            self._send_bytes(raw, status=status, content_type="application/json; charset=utf-8")
+            self._send_bytes(raw, status=status, content_type="application/json; charset=utf-8", cors=cors)
 
         def _read_json_body(self) -> dict[str, Any]:
             length = int(self.headers.get("Content-Length", "0") or "0")
@@ -1829,6 +2197,45 @@ def create_studio_server(
                 self._send_json(sess.list_syncmats())
                 return
 
+            if path == "/api/bridge/latest":
+                qs = urllib.parse.parse_qs(parsed.query)
+                since_rev = int((qs.get("since") or ["-1"])[0])
+                self._send_json(sess.get_bridge_latest(since_rev=since_rev), cors=True)
+                return
+
+            if path == "/api/bridge/events":
+                # Server-Sent Events stream for Blockbench 5 Live Link (zero external deps!)
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Connection", "keep-alive")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                with sess._bridge_cond:
+                    sess._bridge_clients += 1
+                    last_sent = -1
+                try:
+                    for _ in range(360):
+                        with sess._bridge_cond:
+                            if sess._bridge_rev <= last_sent:
+                                sess._bridge_cond.wait(timeout=5.0)
+                            if sess._bridge_rev > last_sent and sess._bridge_payload:
+                                pkt = json.dumps(sess._bridge_payload, ensure_ascii=False)
+                                last_sent = sess._bridge_rev
+                            else:
+                                pkt = None
+                        if pkt:
+                            self.wfile.write(f"data: {pkt}\n\n".encode("utf-8"))
+                        else:
+                            self.wfile.write(b": heartbeat\n\n")
+                        self.wfile.flush()
+                except Exception:
+                    pass
+                finally:
+                    with sess._bridge_cond:
+                        sess._bridge_clients = max(0, sess._bridge_clients - 1)
+                return
+
             if path == "/api/state":
                 self._send_json(sess.get_state_payload())
                 return
@@ -1897,6 +2304,18 @@ def create_studio_server(
                 if path == "/api/export/materialx":
                     self._send_json(sess.export_materialx(body))
                     return
+                if path == "/api/evaluate_anim_sequence":
+                    self._send_json(sess.evaluate_anim_sequence(body))
+                    return
+                if path == "/api/paint_mask/stroke":
+                    self._send_json(sess.paint_mask_stroke(body))
+                    return
+                if path == "/api/export/ctm":
+                    self._send_json(sess.export_ctm(body))
+                    return
+                if path == "/api/export/turntable_gif":
+                    self._send_json(sess.export_turntable_gif(body))
+                    return
                 self._send_json({"error": f"Unknown API endpoint: {path}"}, status=404)
             except (ValueError, KeyError, TypeError, TexDSLParseError, GraphCycleError) as exc:
                 self._send_json({"ok": False, "error": type(exc).__name__, "message": str(exc)}, status=400)
@@ -1919,7 +2338,7 @@ def serve_studio(
     server, _ = create_studio_server(host=host, port=port, initial_sample=initial_sample, size=size)
     actual_port = server.server_address[1]
     url = f"http://{host}:{actual_port}/"
-    print(f"SyncCraft Studio v{__version__} (TexGraph v10 / Schema v4.0 · {len(NODE_REGISTRY)} nodes)")
+    print(f"SyncCraft Studio v{__version__} (TexGraph v15 / Schema v4.0 · {len(NODE_REGISTRY)} nodes)")
     print(f"  Listening on {url}  (Press Ctrl+C to stop)")
     if open_browser:
         threading.Timer(0.4, lambda: webbrowser.open(url)).start()
