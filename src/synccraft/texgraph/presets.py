@@ -1158,6 +1158,8 @@ def build_colossal_dragon_texgraph(mesh_ctx: MeshBakeContext, *, seed: int = 530
     return g
 
 
+from .presets_library import V7_PRESET_REGISTRY
+
 PRESET_REGISTRY: dict[str, Any] = {
     "neon_hex_conduit": build_neon_hex_block,
     "neon_hex_block": build_neon_hex_block,
@@ -1169,4 +1171,5 @@ PRESET_REGISTRY: dict[str, Any] = {
     "arcane_ember_vfx": build_arcane_ember_vfx_block,
     "aethelion_prism_blade": build_prism_blade_item,
     "prism_blade_item": build_prism_blade_item,
+    **V7_PRESET_REGISTRY,
 }

@@ -13,7 +13,35 @@ Pure vectorized NumPy/Pillow DAG node engine for expert pixel-art textures:
 """
 from __future__ import annotations
 
-from .core import EvalResult, NodeSpec, TexGraph
+from .core import EvalResult, GraphCycleError, NodeSpec, TexGraph, ValidationReport
+from .engine_ops import (
+    auto_levels,
+    curvature_from_height,
+    directional_selout,
+    displace_uv,
+    edge_wear_mask,
+    flood_fill,
+    histogram_scan,
+    histogram_select,
+    normal_light_2d,
+    sdf_boolean,
+    sdf_shape,
+    slope_blur,
+    tile_sampler,
+)
+from .generators_bio_materials import (
+    aquatic_scales_skin,
+    bark_and_timber,
+    caustic_water_surface,
+    chitin_carapace,
+    cobblestone_masonry,
+    crystalline_ore_vein,
+    elemental_golem_surface,
+    layered_plumage,
+    organic_fur_pelt,
+)
+from .production import PALETTE_BANK, BatchJobResult, BatchTextureJob, pack_sprite_atlas, run_batch
+from .quality import QualityReport, evaluate_texture_quality
 from .generators_gradients import (
     body_flow_gradient,
     cosine_gradient,

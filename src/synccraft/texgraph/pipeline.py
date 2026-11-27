@@ -855,3 +855,48 @@ def _sg_colossal_dragon_membrane(
         seed=seed,
         **kw,
     )
+
+
+@register_subgraph("cobblestone_masonry_pbr", category="World Blocks", description="Seamless Flood-Fill + Slope-Blur cobblestone masonry MaterialBus.", defaults={"cols": 4, "rows": 4, "moss_amount": 0.0})
+def _sg_cobblestone_masonry(g: Any, *, prefix: str, inputs: dict[str, str], seed: int = 42, **kw: Any) -> str:
+    return g.add("cobblestone_masonry", id=f"{prefix}_mat", seed=seed, **kw)
+
+
+@register_subgraph("bark_timber_pbr", category="World Blocks", description="Seamless furrowed organic tree bark + crevice moss MaterialBus.", defaults={"furrow_count": 6.0, "moss_amount": 0.2})
+def _sg_bark_timber(g: Any, *, prefix: str, inputs: dict[str, str], seed: int = 109, **kw: Any) -> str:
+    return g.add("bark_and_timber", id=f"{prefix}_mat", seed=seed, **kw)
+
+
+@register_subgraph("crystalline_ore_pbr", category="World Blocks", description="Seamless deepslate/basalt embedded with sparkling faceted crystal ore MaterialBus.", defaults={"ore_density": 0.55, "emissive_strength": 0.65})
+def _sg_crystalline_ore(g: Any, *, prefix: str, inputs: dict[str, str], seed: int = 211, **kw: Any) -> str:
+    return g.add("crystalline_ore_vein", id=f"{prefix}_mat", seed=seed, **kw)
+
+
+@register_subgraph("caustic_water_pbr", category="World Blocks", description="Seamless looping animated dual-layer Voronoi caustic water MaterialBus.", defaults={"scale": 4.0})
+def _sg_caustic_water(g: Any, *, prefix: str, inputs: dict[str, str], seed: int = 313, **kw: Any) -> str:
+    return g.add("caustic_water", id=f"{prefix}_mat", seed=seed, **kw)
+
+
+@register_subgraph("mammal_fur_pelt_pbr", category="Creature Bio", description="Directional tufted mammal fur with jagged countershading & coat markings MaterialBus.", defaults={"pattern": "saddle", "tuft_scale": 12.0})
+def _sg_mammal_fur_pelt(g: Any, *, prefix: str, inputs: dict[str, str], seed: int = 42, **kw: Any) -> str:
+    return g.add("organic_fur_pelt", id=f"{prefix}_mat", seed=seed, **kw)
+
+
+@register_subgraph("avian_plumage_pbr", category="Creature Bio", description="Layered scalloped bird/griffin/phoenix plumage with central rachis quill MaterialBus.", defaults={"marking": "barred", "iridescence": 0.18})
+def _sg_avian_plumage(g: Any, *, prefix: str, inputs: dict[str, str], seed: int = 42, **kw: Any) -> str:
+    return g.add("layered_plumage", id=f"{prefix}_mat", seed=seed, **kw)
+
+
+@register_subgraph("insect_chitin_pbr", category="Creature Bio", description="Segmented scorpion/beetle chitin carapace with cool plum shadows & iridescence MaterialBus.", defaults={"segments": 6, "iridescence": 0.26})
+def _sg_insect_chitin(g: Any, *, prefix: str, inputs: dict[str, str], seed: int = 42, **kw: Any) -> str:
+    return g.add("chitin_carapace", id=f"{prefix}_mat", seed=seed, **kw)
+
+
+@register_subgraph("aquatic_scales_pbr", category="Creature Bio", description="Wet glossy fish scales or moist amphibian aposematic skin MaterialBus.", defaults={"mode": "fish_scales", "wetness": 0.82})
+def _sg_aquatic_scales(g: Any, *, prefix: str, inputs: dict[str, str], seed: int = 42, **kw: Any) -> str:
+    return g.add("aquatic_scales_skin", id=f"{prefix}_mat", seed=seed, **kw)
+
+
+@register_subgraph("elemental_golem_pbr", category="Creature Bio", description="Flood-Fill + Slope-Blur fractured stone/obsidian golem slabs with glowing fissures MaterialBus.", defaults={"slab_scale": 4.5, "glow_strength": 0.85})
+def _sg_elemental_golem(g: Any, *, prefix: str, inputs: dict[str, str], seed: int = 42, **kw: Any) -> str:
+    return g.add("elemental_golem_surface", id=f"{prefix}_mat", seed=seed, **kw)

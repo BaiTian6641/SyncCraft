@@ -154,6 +154,15 @@ def main(argv=None):
     tg_subs.add_parser("presets", help="list available built-in TexGraph presets")
     tg_subs.add_parser("schema", help="emit UI-ready typed JSON schema for all TexGraph nodes")
 
+    tg_val = tg_subs.add_parser("validate", help="statically validate a .texgraph.json recipe or preset DAG")
+    tg_val.add_argument("source", help="path to .texgraph.json recipe or preset:<name>")
+    tg_val.add_argument("--size", type=int, default=32)
+
+    tg_qa = tg_subs.add_parser("qa", help="evaluate multi-domain texture quality (block/item/entity) & node profile")
+    tg_qa.add_argument("source", help="path to .texgraph.json recipe or preset:<name>")
+    tg_qa.add_argument("--domain", choices=["block", "item", "entity"], default="block")
+    tg_qa.add_argument("--size", type=int, default=32)
+
     args = parser.parse_args(argv)
     try:
         if args.command == "doctor":
@@ -228,6 +237,34 @@ def main(argv=None):
                 from synccraft.texgraph.registry import export_node_schema_json
                 print(_json(export_node_schema_json()))
                 return 0
+            if args.tg_cmd == "validate":
+                if args.source.startswith("preset:"):
+                    pname = args.source.split(":", 1)[1]
+                    graph = PRESET_REGISTRY[pname](size=args.size)
+                else:
+                    graph = TexGraph.from_recipe(args.source)
+                rep = graph.validate_graph()
+                print(_json(rep.to_dict()))
+                return 0 if rep.ok else 2
+            if args.tg_cmd == "qa":
+                from synccraft.texgraph.quality import evaluate_texture_quality
+                if args.source.startswith("preset:"):
+                    pname = args.source.split(":", 1)[1]
+                    graph = PRESET_REGISTRY[pname](size=args.size)
+                else:
+                    graph = TexGraph.from_recipe(args.source)
+                vrep = graph.validate_graph()
+                ev = graph.evaluate(build_pbr=True)
+                qa = evaluate_texture_quality(
+                    ev.output,
+                    domain=args.domain,
+                    tileable=graph.tileable,
+                    mesh_ctx=graph.mesh_context,
+                    pbr_channels=ev.pbr_channels,
+                    pbr_maps=ev.pbr_maps,
+                )
+                print(_json({"validation": vrep.to_dict(), "quality": qa.to_dict(), "profile": graph.profile()}))
+                return 0 if (vrep.ok and qa.passed) else 2
             if args.tg_cmd == "repack-uv":
                 doc = json.loads(args.input.read_text(encoding="utf-8"))
                 new_doc, rep, zpng = repack_bbmodel_uvs(

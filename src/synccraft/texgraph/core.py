@@ -9,9 +9,11 @@ Supports:
 from __future__ import annotations
 
 import base64
+from collections import deque
 from contextlib import contextmanager
 import copy
 from dataclasses import dataclass, field
+import hashlib
 import json
 from pathlib import Path
 import time
@@ -19,6 +21,32 @@ from typing import Any, Iterator
 
 import numpy as np
 
+from .engine_ops import (
+    auto_levels,
+    curvature_from_height,
+    directional_selout,
+    displace_uv,
+    edge_wear_mask,
+    flood_fill,
+    histogram_scan,
+    histogram_select,
+    normal_light_2d,
+    sdf_boolean,
+    sdf_shape,
+    slope_blur,
+    tile_sampler,
+)
+from .generators_bio_materials import (
+    aquatic_scales_skin,
+    bark_and_timber,
+    caustic_water_surface,
+    chitin_carapace,
+    cobblestone_masonry,
+    crystalline_ore_vein,
+    elemental_golem_surface,
+    layered_plumage,
+    organic_fur_pelt,
+)
 from .generators_gradients import (
     body_flow_gradient,
     cosine_gradient,
@@ -152,7 +180,7 @@ _TIME_AWARE_OPS: frozenset[str] = frozenset(
     {
         "perlin", "fbm", "voronoi", "domain_warp", "noise_3d",
         "radial_rings", "energy_veins", "scroll", "pulse", "sprite_mask",
-        "cosine_gradient", "wave_distort",
+        "cosine_gradient", "wave_distort", "caustic_water",
         "iterate_inline", "feedback_loop", "particle_sim", "fluid_smoke_sim", "anim_driver",
     }
 )
@@ -217,6 +245,26 @@ class NodeSpec:
         }
 
 
+class GraphCycleError(ValueError):
+    """Raised when a TexGraph DAG contains a directed cycle."""
+
+
+@dataclass
+class ValidationReport:
+    ok: bool
+    errors: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    topo_order: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "ok": self.ok,
+            "errors": list(self.errors),
+            "warnings": list(self.warnings),
+            "node_count": len(self.topo_order),
+        }
+
+
 @dataclass
 class EvalResult:
     output: np.ndarray
@@ -226,6 +274,8 @@ class EvalResult:
     pbr_channels: dict[str, np.ndarray] = field(default_factory=dict)
     pbr_maps: dict[str, np.ndarray] | None = None
     pbr_preview: np.ndarray | None = None
+    cache_hits: int = 0
+    cache_misses: int = 0
 
 
 class TexGraph:
@@ -264,7 +314,138 @@ class TexGraph:
         self.groups: list[dict[str, Any]] = []
         self._counter = 0
         self._static_cache: dict[str, Any] = {}
+        self._content_cache: dict[str, tuple[str, Any]] = {}
         self._dynamic_ids: set[str] = set()
+
+    def topological_order(self) -> list[str]:
+        """Compute deterministic Kahn topological execution order; raises ``GraphCycleError`` on cycles."""
+        if not self.nodes:
+            return []
+        indeg: dict[str, int] = {nid: 0 for nid in self.node_order}
+        children: dict[str, list[str]] = {nid: [] for nid in self.node_order}
+        order_rank = {nid: i for i, nid in enumerate(self.node_order)}
+        for nid in self.node_order:
+            sp = self.nodes[nid]
+            seen_deps: set[str] = set()
+            for ref in sp.inputs.values():
+                dep, _ = _parse_ref(ref)
+                if dep in self.nodes and dep not in seen_deps:
+                    seen_deps.add(dep)
+                    indeg[nid] += 1
+                    children[dep].append(nid)
+        # Preserve authoring order among ready nodes for deterministic execution
+        ready = deque(sorted([nid for nid, d in indeg.items() if d == 0], key=lambda x: order_rank[x]))
+        topo: list[str] = []
+        while ready:
+            u = ready.popleft()
+            topo.append(u)
+            newly_ready: list[str] = []
+            for v in children[u]:
+                indeg[v] -= 1
+                if indeg[v] == 0:
+                    newly_ready.append(v)
+            if newly_ready:
+                newly_ready.sort(key=lambda x: order_rank[x])
+                ready.extend(newly_ready)
+        if len(topo) != len(self.nodes):
+            cycled = [nid for nid, d in indeg.items() if d > 0]
+            raise GraphCycleError(f"Cycle detected in TexGraph {self.name!r} involving nodes: {cycled}")
+        return topo
+
+    def validate_graph(self) -> ValidationReport:
+        """Industry-grade static DAG validator: checks ops, sockets, cycles, outputs & orphan nodes."""
+        from .registry import NODE_CATALOG
+
+        errors: list[str] = []
+        warnings: list[str] = []
+        if not self.nodes:
+            return ValidationReport(ok=False, errors=["Graph contains zero nodes."])
+
+        for nid in self.node_order:
+            sp = self.nodes[nid]
+            meta = NODE_CATALOG.get(sp.op)
+            if meta is None:
+                warnings.append(f"Node {nid!r} uses unregistered op {sp.op!r}")
+            for in_name, ref in sp.inputs.items():
+                dep, port = _parse_ref(ref)
+                if dep not in self.nodes:
+                    errors.append(f"Node {nid!r} input {in_name!r} references missing node {dep!r}")
+                    continue
+                if port is not None:
+                    dep_meta = NODE_CATALOG.get(self.nodes[dep].op)
+                    if dep_meta and dep_meta.outputs:
+                        valid_ports = {p.name for p in dep_meta.outputs} | {"rgba", "albedo"}
+                        if port not in valid_ports:
+                            errors.append(f"Node {nid!r} input {in_name!r} references unknown port {dep}.{port} (valid: {sorted(valid_ports)})")
+
+        for label, ref in (("output_node", self.output_node), ("emissive_node", self.emissive_node), ("output_material_node", self.output_material_node)):
+            if ref is not None:
+                dep, _ = _parse_ref(ref)
+                if dep not in self.nodes:
+                    errors.append(f"{label} references missing node {ref!r}")
+        for ch, ref in self.pbr_nodes.items():
+            dep, _ = _parse_ref(ref)
+            if dep not in self.nodes:
+                errors.append(f"PBR channel {ch!r} references missing node {ref!r}")
+
+        topo: list[str] = []
+        try:
+            topo = self.topological_order()
+        except GraphCycleError as exc:
+            errors.append(str(exc))
+
+        # Warn on dead/unreachable nodes (does not fail validation)
+        if not errors and topo:
+            roots: set[str] = set()
+            for ref in [self.output_node, self.emissive_node, self.output_material_node, *self.pbr_nodes.values()]:
+                if ref:
+                    roots.add(_parse_ref(ref)[0])
+            if not roots:
+                roots.add(topo[-1])
+            reachable: set[str] = set()
+            stack = list(roots)
+            while stack:
+                cur = stack.pop()
+                if cur in reachable or cur not in self.nodes:
+                    continue
+                reachable.add(cur)
+                for ref in self.nodes[cur].inputs.values():
+                    stack.append(_parse_ref(ref)[0])
+            orphans = [nid for nid in topo if nid not in reachable]
+            if orphans:
+                warnings.append(f"{len(orphans)} unused node(s) not feeding output: {orphans[:6]}")
+
+        return ValidationReport(ok=len(errors) == 0, errors=errors, warnings=warnings, topo_order=topo)
+
+    def _node_content_hash(self, sp: NodeSpec, eff_params: dict[str, Any], dep_hashes: dict[str, str], phase_tag: str) -> str:
+        payload = {
+            "op": sp.op,
+            "w": self.width,
+            "h": self.height,
+            "tile": self.tileable,
+            "seed": self.seed,
+            "mesh": id(self.mesh_context) if self.mesh_context is not None else 0,
+            "params": eff_params,
+            "deps": dep_hashes,
+            "phase": phase_tag,
+        }
+        raw = json.dumps(payload, sort_keys=True, default=str, separators=(",", ":")).encode("utf-8")
+        return hashlib.sha256(raw).hexdigest()[:24]
+
+    def profile(self, *, phase: float = 0.0, top_n: int = 8) -> dict[str, Any]:
+        """Evaluate and return per-node runtime breakdown & incremental cache efficiency."""
+        ev = self.evaluate(phase=phase, build_pbr=True)
+        ranked = sorted(ev.timings_ms.items(), key=lambda kv: kv[1], reverse=True)
+        total = round(sum(ev.timings_ms.values()), 2)
+        return {
+            "graph": self.name,
+            "resolution": [self.width, self.height],
+            "total_nodes": len(self.nodes),
+            "total_ms": total,
+            "cache_hits": ev.cache_hits,
+            "cache_misses": ev.cache_misses,
+            "slowest_nodes": [{"id": k, "op": self.nodes[k].op, "ms": v} for k, v in ranked[: max(1, int(top_n))]],
+        }
 
     def bind_driver(
         self,
@@ -328,7 +509,7 @@ class TexGraph:
         return self
 
     def set_exposed(self, public_name: str, value: Any) -> "TexGraph":
-        """Override an exposed graph parameter cleanly without editing internal node wiring."""
+        """Override an exposed graph parameter cleanly; content-addressed cache automatically preserves untouched upstream nodes!"""
         info = self.exposed_params[public_name]
         self.nodes[info["node_id"]].params[info["param_key"]] = value
         self._static_cache.clear()
@@ -422,14 +603,16 @@ class TexGraph:
         *,
         id: str | None = None,
         inputs: dict[str, str] | None = None,
+        validate_refs: bool = True,
         **params: Any,
     ) -> str:
         nid = self._next_id(op, id)
         clean_inputs = {k: v for k, v in (inputs or {}).items() if v is not None}
-        for ref in clean_inputs.values():
-            base_ref, _ = _parse_ref(ref)
-            if base_ref not in self.nodes:
-                raise KeyError(f"Node {nid!r} references unknown input node {ref!r}")
+        if validate_refs:
+            for ref in clean_inputs.values():
+                base_ref, _ = _parse_ref(ref)
+                if base_ref not in self.nodes:
+                    raise KeyError(f"Node {nid!r} references unknown input node {ref!r}")
         spec = NodeSpec(id=nid, op=op, inputs=clean_inputs, params=params)
         self.nodes[nid] = spec
         self.node_order.append(nid)
@@ -931,6 +1114,101 @@ class TexGraph:
 
     painterly_brush_field = painterly_brush
 
+    # --- Industry-Standard Core Operators & Full Bio/Block Material Builders (TexGraph v7) ---
+    def sdf_shape(self, shape: str = "rounded_box", *, id: str | None = None, **kw: Any) -> str:
+        """Analytical 2D SDF shape generator (ports: sdf, mask, bevel, outline)."""
+        return self.add("sdf_shape", id=id, shape=shape, **kw)
+
+    def sdf_boolean(self, a: str, b: str, *, op: str = "smooth_union", smoothness: float = 0.04, id: str | None = None) -> str:
+        """Boolean combine two 2D SDF fields (ports: sdf, mask, bevel)."""
+        return self.add("sdf_boolean", id=id, inputs={"a": a, "b": b}, op=op, smoothness=smoothness)
+
+    def tile_sampler(
+        self,
+        stamp: str | None = None,
+        *,
+        density_map: str | None = None,
+        scale_map: str | None = None,
+        rot_map: str | None = None,
+        id: str | None = None,
+        **kw: Any,
+    ) -> str:
+        """Substance Tile Sampler / Pixel Composer Scatter & Splatter (ports: height, mask, id_map, rgba)."""
+        ins: dict[str, str] = {}
+        if stamp:
+            ins["stamp"] = stamp
+        if density_map:
+            ins["density_map"] = density_map
+        if scale_map:
+            ins["scale_map"] = scale_map
+        if rot_map:
+            ins["rot_map"] = rot_map
+        return self.add("tile_sampler", id=id, inputs=ins, **kw)
+
+    def flood_fill(self, mask: str, *, threshold: float = 0.25, id: str | None = None, **kw: Any) -> str:
+        """Substance Flood Fill island analyzer (ports: island_id, random_gray, gradient_u, gradient_v, random_slope, edge_dist)."""
+        return self.add("flood_fill", id=id, inputs={"mask": mask}, threshold=threshold, **kw)
+
+    def slope_blur(self, src: str, slope_map: str, *, intensity: float = 1.6, samples: int = 6, mode: str = "min", id: str | None = None) -> str:
+        """Substance Slope Blur directional erosion/dilation/impasto."""
+        return self.add("slope_blur", id=id, inputs={"src": src, "slope_map": slope_map}, intensity=intensity, samples=samples, mode=mode)
+
+    def histogram_scan(self, src: str, *, position: float = 0.5, contrast: float = 0.6, invert: bool = False, id: str | None = None) -> str:
+        return self.add("histogram_scan", id=id, inputs={"src": src}, position=position, contrast=contrast, invert=invert)
+
+    def histogram_select(self, src: str, *, position: float = 0.5, range_width: float = 0.25, contrast: float = 0.5, id: str | None = None) -> str:
+        return self.add("histogram_select", id=id, inputs={"src": src}, position=position, range_width=range_width, contrast=contrast)
+
+    def auto_levels(self, src: str, *, low_pct: float = 1.0, high_pct: float = 99.0, id: str | None = None) -> str:
+        return self.add("auto_levels", id=id, inputs={"src": src}, low_pct=low_pct, high_pct=high_pct)
+
+    def curvature(self, height: str, *, radius: int = 2, strength: float = 2.2, id: str | None = None) -> str:
+        """Multi-scale curvature detector (ports: curvature, convex, concave)."""
+        return self.add("curvature", id=id, inputs={"height": height}, radius=radius, strength=strength)
+
+    def edge_wear(self, height: str, *, wear_amount: float = 0.45, chip_scale: float = 8.0, grime_amount: float = 0.55, id: str | None = None, **kw: Any) -> str:
+        """Procedural chipped edge wear & crevice grime masks (ports: wear, grime, curvature)."""
+        return self.add("edge_wear", id=id, inputs={"height": height}, wear_amount=wear_amount, chip_scale=chip_scale, grime_amount=grime_amount, **kw)
+
+    def displace_uv(self, src: str, disp_map: str, *, disp_y_map: str | None = None, strength_x: float = 2.0, strength_y: float = 2.0, mid_value: float = 0.5, pixel_snap: bool = False, id: str | None = None) -> str:
+        ins: dict[str, str] = {"src": src, "disp_map": disp_map}
+        if disp_y_map:
+            ins["disp_y_map"] = disp_y_map
+        return self.add("displace_uv", id=id, inputs=ins, strength_x=strength_x, strength_y=strength_y, mid_value=mid_value, pixel_snap=pixel_snap)
+
+    def normal_light_2d(self, albedo: str, normal: str, *, id: str | None = None, **kw: Any) -> str:
+        return self.add("normal_light_2d", id=id, inputs={"albedo": albedo, "normal": normal}, **kw)
+
+    def directional_selout(self, src: str, *, light_angle_deg: float = -135.0, lit_darken: float = 0.64, shadow_darken: float = 0.30, id: str | None = None, **kw: Any) -> str:
+        return self.add("directional_selout", id=id, inputs={"src": src}, light_angle_deg=light_angle_deg, lit_darken=lit_darken, shadow_darken=shadow_darken, **kw)
+
+    def cobblestone_masonry(self, *, id: str | None = None, **kw: Any) -> str:
+        return self.add("cobblestone_masonry", id=id, **kw)
+
+    def bark_and_timber(self, *, id: str | None = None, **kw: Any) -> str:
+        return self.add("bark_and_timber", id=id, **kw)
+
+    def crystalline_ore_vein(self, *, id: str | None = None, **kw: Any) -> str:
+        return self.add("crystalline_ore_vein", id=id, **kw)
+
+    def caustic_water(self, *, id: str | None = None, **kw: Any) -> str:
+        return self.add("caustic_water", id=id, **kw)
+
+    def organic_fur_pelt(self, *, id: str | None = None, **kw: Any) -> str:
+        return self.add("organic_fur_pelt", id=id, **kw)
+
+    def layered_plumage(self, *, id: str | None = None, **kw: Any) -> str:
+        return self.add("layered_plumage", id=id, **kw)
+
+    def chitin_carapace(self, *, id: str | None = None, **kw: Any) -> str:
+        return self.add("chitin_carapace", id=id, **kw)
+
+    def aquatic_scales_skin(self, *, id: str | None = None, **kw: Any) -> str:
+        return self.add("aquatic_scales_skin", id=id, **kw)
+
+    def elemental_golem_surface(self, *, id: str | None = None, **kw: Any) -> str:
+        return self.add("elemental_golem_surface", id=id, **kw)
+
     def sculpted_pinion_wing(
         self,
         span_u: str,
@@ -1062,7 +1340,7 @@ class TexGraph:
             mesh_context=mesh_context,
         )
         for nd in data.get("nodes", []):
-            g.add(nd["op"], id=nd["id"], inputs=nd.get("inputs") or {}, **(nd.get("params") or {}))
+            g.add(nd["op"], id=nd["id"], inputs=nd.get("inputs") or {}, validate_refs=False, **(nd.get("params") or {}))
         pbr_d = data.get("pbr") or {}
         pbr_cfg = data.get("pbr_config") or {}
         if data.get("output_material"):
@@ -1886,6 +2164,181 @@ class TexGraph:
                 seed=seed,
             )
 
+        # --- TexGraph v7 Industry Operators & Multi-Domain Bio/Block Generators ---
+        if op == "sdf_shape":
+            return sdf_shape(
+                H, W,
+                shape=str(p.get("shape", "rounded_box")),
+                center=tuple(p.get("center", (0.5, 0.5))),
+                size=tuple(p.get("size", (0.34, 0.34))),
+                corner_radius=float(p.get("corner_radius", 0.06)),
+                angle_deg=float(p.get("angle_deg", 0.0)),
+                sides=int(p.get("sides", 6)),
+                inner_ratio=float(p.get("inner_ratio", 0.48)),
+                bevel_width=float(p.get("bevel_width", 0.14)),
+                outline_width=float(p.get("outline_width", 0.04)),
+            )
+
+        if op == "sdf_boolean":
+            return sdf_boolean(ins["a"], ins["b"], op=str(p.get("op", "smooth_union")), smoothness=float(p.get("smoothness", 0.04)))
+
+        if op == "tile_sampler":
+            return tile_sampler(
+                H, W,
+                stamp=ins.get("stamp"),
+                count_x=int(p.get("count_x", 5)),
+                count_y=int(p.get("count_y", 5)),
+                distribution=str(p.get("distribution", "jitter_grid")),
+                pos_jitter=float(p.get("pos_jitter", 0.38)),
+                scale_base=float(p.get("scale_base", 0.92)),
+                scale_jitter=float(p.get("scale_jitter", 0.28)),
+                rot_base_deg=float(p.get("rot_base_deg", 0.0)),
+                rot_jitter_deg=float(p.get("rot_jitter_deg", 25.0)),
+                lum_jitter=float(p.get("lum_jitter", 0.30)),
+                density=float(p.get("density", 1.0)),
+                density_map=ins.get("density_map"),
+                scale_map=ins.get("scale_map"),
+                rot_map=ins.get("rot_map"),
+                blend_mode=str(p.get("blend_mode", "max")),
+                tileable=bool(p.get("tileable", tile)),
+                seed=seed,
+            )
+
+        if op == "flood_fill":
+            return flood_fill(ins["mask"], threshold=float(p.get("threshold", 0.25)), tileable=bool(p.get("tileable", tile)), seed=seed)
+
+        if op == "slope_blur":
+            return slope_blur(ins["src"], ins["slope_map"], intensity=float(p.get("intensity", 1.6)), samples=int(p.get("samples", 6)), mode=str(p.get("mode", "min")), tileable=bool(p.get("tileable", tile)))
+
+        if op == "histogram_scan":
+            return histogram_scan(ins["src"], position=float(p.get("position", 0.5)), contrast=float(p.get("contrast", 0.6)), invert=bool(p.get("invert", False)))
+
+        if op == "histogram_select":
+            return histogram_select(ins["src"], position=float(p.get("position", 0.5)), range_width=float(p.get("range_width", 0.25)), contrast=float(p.get("contrast", 0.5)))
+
+        if op == "auto_levels":
+            return auto_levels(ins["src"], low_pct=float(p.get("low_pct", 1.0)), high_pct=float(p.get("high_pct", 99.0)))
+
+        if op == "curvature":
+            return curvature_from_height(ins["height"], radius=int(p.get("radius", 2)), strength=float(p.get("strength", 2.2)), tileable=bool(p.get("tileable", tile)))
+
+        if op == "edge_wear":
+            return edge_wear_mask(ins["height"], wear_amount=float(p.get("wear_amount", 0.45)), chip_scale=float(p.get("chip_scale", 8.0)), grime_amount=float(p.get("grime_amount", 0.55)), tileable=bool(p.get("tileable", tile)), seed=seed)
+
+        if op == "displace_uv":
+            return displace_uv(ins["src"], ins["disp_map"], disp_y_map=ins.get("disp_y_map"), strength_x=float(p.get("strength_x", 2.0)), strength_y=float(p.get("strength_y", 2.0)), mid_value=float(p.get("mid_value", 0.5)), pixel_snap=bool(p.get("pixel_snap", False)), tileable=bool(p.get("tileable", tile)))
+
+        if op == "normal_light_2d":
+            return normal_light_2d(
+                ins["albedo"], ins["normal"],
+                light_az_deg=float(p.get("light_az_deg", -45.0)),
+                light_el_deg=float(p.get("light_el_deg", 48.0)),
+                light_color=str(p.get("light_color", "#FFF7E6")),
+                ambient_color=str(p.get("ambient_color", "#2A3352")),
+                ambient_strength=float(p.get("ambient_strength", 0.34)),
+                spec_strength=float(p.get("spec_strength", 0.22)),
+                shininess=float(p.get("shininess", 18.0)),
+                quantize_steps=int(p.get("quantize_steps", 0)),
+            )
+
+        if op == "directional_selout":
+            return directional_selout(
+                ins["src"],
+                light_angle_deg=float(p.get("light_angle_deg", -135.0)),
+                lit_darken=float(p.get("lit_darken", 0.64)),
+                shadow_darken=float(p.get("shadow_darken", 0.30)),
+                warm_tint=tuple(p.get("warm_tint", (0.08, 0.04, -0.02))),
+                cool_tint=tuple(p.get("cool_tint", (-0.02, 0.01, 0.14))),
+                interior_outline=bool(p.get("interior_outline", False)),
+                interior_threshold=float(p.get("interior_threshold", 0.32)),
+            )
+
+        if op == "cobblestone_masonry":
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            kw.setdefault("tileable", tile)
+            return cobblestone_masonry(H, W, seed=seed, **kw)
+
+        if op == "bark_and_timber":
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            kw.setdefault("tileable", tile)
+            return bark_and_timber(H, W, seed=seed, **kw)
+
+        if op == "crystalline_ore_vein":
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            kw.setdefault("tileable", tile)
+            return crystalline_ore_vein(H, W, seed=seed, **kw)
+
+        if op == "caustic_water":
+            kw = {k: v for k, v in p.items() if k not in ("seed", "phase")}
+            kw.setdefault("tileable", tile)
+            return caustic_water_surface(H, W, phase=phase, seed=seed, **kw)
+
+        if op == "organic_fur_pelt":
+            mc = self.mesh_context
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return organic_fur_pelt(
+                H, W,
+                world_pos_norm=mc.world_pos_norm if mc else None,
+                world_normal=mc.world_normal if mc else None,
+                baked_ao=mc.baked_ao if mc else None,
+                joint_cavity=mc.joint_cavity if mc else None,
+                local_uv=mc.local_uv if mc else None,
+                seed=seed,
+                **kw,
+            )
+
+        if op == "layered_plumage":
+            mc = self.mesh_context
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return layered_plumage(
+                H, W,
+                world_pos_norm=mc.world_pos_norm if mc else None,
+                world_normal=mc.world_normal if mc else None,
+                baked_ao=mc.baked_ao if mc else None,
+                joint_cavity=mc.joint_cavity if mc else None,
+                seed=seed,
+                **kw,
+            )
+
+        if op == "chitin_carapace":
+            mc = self.mesh_context
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return chitin_carapace(
+                H, W,
+                world_pos_norm=mc.world_pos_norm if mc else None,
+                world_normal=mc.world_normal if mc else None,
+                baked_ao=mc.baked_ao if mc else None,
+                joint_cavity=mc.joint_cavity if mc else None,
+                seed=seed,
+                **kw,
+            )
+
+        if op == "aquatic_scales_skin":
+            mc = self.mesh_context
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return aquatic_scales_skin(
+                H, W,
+                world_pos_norm=mc.world_pos_norm if mc else None,
+                world_normal=mc.world_normal if mc else None,
+                baked_ao=mc.baked_ao if mc else None,
+                joint_cavity=mc.joint_cavity if mc else None,
+                seed=seed,
+                **kw,
+            )
+
+        if op == "elemental_golem_surface":
+            mc = self.mesh_context
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return elemental_golem_surface(
+                H, W,
+                world_pos_norm=mc.world_pos_norm if mc else None,
+                world_normal=mc.world_normal if mc else None,
+                baked_ao=mc.baked_ao if mc else None,
+                joint_cavity=mc.joint_cavity if mc else None,
+                seed=seed,
+                **kw,
+            )
+
         raise ValueError(f"Unsupported TexGraph op: {op!r}")
 
     def evaluate(
@@ -1900,22 +2353,39 @@ class TexGraph:
     ) -> EvalResult:
         if not self.node_order:
             raise ValueError("TexGraph has no nodes")
+        exec_order = self.topological_order()
         dyn_ids = self._compute_dynamic_set()
-        vals: dict[str, np.ndarray] = {}
+        vals: dict[str, Any] = {}
+        node_hashes: dict[str, str] = {}
         timings: dict[str, float] = {}
-        for nid in self.node_order:
-            if nid not in dyn_ids and nid in self._static_cache:
-                vals[nid] = self._static_cache[nid]
+        cache_hits = 0
+        cache_misses = 0
+
+        for nid in exec_order:
+            sp = self.nodes[nid]
+            eff_p = self._effective_params(sp, float(phase))
+            dep_h = {k: f"{node_hashes.get(_parse_ref(ref)[0], '')}:{_parse_ref(ref)[1] or ''}" for k, ref in sp.inputs.items()}
+            p_tag = f"{float(phase):.6f}" if nid in dyn_ids else "static"
+            chash = self._node_content_hash(sp, eff_p, dep_h, p_tag)
+            node_hashes[nid] = chash
+
+            cached = self._content_cache.get(nid)
+            if cached is not None and cached[0] == chash:
+                vals[nid] = cached[1]
                 timings[nid] = 0.0
+                cache_hits += 1
                 continue
+
             t0 = time.perf_counter()
-            res = self._eval_node(self.nodes[nid], vals, float(phase))
+            res = self._eval_node(sp, vals, float(phase))
             timings[nid] = round((time.perf_counter() - t0) * 1000.0, 2)
             vals[nid] = res
+            self._content_cache[nid] = (chash, res)
             if nid not in dyn_ids:
                 self._static_cache[nid] = res
+            cache_misses += 1
 
-        out_ref = target or self.output_node or self.node_order[-1]
+        out_ref = target or self.output_node or exec_order[-1]
         out_arr = _resolve_ref(vals, out_ref)
         em_arr = (
             _resolve_ref(vals, self.emissive_node)
@@ -1932,7 +2402,6 @@ class TexGraph:
         pbr_maps = None
         pbr_preview = None
         if want_pbr and out_arr.ndim == 3 and out_arr.shape[2] >= 3:
-            # Pad island borders on PBR channels too when mesh_context is attached!
             def _pad_opt(a: np.ndarray | None) -> np.ndarray | None:
                 if a is None or self.mesh_context is None:
                     return a
@@ -1986,6 +2455,8 @@ class TexGraph:
             pbr_channels=pbr_ch,
             pbr_maps=pbr_maps,
             pbr_preview=pbr_preview,
+            cache_hits=cache_hits,
+            cache_misses=cache_misses,
         )
 
     def evaluate_multipass(

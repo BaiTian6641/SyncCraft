@@ -256,6 +256,8 @@ def voronoi_noise(
 
     if output == "f2":
         return np.clip(d2 / 1.4, 0.0, 1.0).astype(np.float32)
+    if output == "f2_minus_f1":
+        return np.clip(d2 - d1, 0.0, 1.0).astype(np.float32)
     if output == "edge":
         return np.clip((d2 - d1) * 1.4, 0.0, 1.0).astype(np.float32)
     if output == "cracks":

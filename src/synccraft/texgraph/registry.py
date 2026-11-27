@@ -425,6 +425,124 @@ NODE_CATALOG: dict[str, NodeMeta] = {
         ),
     ),
     "sprite_mask": NodeMeta("sprite_mask", "Sprites & Masks", "Item Sprite Mask", "Procedural pixel-art item silhouette generator.", (), "MASK"),
+    # --- TexGraph v7 Industry Operators (Substance Designer + Pixel Composer Parity) ---
+    "sdf_shape": NodeMeta(
+        "sdf_shape", "Sprites & Masks", "2D SDF Shape Primitive",
+        "Analytical 2D SDF shapes & Minecraft item silhouettes (circle, rounded_box, star, leaf, feather, scale, sword, axe, pickaxe, potion, shield, gem, book, apple).",
+        (), "SCALAR",
+        outputs=(PortSchema("sdf", "SCALAR"), PortSchema("mask", "MASK"), PortSchema("bevel", "HEIGHT"), PortSchema("outline", "MASK")),
+        params=(ParamSchema("shape", "select", "rounded_box", choices=("circle", "box", "rounded_box", "polygon", "star", "capsule", "crescent", "teardrop", "gear", "leaf", "feather", "scale", "sword", "axe", "pickaxe", "potion", "shield", "gem", "book", "apple")),),
+    ),
+    "sdf_boolean": NodeMeta(
+        "sdf_boolean", "Sprites & Masks", "2D SDF Boolean",
+        "Smooth or sharp union, subtract, intersect & xor on 2D SDF fields.",
+        (PortSchema("a", "SCALAR"), PortSchema("b", "SCALAR")), "SCALAR",
+        outputs=(PortSchema("sdf", "SCALAR"), PortSchema("mask", "MASK"), PortSchema("bevel", "HEIGHT")),
+    ),
+    "tile_sampler": NodeMeta(
+        "tile_sampler", "Scatter & Layout", "Tile Sampler / Scatter",
+        "Substance Tile Sampler / Pixel Composer Scatter: grid or jittered stamp scattering with scale/rotation/luminance jitter, driver maps & seamless wrap.",
+        (PortSchema("stamp", "ANY", True), PortSchema("density_map", "MASK", True), PortSchema("scale_map", "SCALAR", True), PortSchema("rot_map", "SCALAR", True)),
+        "HEIGHT",
+        outputs=(PortSchema("height", "HEIGHT"), PortSchema("mask", "MASK"), PortSchema("id_map", "SCALAR"), PortSchema("rgba", "RGBA")),
+    ),
+    "flood_fill": NodeMeta(
+        "flood_fill", "Scatter & Layout", "Flood Fill (Per-Island)",
+        "Labels isolated mask islands (seamless wrap aware) and outputs per-island random grayscale, UV gradients, random tilt slopes & border distance.",
+        (PortSchema("mask", "MASK"),), "SCALAR",
+        outputs=(PortSchema("island_id", "SCALAR"), PortSchema("random_gray", "SCALAR"), PortSchema("gradient_u", "SCALAR"), PortSchema("gradient_v", "SCALAR"), PortSchema("random_slope", "SCALAR"), PortSchema("edge_dist", "HEIGHT")),
+    ),
+    "slope_blur": NodeMeta(
+        "slope_blur", "Filter & SDF", "Slope Blur",
+        "Advects height/mask uphill, downhill, or smoothly along a secondary slope map for chipped rock, impasto & organic wear.",
+        (PortSchema("src", "ANY"), PortSchema("slope_map", "SCALAR")), "ANY",
+        params=(ParamSchema("intensity", "slider", 1.6, 0.0, 8.0, 0.1), ParamSchema("mode", "select", "min", choices=("min", "max", "blur"))),
+    ),
+    "histogram_scan": NodeMeta("histogram_scan", "Color & Grading", "Histogram Scan", "Precision position + contrast tonal mask slicing.", (PortSchema("src", "SCALAR"),), "MASK"),
+    "histogram_select": NodeMeta("histogram_select", "Color & Grading", "Histogram Select", "Isolates a centered grayscale value band.", (PortSchema("src", "SCALAR"),), "MASK"),
+    "auto_levels": NodeMeta("auto_levels", "Color & Grading", "Auto Levels", "Robust percentile dynamic range normalization.", (PortSchema("src", "SCALAR"),), "SCALAR"),
+    "curvature": NodeMeta(
+        "curvature", "PBR & Normal", "Curvature from Height",
+        "Multi-scale convex ridge & concave crevice detector.",
+        (PortSchema("height", "HEIGHT"),), "SCALAR",
+        outputs=(PortSchema("curvature", "SCALAR"), PortSchema("convex", "MASK"), PortSchema("concave", "MASK")),
+    ),
+    "edge_wear": NodeMeta(
+        "edge_wear", "PBR & Normal", "Edge Wear & Crevice Grime",
+        "Procedural chipped edge wear and crevice dirt/grime masks from surface height.",
+        (PortSchema("height", "HEIGHT"),), "MASK",
+        outputs=(PortSchema("wear", "MASK"), PortSchema("grime", "MASK"), PortSchema("curvature", "SCALAR")),
+    ),
+    "displace_uv": NodeMeta(
+        "displace_uv", "Transform & Distort", "Displace UV",
+        "Pixel Composer Displace node: bilinear or crisp pixel-snapped UV displacement.",
+        (PortSchema("src", "ANY"), PortSchema("disp_map", "SCALAR"), PortSchema("disp_y_map", "SCALAR", True)), "ANY",
+    ),
+    "normal_light_2d": NodeMeta(
+        "normal_light_2d", "PBR & Normal", "2D Normal Light",
+        "Pixel Composer Normal Light: real-time directional 2D relighting of pixel art albedo + normal map.",
+        (PortSchema("albedo", "RGBA"), PortSchema("normal", "NORMAL")), "RGBA",
+    ),
+    "directional_selout": NodeMeta(
+        "directional_selout", "Color & Grading", "Directional Selout",
+        "Brandon James Greer directional selective outline: warm-lit top-left edges shifting to cool-deep shadow undersides.",
+        (PortSchema("src", "RGBA"),), "RGBA",
+    ),
+    "cobblestone_masonry": NodeMeta(
+        "cobblestone_masonry", "World Blocks (PBR)", "Cobblestone Masonry (MATERIAL)",
+        "Seamless Flood-Fill + Slope-Blur + Edge-Wear cobblestone & mossy stone masonry MaterialBus.",
+        (), "MATERIAL",
+        outputs=(PortSchema("albedo", "RGBA"), PortSchema("height", "HEIGHT"), PortSchema("normal", "NORMAL"), PortSchema("roughness", "SCALAR"), PortSchema("ao", "SCALAR"), PortSchema("mortar_mask", "MASK")),
+    ),
+    "bark_and_timber": NodeMeta(
+        "bark_and_timber", "World Blocks (PBR)", "Furrowed Bark & Timber (MATERIAL)",
+        "Seamless Slope-Blur organic tree bark with crevice moss/lichen MaterialBus.",
+        (), "MATERIAL",
+        outputs=(PortSchema("albedo", "RGBA"), PortSchema("height", "HEIGHT"), PortSchema("normal", "NORMAL"), PortSchema("roughness", "SCALAR"), PortSchema("ao", "SCALAR")),
+    ),
+    "crystalline_ore_vein": NodeMeta(
+        "crystalline_ore_vein", "World Blocks (PBR)", "Crystalline Ore Vein (MATERIAL)",
+        "Seamless chipped host basalt/deepslate embedded with faceted mineral ore crystals MaterialBus.",
+        (), "MATERIAL",
+        outputs=(PortSchema("albedo", "RGBA"), PortSchema("height", "HEIGHT"), PortSchema("normal", "NORMAL"), PortSchema("roughness", "SCALAR"), PortSchema("metallic", "SCALAR"), PortSchema("ao", "SCALAR"), PortSchema("emissive", "RGBA"), PortSchema("ore_mask", "MASK")),
+    ),
+    "caustic_water": NodeMeta(
+        "caustic_water", "World Blocks (PBR)", "Animated Caustic Water (MATERIAL)",
+        "Seamless looping dual-layer Voronoi caustic water surface MaterialBus.",
+        (), "MATERIAL",
+        outputs=(PortSchema("albedo", "RGBA"), PortSchema("height", "HEIGHT"), PortSchema("normal", "NORMAL"), PortSchema("roughness", "SCALAR"), PortSchema("sss", "SCALAR")),
+        time_aware=True,
+    ),
+    "organic_fur_pelt": NodeMeta(
+        "organic_fur_pelt", "Painterly & Bio", "Organic Mammal Fur Pelt (MATERIAL)",
+        "Directional 2-4px tufted mammal fur with jagged countershading & saddle/tabby/spotted markings MaterialBus.",
+        (), "MATERIAL",
+        outputs=(PortSchema("albedo", "RGBA"), PortSchema("height", "HEIGHT"), PortSchema("normal", "NORMAL"), PortSchema("roughness", "SCALAR"), PortSchema("ao", "SCALAR"), PortSchema("belly_mask", "MASK")),
+    ),
+    "layered_plumage": NodeMeta(
+        "layered_plumage", "Painterly & Bio", "Layered Avian Plumage (MATERIAL)",
+        "Overlapping scalloped bird/griffin/phoenix feathers with rachis quill & barred/speckled/iridescent markings MaterialBus.",
+        (), "MATERIAL",
+        outputs=(PortSchema("albedo", "RGBA"), PortSchema("height", "HEIGHT"), PortSchema("normal", "NORMAL"), PortSchema("roughness", "SCALAR"), PortSchema("metallic", "SCALAR"), PortSchema("ao", "SCALAR")),
+    ),
+    "chitin_carapace": NodeMeta(
+        "chitin_carapace", "Painterly & Bio", "Segmented Chitin Carapace (MATERIAL)",
+        "Segmented scorpion/beetle/arthropod carapace with cool plum shadows & Fresnel iridescence MaterialBus.",
+        (), "MATERIAL",
+        outputs=(PortSchema("albedo", "RGBA"), PortSchema("height", "HEIGHT"), PortSchema("normal", "NORMAL"), PortSchema("roughness", "SCALAR"), PortSchema("metallic", "SCALAR"), PortSchema("ao", "SCALAR")),
+    ),
+    "aquatic_scales_skin": NodeMeta(
+        "aquatic_scales_skin", "Painterly & Bio", "Aquatic Scales & Moist Skin (MATERIAL)",
+        "Wet glossy fish cycloid scales or moist aposematic dart-frog/koi amphibian skin MaterialBus.",
+        (), "MATERIAL",
+        outputs=(PortSchema("albedo", "RGBA"), PortSchema("height", "HEIGHT"), PortSchema("normal", "NORMAL"), PortSchema("roughness", "SCALAR"), PortSchema("metallic", "SCALAR"), PortSchema("ao", "SCALAR"), PortSchema("sss", "SCALAR")),
+    ),
+    "elemental_golem_surface": NodeMeta(
+        "elemental_golem_surface", "Painterly & Bio", "Elemental Golem Construct (MATERIAL)",
+        "Flood-Fill + Slope-Blur fractured stone/obsidian slabs with chipped wear & glowing crevice fissures MaterialBus.",
+        (), "MATERIAL",
+        outputs=(PortSchema("albedo", "RGBA"), PortSchema("height", "HEIGHT"), PortSchema("normal", "NORMAL"), PortSchema("roughness", "SCALAR"), PortSchema("metallic", "SCALAR"), PortSchema("ao", "SCALAR"), PortSchema("emissive", "RGBA"), PortSchema("fissure_mask", "MASK")),
+    ),
 }
 
 
@@ -446,6 +564,7 @@ def export_node_schema_json() -> dict[str, Any]:
     ]
     return {
         "schema_version": "3.1",
+        "engine_version": "7.0",
         "node_count": len(NODE_CATALOG),
         "subgraph_count": len(subgraphs),
         "supports_multi_port": True,
@@ -453,6 +572,8 @@ def export_node_schema_json() -> dict[str, Any]:
         "supports_multipass": True,
         "supports_generate_iterate_simulate_animate": True,
         "supports_param_drivers": True,
+        "supports_dag_validation": True,
+        "supports_incremental_cache": True,
         "categories": list(by_cat.keys()),
         "nodes_by_category": by_cat,
         "subgraphs": subgraphs,

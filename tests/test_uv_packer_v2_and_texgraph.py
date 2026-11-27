@@ -786,6 +786,136 @@ if (!actions[0].deleted) throw new Error("onunload did not clean up actions");
         self.assertGreater(metrics["mean_lum_step"], 0.5)
         self.assertLess(metrics["jump_gt25_pct"], 35.0)
 
+    def test_v7_industry_dag_validation_caching_operators_and_batch(self) -> None:
+        from synccraft.texgraph import (
+            PALETTE_BANK,
+            PRESET_REGISTRY,
+            SUBGRAPH_REGISTRY,
+            BatchTextureJob,
+            GraphCycleError,
+            curvature_from_height,
+            directional_selout,
+            displace_uv,
+            edge_wear_mask,
+            evaluate_texture_quality,
+            export_node_schema_json,
+            flood_fill,
+            histogram_scan,
+            histogram_select,
+            normal_light_2d,
+            run_batch,
+            sdf_boolean,
+            sdf_shape,
+            slope_blur,
+            tile_sampler,
+        )
+
+        # 1. Schema v3.1 / Engine v7.0 exposes >=115 nodes & >=17 reusable PBR subgraphs
+        schema = export_node_schema_json()
+        self.assertEqual(schema["engine_version"], "7.0")
+        self.assertTrue(schema["supports_dag_validation"])
+        self.assertTrue(schema["supports_incremental_cache"])
+        self.assertGreaterEqual(schema["node_count"], 115)
+        self.assertGreaterEqual(len(SUBGRAPH_REGISTRY), 17)
+        self.assertGreaterEqual(len(PALETTE_BANK), 18)
+
+        # 2. True Topological Order (out-of-order recipe) + Cycle Detection + Static Validation
+        g_oob = TexGraph(16, 16, seed=7, name="oob_topo_test")
+        # Intentionally register consumer BEFORE producer (as happens in rewired or unsorted JSON recipes)!
+        g_oob.add("levels", id="step_2", inputs={"src": "step_1"}, validate_refs=False, in_min=0.1, in_max=0.9)
+        g_oob.add("constant", id="step_1", value=0.6)
+        g_oob.set_output("step_2")
+        vrep = g_oob.validate_graph()
+        self.assertTrue(vrep.ok, vrep.errors)
+        self.assertEqual(vrep.topo_order, ["step_1", "step_2"])
+        ev_oob = g_oob.evaluate(build_pbr=False)
+        self.assertAlmostEqual(float(ev_oob.output.mean()), (0.6 - 0.1) / 0.8, places=4)
+        # Round-trip out-of-order JSON recipe through from_recipe()!
+        g_oob_rt = TexGraph.from_recipe(g_oob.to_recipe())
+        self.assertTrue(g_oob_rt.validate_graph().ok)
+        self.assertAlmostEqual(float(g_oob_rt.evaluate(build_pbr=False).output.mean()), (0.6 - 0.1) / 0.8, places=4)
+
+        # Cycle detection raises GraphCycleError AND validate_graph reports ok=False
+        g_cyc = TexGraph(16, 16, name="cycle_test")
+        g_cyc.add("levels", id="a", inputs={"src": "b"}, validate_refs=False)
+        g_cyc.add("levels", id="b", inputs={"src": "a"}, validate_refs=False)
+        with self.assertRaises(GraphCycleError):
+            g_cyc.topological_order()
+        self.assertFalse(g_cyc.validate_graph().ok)
+
+        # 3. Content-Addressed Incremental Memoization: downstream edit keeps upstream cached!
+        g_cache = PRESET_REGISTRY["cobblestone_block"](size=32)
+        ev1 = g_cache.evaluate(build_pbr=True)
+        self.assertEqual(ev1.cache_hits, 0)
+        self.assertGreaterEqual(ev1.cache_misses, 2)
+        ev2 = g_cache.evaluate(build_pbr=True)
+        self.assertEqual(ev2.cache_hits, len(g_cache.nodes))
+        self.assertEqual(ev2.cache_misses, 0)
+        # Tweak ONLY downstream node -> upstream cobblestone_masonry stays cached!
+        g_cache.nodes["cobble_final"].params["vibrance"] = 0.30
+        ev3 = g_cache.evaluate(build_pbr=True)
+        self.assertGreaterEqual(ev3.cache_hits, 1)
+        self.assertEqual(ev3.cache_misses, 1)
+
+        # 4. Core v7 Industry Operators (SDF, Tile Sampler, Flood Fill, Slope Blur, Histogram, Curvature, Displace, Normal Light, Directional Selout)
+        s1 = sdf_shape(32, 32, shape="sword")
+        s2 = sdf_shape(32, 32, shape="star", size=(0.15, 0.15))
+        sb = sdf_boolean(s1["sdf"], s2["sdf"], op="smooth_union", smoothness=0.03)
+        self.assertEqual(sb["mask"].shape, (32, 32))
+        self.assertGreater(float(sb["mask"].sum()), 40.0)
+
+        ts = tile_sampler(32, 32, s2["bevel"], count_x=4, count_y=4, tileable=True, seed=11)
+        self.assertEqual(ts["height"].shape, (32, 32))
+        ff = flood_fill(ts["mask"], threshold=0.2, tileable=True, seed=13)
+        self.assertGreater(float(ff["island_id"].max()), 0.0)
+        self.assertGreater(float(ff["random_slope"].max()), 0.1)
+
+        sl = slope_blur(ts["height"], ff["random_gray"], intensity=1.2, samples=3, mode="min", tileable=True)
+        self.assertEqual(sl.shape, (32, 32))
+        hs = histogram_scan(sl, position=0.5, contrast=0.7)
+        hsel = histogram_select(sl, position=0.5, range_width=0.3)
+        self.assertEqual(hs.shape, (32, 32))
+        self.assertEqual(hsel.shape, (32, 32))
+        curv = curvature_from_height(sl, radius=1)
+        ew = edge_wear_mask(sl, seed=17)
+        self.assertEqual(curv["convex"].shape, (32, 32))
+        self.assertEqual(ew["wear"].shape, (32, 32))
+        disp = displace_uv(sl, ff["random_gray"], strength_x=1.5, strength_y=1.5, pixel_snap=True)
+        self.assertEqual(disp.shape, (32, 32))
+
+        rgba_item = np.zeros((32, 32, 4), dtype=np.float32)
+        rgba_item[..., :3] = 0.65
+        rgba_item[..., 3] = s1["mask"]
+        sel = directional_selout(rgba_item)
+        self.assertEqual(sel.shape, (32, 32, 4))
+        nrm_rgb = np.full((32, 32, 3), 0.5, dtype=np.float32)
+        nrm_rgb[..., 2] = 1.0
+        lit = normal_light_2d(sel, nrm_rgb)
+        self.assertEqual(lit.shape, (32, 32, 4))
+
+        # 5. Multi-Domain Quality Evaluation + Production Batch Runner + Sprite Atlas + CLI validate/qa
+        with tempfile.TemporaryDirectory() as tmp:
+            td = Path(tmp)
+            jobs = [
+                BatchTextureJob("cobble", "cobblestone_block", domain="block", size=32),
+                BatchTextureJob("water", "caustic_water_block", domain="block", size=32),
+                BatchTextureJob("sword", "runic_greatsword_item", domain="item", size=32),
+                BatchTextureJob("potion", "ruby_potion_item", domain="item", size=32),
+                BatchTextureJob("husky", "husky_wolf_pelt", domain="entity", size=64),
+                BatchTextureJob("scorpion", "emperor_scorpion_chitin", domain="entity", size=64),
+            ]
+            rep = run_batch(jobs, td / "batch", pack_atlas_name="pack_atlas")
+            self.assertEqual(rep["total_jobs"], 6)
+            self.assertGreaterEqual(rep["passed_qa"], 5)
+            self.assertTrue((td / "batch" / "pack_atlas.png").is_file())
+            self.assertTrue((td / "batch" / "pack_atlas.atlas.json").is_file())
+            self.assertTrue((td / "batch" / "batch_manifest.json").is_file())
+
+            # CLI `validate` & `qa` subcommands
+            self.assertEqual(cli_main(["texgraph", "validate", "preset:runic_greatsword_item", "--size", "32"]), 0)
+            self.assertEqual(cli_main(["texgraph", "qa", "preset:runic_greatsword_item", "--domain", "item", "--size", "32"]), 0)
+            self.assertEqual(cli_main(["texgraph", "qa", "preset:husky_wolf_pelt", "--domain", "entity", "--size", "64"]), 0)
+
 
 if __name__ == "__main__":
     unittest.main()
