@@ -744,3 +744,63 @@ def wing_scallop_alpha(
     alpha = (dist_in >= 0.0).astype(np.float32)
     rim = ((dist_in >= 0.0) & (dist_in <= float(rim_width))).astype(np.float32)
     return alpha, rim
+
+
+def measure_painterly_metrics(
+    albedo_u8: np.ndarray,
+    mesh_ctx: Any | None = None,
+) -> dict[str, float]:
+    """Measure SKILL.md §10.2 studio pixel-art interior patch smoothness & deliberate relief metrics.
+
+    Evaluates horizontal & vertical neighbor luminance steps strictly INSIDE opaque UV islands
+    (excluding 1 px island boundaries and eye islands):
+    - ``mean_lum_step``: ideal studio painterly Blockbench range is ``4.0 - 8.5`` (on 0-255);
+      lower than ~3.0 reads as flat plastic airbrush, higher than ~11.0 reads as rock-hard noisy grit.
+    - ``jump_gt25_pct``: percentage of interior neighbor pairs jumping > 25 luminance; ideal is
+      ``4.0% - 14.0%`` (calm >= 60% base fields with deliberate sculpted clusters & bevels).
+    - ``calm_interior_pct``: percentage of interior neighbor pairs with smooth step <= 10.
+    """
+    arr = np.asarray(albedo_u8)
+    if arr.dtype != np.uint8:
+        arr = np.clip(np.rint(arr * 255.0), 0, 255).astype(np.uint8)
+    rgb = arr[..., :3].astype(np.float32)
+    alpha = arr[..., 3] > 128 if arr.shape[-1] >= 4 else np.ones(arr.shape[:2], dtype=bool)
+    lum = 0.2126 * rgb[..., 0] + 0.7152 * rgb[..., 1] + 0.0722 * rgb[..., 2]
+
+    steps_list: list[np.ndarray] = []
+    if mesh_ctx is not None and hasattr(mesh_ctx, "islands"):
+        for isl in mesh_ctx.islands:
+            ename = str(getattr(isl, "elem_name", "")).lower()
+            if "eye_" in ename or isl.w < 6 or isl.h < 6:
+                continue
+            x0 = int(isl.x0) + 1
+            y0 = int(isl.y0) + 1
+            x1 = int(isl.x0 + isl.w) - 1
+            y1 = int(isl.y0 + isl.h) - 1
+            if x1 - x0 < 3 or y1 - y0 < 3:
+                continue
+            sub_l = lum[y0:y1, x0:x1]
+            sub_a = alpha[y0:y1, x0:x1]
+            mh = sub_a[:, 1:] & sub_a[:, :-1]
+            mv = sub_a[1:, :] & sub_a[:-1, :]
+            if np.any(mh):
+                steps_list.append(np.abs(sub_l[:, 1:] - sub_l[:, :-1])[mh])
+            if np.any(mv):
+                steps_list.append(np.abs(sub_l[1:, :] - sub_l[:-1, :])[mv])
+    else:
+        mh = alpha[:, 1:] & alpha[:, :-1]
+        mv = alpha[1:, :] & alpha[:-1, :]
+        if np.any(mh):
+            steps_list.append(np.abs(lum[:, 1:] - lum[:, :-1])[mh])
+        if np.any(mv):
+            steps_list.append(np.abs(lum[1:, :] - lum[:-1, :])[mv])
+
+    if not steps_list:
+        return {"mean_lum_step": 0.0, "jump_gt25_pct": 0.0, "calm_interior_pct": 100.0, "pairs_sampled": 0.0}
+    all_s = np.concatenate(steps_list)
+    return {
+        "mean_lum_step": round(float(all_s.mean()), 2),
+        "jump_gt25_pct": round(100.0 * float((all_s > 25.0).mean()), 2),
+        "calm_interior_pct": round(100.0 * float((all_s <= 10.0).mean()), 2),
+        "pairs_sampled": float(all_s.size),
+    }

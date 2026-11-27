@@ -491,15 +491,15 @@ def build_aethelion_texgraph(mesh_ctx: MeshBakeContext, *, seed: int = 4205) -> 
             "anatomical_muscle_scales_pbr",
             prefix="obsidian_muscle",
             seed=seed + 11,
-            plate_cols=max(64, mesh_ctx.width // 7),
-            plate_rows=max(64, mesh_ctx.height // 6),
+            plate_cols=max(56, mesh_ctx.width // 8),
+            plate_rows=max(56, mesh_ctx.height // 7),
             scale_stops=[
-                (0.00, "#050612"),
-                (0.24, "#0E1433"),
-                (0.50, "#1D2C61"),
-                (0.76, "#345299"),
-                (0.92, "#6593D6"),
-                (1.00, "#B8DBFA"),
+                (0.00, "#09081B"),
+                (0.22, "#161B47"),
+                (0.48, "#263B7E"),
+                (0.74, "#406AB8"),
+                (0.91, "#74ADE8"),
+                (1.00, "#C7EAFF"),
             ],
             belly_stops=[
                 (0.00, "#475569"),
@@ -507,10 +507,13 @@ def build_aethelion_texgraph(mesh_ctx: MeshBakeContext, *, seed: int = 4205) -> 
                 (0.80, "#CBD5E1"),
                 (1.00, "#F1F5F9"),
             ],
-            muscle_groove_depth=0.44,
-            scale_relief=0.52,
+            muscle_groove_depth=0.42,
+            scale_relief=0.56,
+            organic_distortion=0.64,
+            softness=0.50,
+            hue_variation=0.38,
             roughness_base=0.36,
-            metallic_crown=0.22,
+            metallic_crown=0.20,
             smooth_blend=0.52,
             quantize_steps=7,
         )
@@ -587,57 +590,81 @@ def build_aethelion_texgraph(mesh_ctx: MeshBakeContext, *, seed: int = 4205) -> 
         quill_wave = g.scroll(g.fbm(scale=3.0, octaves=2, tileable=True, seed=seed + 131, id="quill_wave_n"), speed_x=1.0, speed_y=1.0, id="quill_wave_scroll")
         wing_in = {"span_u": bay_u, "trail_v": bay_v, "face_is_down": face_dn}
 
-        # Outer Bays (wing_bay_1, wing_bay_2): Deep Void-Indigo -> Royal Cobalt -> Luminous Starlight-Cyan Backlit SSS + Gold Astrolabe Ribs!
+        # Outer Bays (wing_bay_1, wing_bay_2): TRUE Dual-Layer 0.5u Wing Sheet!
+        # Dorsal (`up`): Velvet astral-sapphire armored membrane + champagne-gold astrolabe ribs!
+        # Ventral (`down`): Luminous backlit Starlight-Cyan translucent sail (`SSS=0.90`)!
         mem_cyan = g.use_subgraph(
             "colossal_dragon_membrane_pbr",
             prefix="aeth_mem_cyan",
             inputs=wing_in,
             seed=seed + 71,
-            palette_stops=[
-                (0.00, "#080B1E"),
-                (0.24, "#12214D"),
-                (0.50, "#194382"),
-                (0.76, "#228CC9"),
-                (0.92, "#67E8F9"),
-                (1.00, "#E0F9FF"),
+            dorsal_palette_stops=[
+                (0.00, "#0A0C22"),
+                (0.24, "#152354"),
+                (0.52, "#1E4280"),
+                (0.78, "#2E75B2"),
+                (0.93, "#62BCE0"),
+                (1.00, "#C7F2FF"),
             ],
-            rim_color="#1E3A5F",
-            tendon_color="#C89B2B",
+            palette_stops=[
+                (0.00, "#0C0D26"),
+                (0.24, "#152B63"),
+                (0.50, "#1D5CA1"),
+                (0.76, "#2EA7DE"),
+                (0.92, "#79EEFA"),
+                (1.00, "#E8FCFF"),
+            ],
+            rim_color="#1D365C",
+            tendon_color="#236596",
+            dorsal_tendon_color="#D4A438",
             arch_depth=0.22,
             arches=1,
             tatter_strength=0.045,
             tendon_ribs=3,
-            pleat_count=10.0,
-            pleat_strength=0.18,
-            backlit_sss=0.88,
-            smooth_blend=0.76,
+            pleat_count=9.0,
+            pleat_strength=0.15,
+            organic_distortion=0.58,
+            backlit_sss=0.90,
+            smooth_blend=0.80,
             quantize_steps=8,
         )
 
-        # Inner Bays (wing_bay_3, wing_bay_4, wing_inner_sail): Deep Void-Indigo -> Cosmic Plum -> Luminous Horizon-Magenta Backlit SSS + Gold Ribs!
+        # Inner Bays (wing_bay_3, wing_bay_4, wing_inner_sail): TRUE Dual-Layer 0.5u Wing Sheet!
+        # Dorsal (`up`): Royal obsidian-amethyst protective outer mantle + champagne-gold astrolabe ribs!
+        # Ventral (`down`): Radiant backlit Horizon-Magenta translucent underwing sail (`SSS=0.90`)!
         mem_mag = g.use_subgraph(
             "colossal_dragon_membrane_pbr",
             prefix="aeth_mem_mag",
             inputs=wing_in,
             seed=seed + 83,
-            palette_stops=[
-                (0.00, "#0C081E"),
-                (0.24, "#28134A"),
-                (0.50, "#5B1E8C"),
-                (0.76, "#A832C9"),
-                (0.92, "#E879F9"),
-                (1.00, "#FAE8FF"),
+            dorsal_palette_stops=[
+                (0.00, "#0F0A22"),
+                (0.24, "#27144D"),
+                (0.52, "#4B2280"),
+                (0.78, "#823AA8"),
+                (0.93, "#C47CE0"),
+                (1.00, "#F0D4FF"),
             ],
-            rim_color="#3B125E",
-            tendon_color="#C89B2B",
+            palette_stops=[
+                (0.00, "#140B29"),
+                (0.24, "#35165E"),
+                (0.50, "#6E23A3"),
+                (0.76, "#BC3CD9"),
+                (0.92, "#F08CFA"),
+                (1.00, "#FCEBFF"),
+            ],
+            rim_color="#38155B",
+            tendon_color="#6E2285",
+            dorsal_tendon_color="#D4A438",
             arch_depth=0.22,
             arches=1,
             tatter_strength=0.045,
             tendon_ribs=3,
-            pleat_count=10.0,
-            pleat_strength=0.18,
-            backlit_sss=0.88,
-            smooth_blend=0.76,
+            pleat_count=9.0,
+            pleat_strength=0.15,
+            organic_distortion=0.58,
+            backlit_sss=0.90,
+            smooth_blend=0.80,
             quantize_steps=8,
         )
 
@@ -671,13 +698,17 @@ def build_aethelion_texgraph(mesh_ctx: MeshBakeContext, *, seed: int = 4205) -> 
             with_wings_mat,
             ao_bake=baked_ao,
             ao_darken=0.14,
-            shadows=(-0.01, -0.005, 0.024),
-            midtones=(0.0, 0.008, 0.014),
-            highlights=(0.02, 0.018, 0.010),
-            vibrance=0.16,
-            contrast=1.04,
-            lift=0.01,
-            shadow_cool=0.04,
+            shadows=(-0.008, -0.004, 0.026),
+            midtones=(0.004, 0.010, 0.016),
+            highlights=(0.024, 0.020, 0.012),
+            vibrance=0.20,
+            contrast=1.03,
+            lift=0.014,
+            shadow_cool=0.05,
+            atmosphere_strength=0.22,
+            sky_tint=(0.24, 0.42, 0.72),
+            bounce_tint=(0.26, 0.14, 0.44),
+            organic_wash_strength=0.10,
             despeckle_threshold=0.38,
             id="aethelion_graded_mat",
         )
@@ -963,20 +994,20 @@ def build_colossal_dragon_texgraph(mesh_ctx: MeshBakeContext, *, seed: int = 530
         p1.preview_ref = baked_ao
 
     with g.pass_("pass_2_muscle_scales", title="Muscle-Fit Scales", description="3D-fitted obsidian-slate & storm-teal osteoderm scales hugging muscle volumes.", color="#172554") as p2:
-        # 3D-Anatomical Scale-to-Muscle Fitting (inspired by Blue-Teal Wyvern Image 3 & Slate-Black Dragon Image 4!)
+        # Organic 3D-Painterly Dragon Hide & Muscle-Fitted Scale Clusters (Distilled from Reference Images 1-4!)
         body_mat = g.use_subgraph(
             "anatomical_muscle_scales_pbr",
             prefix="dragon_muscle_scales",
             seed=seed + 11,
-            plate_cols=max(64, mesh_ctx.width // 7),
-            plate_rows=max(64, mesh_ctx.height // 6),
+            plate_cols=max(56, mesh_ctx.width // 8),
+            plate_rows=max(56, mesh_ctx.height // 7),
             scale_stops=[
-                (0.00, "#090B17"),  # deep obsidian-plum inter-scale shadow pocket
-                (0.24, "#172038"),  # dark volcanic basalt scale base
-                (0.50, "#2A4261"),  # storm-slate / deep ocean-teal scale body
-                (0.76, "#466E8E"),  # weathered steel-teal sculpted dome
-                (0.92, "#76A8C4"),  # crisp honed dorsal scale rim & keel
-                (1.00, "#C4E4F5"),  # subtle sunlit edge catchlight
+                (0.00, "#0C0D1D"),  # velvety obsidian-plum crevice shadow
+                (0.22, "#1A2542"),  # rich dark volcanic basalt hide
+                (0.48, "#2C4B6E"),  # lush ocean storm-teal scale body
+                (0.74, "#4A7A9C"),  # sunlit weathered steel-teal dome
+                (0.91, "#7BB4CF"),  # crisp honed dorsal scale catchlight
+                (1.00, "#CBEAF8"),  # delicate rim highlight
             ],
             belly_stops=[
                 (0.00, "#383032"),
@@ -984,10 +1015,13 @@ def build_colossal_dragon_texgraph(mesh_ctx: MeshBakeContext, *, seed: int = 530
                 (0.78, "#BEB099"),
                 (1.00, "#ECE2CD"),
             ],
-            muscle_groove_depth=0.44,
-            scale_relief=0.52,
+            muscle_groove_depth=0.42,
+            scale_relief=0.56,
+            organic_distortion=0.66,
+            softness=0.50,
+            hue_variation=0.40,
             roughness_base=0.40,
-            metallic_crown=0.18,
+            metallic_crown=0.16,
             smooth_blend=0.52,
             quantize_steps=7,
         )
@@ -1013,30 +1047,40 @@ def build_colossal_dragon_texgraph(mesh_ctx: MeshBakeContext, *, seed: int = 530
         p2.preview_ref = f"{body_full}.albedo"
 
     with g.pass_("pass_3_colossal_wings", title="Colossal Membranes", description="Special arched-tendon, diagonal-pleated, backlit translucent dragon wing membranes.", color="#451A03") as p3:
-        # Special Monumental Bat-Dragon Wing Membrane (Image 2 plum-crimson shadow + Image 3 diagonal pleats + Image 4 curved tendon ribs + Image 1 warm amber backlit SSS!)
+        # True Dual-Layer 0.5u Bat-Dragon Wing Membrane (Dorsal Smoked Mahogany-Leather vs. Ventral Glowing Amber SSS!)
         wing_mat = g.use_subgraph(
             "colossal_dragon_membrane_pbr",
             prefix="colossal_mem",
             inputs={"span_u": span_u, "trail_v": trail_v, "face_is_down": face_dn},
             seed=seed + 71,
+            dorsal_palette_stops=[
+                (0.00, "#16101B"),  # deep smoked obsidian-plum spar root
+                (0.24, "#311E28"),  # dark gothic mahogany-umber leather
+                (0.50, "#593232"),  # weathered bronze-crimson dorsal mantle
+                (0.76, "#8F5340"),  # sunlit copper-sienna membrane sheen
+                (0.92, "#C4885E"),  # warm golden-ochre outer feathering
+                (1.00, "#EBD0A4"),  # subtle rim light
+            ],
             palette_stops=[
-                (0.00, "#1A121D"),  # deep obsidian-plum bone-contact shadow
-                (0.24, "#3B232B"),  # rich dark gothic burgundy-umber
-                (0.50, "#6E3A36"),  # warm leathery bronze-crimson membrane
-                (0.76, "#B36345"),  # glowing backlit amber-sienna cushion
-                (0.92, "#E3A36D"),  # sunlit thin-skin subsurface warmth
-                (1.00, "#FCE2B6"),  # translucent core glow
+                (0.00, "#1C121F"),  # velvety obsidian-plum bone-contact shadow
+                (0.24, "#42242E"),  # rich dark burgundy-umber
+                (0.50, "#7C3F38"),  # warm leathery amber-crimson membrane
+                (0.76, "#C46C46"),  # glowing backlit volcanic-amber cushion
+                (0.92, "#F0B074"),  # sunlit thin-skin subsurface warmth
+                (1.00, "#FFF0C8"),  # translucent core radiance
             ],
             rim_color="#1E1420",
-            tendon_color="#231622",
+            tendon_color="#251624",
+            dorsal_tendon_color="#1B131E",
             arch_depth=0.25,
             arches=1,
             tatter_strength=0.095,
             tendon_ribs=3,
-            pleat_count=10.0,
-            pleat_strength=0.20,
-            backlit_sss=0.88,
-            smooth_blend=0.72,
+            pleat_count=9.0,
+            pleat_strength=0.16,
+            organic_distortion=0.60,
+            backlit_sss=0.90,
+            smooth_blend=0.78,
             quantize_steps=8,
         )
         with_wings = g.material_blend(body_full, wing_mat, mask=wing_mem_m, id="dragon_with_wings_mat")
@@ -1046,14 +1090,18 @@ def build_colossal_dragon_texgraph(mesh_ctx: MeshBakeContext, *, seed: int = 530
         graded = g.material_grade(
             with_wings,
             ao_bake=baked_ao,
-            ao_darken=0.18,
-            shadows=(-0.01, -0.005, 0.022),
-            midtones=(0.004, 0.002, 0.004),
-            highlights=(0.022, 0.015, 0.005),
-            vibrance=0.14,
-            contrast=1.05,
-            lift=0.01,
-            shadow_cool=0.04,
+            ao_darken=0.16,
+            shadows=(-0.008, -0.004, 0.024),
+            midtones=(0.006, 0.004, 0.006),
+            highlights=(0.026, 0.018, 0.008),
+            vibrance=0.18,
+            contrast=1.03,
+            lift=0.014,
+            shadow_cool=0.05,
+            atmosphere_strength=0.20,
+            sky_tint=(0.24, 0.38, 0.56),
+            bounce_tint=(0.36, 0.16, 0.12),
+            organic_wash_strength=0.12,
             despeckle_threshold=0.38,
             id="dragon_graded_mat",
         )

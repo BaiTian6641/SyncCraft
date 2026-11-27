@@ -864,6 +864,8 @@ def pack_semantic_uv_atlas(
     mirrored_shared_faces = 0
     explicit_shared_faces = 0
 
+    _MEMBRANE_SLAB_KW = ("bay", "sail", "membrane", "patag", "lobe", "fin", "web", "wing_mem", "wing_sheet")
+
     for box in scene.boxes:
         sx, sy, sz = map(float, box.size)
         sizes = {
@@ -875,11 +877,18 @@ def pack_semantic_uv_atlas(
         eff_density = density * float(getattr(box, "uv_scale", 1.0))
         zone = box_zones[box.name]
         is_mirror_slave = box.name in mirror_source_map
+        min_dim, max_dim = min(sx, sy, sz), max(sx, sy, sz)
+        is_dual_slab = (
+            cull_zero_area
+            and min_dim <= 0.55
+            and max_dim >= 4.0 * max(0.05, min_dim)
+            and any(k in box.name.lower() for k in _MEMBRANE_SLAB_KW)
+        )
 
         for face in FACES:
             u, v = sizes[face]
-            # Cull 0-area edge faces on 0-thickness planes
-            if cull_zero_area and (u <= 1e-9 or v <= 1e-9):
+            # Cull 0-area edge faces on 0-thickness planes AND 0.5u side rims on dual-sided membrane slabs!
+            if cull_zero_area and (u <= 1e-9 or v <= 1e-9 or (is_dual_slab and min(u, v) <= 0.55)):
                 faces_out[box.name][face] = [0, 0, 0, 0]
                 culled_zero_area += 1
                 continue
@@ -1404,6 +1413,8 @@ def repack_bbmodel_uvs(
     culled_zero = 0
     mirrored_faces = 0
 
+    _MEMBRANE_SLAB_KW = ("bay", "sail", "membrane", "patag", "lobe", "fin", "web", "wing_mem", "wing_sheet")
+
     for info in elem_info:
         idx = info["idx"]
         el = info["el"]
@@ -1415,6 +1426,13 @@ def repack_bbmodel_uvs(
         }
         el_faces = el.get("faces") or {}
         is_slave = idx in mirror_source_idx
+        min_dim, max_dim = min(sx, sy, sz), max(sx, sy, sz)
+        is_dual_slab = (
+            cull_zero_area
+            and min_dim <= 0.55
+            and max_dim >= 4.0 * max(0.05, min_dim)
+            and any(k in info["name"].lower() for k in _MEMBRANE_SLAB_KW)
+        )
         for face in FACES:
             fdata = el_faces.get(face)
             if not isinstance(fdata, dict) or not fdata.get("uv"):
@@ -1424,7 +1442,7 @@ def repack_bbmodel_uvs(
             gu, gv = geom_sizes[face]
             fw_px = abs(uv[2] - uv[0]) * scale_x
             fh_px = abs(uv[3] - uv[1]) * scale_y
-            if cull_zero_area and (gu <= 1e-6 or gv <= 1e-6 or fw_px < 0.5 or fh_px < 0.5):
+            if cull_zero_area and (gu <= 1e-6 or gv <= 1e-6 or fw_px < 0.5 or fh_px < 0.5 or (is_dual_slab and min(gu, gv) <= 0.55)):
                 fdata["uv"] = [0, 0, 0, 0]
                 culled_zero += 1
                 continue

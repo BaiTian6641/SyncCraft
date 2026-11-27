@@ -673,6 +673,119 @@ if (!actions[0].deleted) throw new Error("onunload did not clean up actions");
             r = subprocess.run(cmd, capture_output=True, text=True)
             self.assertEqual(r.returncode, 0, f"Plugin JS runtime test failed: {r.stderr or r.stdout}")
 
+    def test_v6_organic_painterly_dual_layer_wings_and_metrics(self) -> None:
+        from synccraft.texgraph import (
+            anatomical_muscle_scales,
+            colossal_dragon_membrane,
+            export_node_schema_json,
+            measure_painterly_metrics,
+            organic_domain_warp_3d,
+            painterly_brush_field,
+        )
+
+        # 1. Registry & schema expose organic_domain_warp_3d and painterly_brush_field
+        schema = export_node_schema_json()
+        all_ops = {n["op"] for items in schema["nodes_by_category"].values() for n in items}
+        self.assertIn("organic_domain_warp_3d", all_ops)
+        self.assertIn("painterly_brush_field", all_ops)
+
+        # 2. 0.5u dual-sided solid wing slab: uv_packer auto-culls thin side rims while preserving full up/down islands!
+        dual_wing_dsl = """
+        @meta { archetype: entity, target_profile: bedrock_entity, texel_density: 32, size_step: 0.5, audit_profile: sculpted }
+        @palette {
+          obsidian: ramp(base_lch=[0.24, 0.055, 268], steps=5, hue_shift=[-18, 28])
+        }
+        @rig {
+          root bone pelvis_root {
+            pivot_local: [0, 12, 0]
+            box torso_core { size: [12, 12, 18], material: obsidian }
+            bone wing_l_upper joint(parent=torso_core, at=[-6, 4, 0], align=[0, 0, 0]) {
+              box wing_spar { size: [30, 3, 4], material: obsidian }
+              box wing_bay_1 place(base_box=wing_spar, anchor=[0, 0.2, -0.4], align=[0, 0, 0.9]) {
+                size: [28, 0.5, 24], material: obsidian
+              }
+            }
+          }
+        }
+        """
+        prog = parse_program(dual_wing_dsl)
+        scene = compile_geometry(prog)
+        sem = pack_semantic_uv_atlas(prog, scene, padding=1, mirror_lr_uv="adaptive", canvas_mode="tight")
+        bay_faces = sem["faces"]["wing_bay_1"]
+        # Side rims of 0.5u membrane slab MUST be culled to [0,0,0,0], while BOTH up (dorsal) & down (ventral) have full area!
+        for rim_f in ("north", "south", "east", "west"):
+            self.assertEqual(bay_faces[rim_f], [0.0, 0.0, 0.0, 0.0], f"Expected culled thin rim on {rim_f}")
+        for sheet_f in ("up", "down"):
+            uv = bay_faces[sheet_f]
+            self.assertGreater(abs(uv[2] - uv[0]), 10.0)
+            self.assertGreater(abs(uv[3] - uv[1]), 10.0)
+        # Dual-layer sheets MUST occupy distinct UV regions (not aliased onto the same pixels!)
+        self.assertNotEqual(bay_faces["up"], bay_faces["down"])
+
+        # 3. True Dual-Layer Dorsal vs Ventral `colossal_dragon_membrane`: distinct RGB palettes, 100% matched alpha!
+        uu, vv = np.meshgrid(np.linspace(0.0, 1.0, 48, dtype=np.float32), np.linspace(0.0, 1.0, 48, dtype=np.float32))
+        dorsal_stops = [(0.0, "#0A0C22"), (0.5, "#1E4280"), (1.0, "#C7F2FF")]
+        ventral_stops = [(0.0, "#1C121F"), (0.5, "#C46C46"), (1.0, "#FFF0C8")]
+        m_up = colossal_dragon_membrane(
+            uu, vv, face_is_down=np.zeros_like(uu),
+            dorsal_palette_stops=dorsal_stops, palette_stops=ventral_stops,
+            dorsal_tendon_color="#D4A438", tendon_color="#251624",
+            seed=77,
+        )
+        m_dn = colossal_dragon_membrane(
+            uu, vv, face_is_down=np.ones_like(uu),
+            dorsal_palette_stops=dorsal_stops, palette_stops=ventral_stops,
+            dorsal_tendon_color="#D4A438", tendon_color="#251624",
+            seed=77,
+        )
+        # 100.0% pixel-identical hard alpha silhouette between dorsal & ventral sheets!
+        np.testing.assert_array_equal(m_up["alpha"], m_dn["alpha"])
+        # Distinct dorsal vs ventral art (clearly separated mean RGB!)
+        solid = m_up["alpha"] > 0.5
+        rgb_diff = float(np.abs(m_up["albedo"][solid, :3] - m_dn["albedo"][solid, :3]).mean())
+        self.assertGreater(rgb_diff, 0.12)
+        # Ventral sheet gets stronger backlit SSS than protective dorsal sheet!
+        self.assertGreater(float(m_dn["sss"][solid].mean()), float(m_up["sss"][solid].mean()))
+
+        # 4. Organic 3D Domain Warp + Painterly Brush Field + Atmospheric Material Grade + Painterly QC Metrics
+        atlas = {"width": sem["width"], "height": sem["height"], "faces": sem["faces"], "rgba": np.full((sem["height"], sem["width"], 4), 200, dtype=np.uint8)}
+        bb = export_bbmodel(scene, name="organic_v6_test", atlas=atlas, program=prog)
+        ctx = bake_bbmodel_maps(bb)
+
+        w3 = organic_domain_warp_3d(ctx.world_pos_norm, scale=3.5, warp_strength=0.45, seed=19)
+        self.assertEqual(set(w3.keys()), {"mottle", "warp_x", "warp_y", "flow"})
+        self.assertTrue(np.isfinite(w3["mottle"]).all())
+
+        pb = painterly_brush_field(ctx.height, ctx.width, world_pos_norm=ctx.world_pos_norm, organic_distortion=0.62, seed=23)
+        self.assertEqual(set(pb.keys()), {"painterly", "brush", "mottle", "hue_drift"})
+        self.assertGreater(float(pb["painterly"].std()), 0.04)
+
+        g = TexGraph(ctx.width, ctx.height, mesh_context=ctx, seed=42, name="organic_v6_graph")
+        w3_n = g.organic_domain_warp_3d(scale=3.5, warp_strength=0.45, id="w3")
+        pb_n = g.painterly_brush(stroke_scale=10.0, organic_distortion=0.6, id="pb")
+        ms = g.anatomical_muscle_scales(plate_cols=16, plate_rows=16, organic_distortion=0.65, softness=0.5, id="ms")
+        graded = g.material_grade(
+            ms,
+            ao_bake=g.mesh_channel("baked_ao", id="ao"),
+            atmosphere_strength=0.22,
+            organic_wash_strength=0.10,
+            vibrance=0.18,
+            id="graded",
+        )
+        g.set_output_material(graded)
+        ev = g.evaluate(build_pbr=True)
+        self.assertEqual(ev.output.shape, (ctx.height, ctx.width, 4))
+        self.assertTrue(np.isfinite(ev.output).all())
+        self.assertIn(w3_n, g.nodes)
+        self.assertIn(pb_n, g.nodes)
+
+        metrics = measure_painterly_metrics(ev.pbr_maps["albedo"], mesh_ctx=ctx)
+        self.assertIn("mean_lum_step", metrics)
+        self.assertIn("jump_gt25_pct", metrics)
+        self.assertIn("calm_interior_pct", metrics)
+        self.assertGreater(metrics["mean_lum_step"], 0.5)
+        self.assertLess(metrics["jump_gt25_pct"], 35.0)
+
 
 if __name__ == "__main__":
     unittest.main()

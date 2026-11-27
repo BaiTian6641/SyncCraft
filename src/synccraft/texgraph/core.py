@@ -44,6 +44,8 @@ from .generators_painterly import (
     directional_brushstrokes,
     gradient_eye_paint,
     layered_scale_plates,
+    organic_domain_warp_3d,
+    painterly_brush_field,
     sculpted_pinion_wing,
     smooth_wing_membrane,
     stylized_foliage_clusters,
@@ -919,6 +921,16 @@ class TexGraph:
     def material_pad_islands(self, mat: str, *, pad: int | None = None, id: str | None = None) -> str:
         return self.add("material_pad_islands", id=id, inputs={"mat": mat}, pad=pad)
 
+    def organic_domain_warp_3d(self, scale: float = 3.5, warp_strength: float = 0.42, octaves: int = 3, *, seed: int | None = None, id: str | None = None) -> str:
+        """3D world-space organic domain-warped pigment & flow generator (ports: mottle, warp_x, warp_y, flow)."""
+        return self.add("organic_domain_warp_3d", id=id, scale=scale, warp_strength=warp_strength, octaves=octaves, seed=seed)
+
+    def painterly_brush(self, angle_deg: float = -16.0, stroke_scale: float = 12.0, organic_distortion: float = 0.58, mottle_weight: float = 0.48, *, seed: int | None = None, id: str | None = None) -> str:
+        """Hand-painted anisotropic organic brushstroke & pigment-mottle generator (ports: painterly, brush, mottle, hue_drift)."""
+        return self.add("painterly_brush_field", id=id, angle_deg=angle_deg, stroke_scale=stroke_scale, organic_distortion=organic_distortion, mottle_weight=mottle_weight, seed=seed)
+
+    painterly_brush_field = painterly_brush
+
     def sculpted_pinion_wing(
         self,
         span_u: str,
@@ -1146,7 +1158,7 @@ class TexGraph:
         op = sp.op
         bus_keys = _BUS_INPUT_KEYS.get(op, frozenset())
         ins = {k: _resolve_ref(vals, v, allow_bus=(k in bus_keys)) for k, v in sp.inputs.items()}
-        seed = int(p.get("seed", self.seed))
+        seed = int(self.seed if p.get("seed") is None else p["seed"])
 
         if op == "constant":
             v = p["value"]
@@ -1573,6 +1585,7 @@ class TexGraph:
                 tileable=p.get("tileable", tile),
             )
         if op == "material_grade":
+            mc = self.mesh_context
             return material_grade(
                 ins["mat"],
                 ao_bake=ins.get("ao_bake"),
@@ -1590,6 +1603,13 @@ class TexGraph:
                 despeckle_threshold=float(p.get("despeckle_threshold", 0.0)),
                 detail_normal=ins.get("detail_normal"),
                 detail_normal_strength=float(p.get("detail_normal_strength", 0.5)),
+                world_normal=(mc.world_normal if mc is not None else None),
+                world_pos_norm=(mc.world_pos_norm if mc is not None else None),
+                atmosphere_strength=float(p.get("atmosphere_strength", 0.0)),
+                sky_tint=tuple(p.get("sky_tint", (0.14, 0.24, 0.42))),
+                bounce_tint=tuple(p.get("bounce_tint", (0.12, 0.08, 0.24))),
+                organic_wash_strength=float(p.get("organic_wash_strength", 0.0)),
+                seed=seed,
                 tileable=p.get("tileable", tile),
             )
         if op == "material_set_alpha":
@@ -1785,6 +1805,34 @@ class TexGraph:
                 color_stops=p.get("color_stops"),
             )
 
+        if op == "organic_domain_warp_3d":
+            mc = self.mesh_context
+            if mc is None:
+                u, v = uv_grid(H, W)
+                wpn = np.stack((u, 1.0 - v, np.full_like(u, 0.5)), axis=-1)
+            else:
+                wpn = mc.world_pos_norm
+            return organic_domain_warp_3d(
+                wpn,
+                scale=float(p.get("scale", 3.5)),
+                warp_strength=float(p.get("warp_strength", 0.42)),
+                octaves=int(p.get("octaves", 3)),
+                seed=seed,
+            )
+
+        if op == "painterly_brush_field":
+            mc = self.mesh_context
+            return painterly_brush_field(
+                H, W,
+                world_pos_norm=(mc.world_pos_norm if mc is not None else None),
+                angle_deg=float(p.get("angle_deg", -16.0)),
+                stroke_scale=float(p.get("stroke_scale", 12.0)),
+                organic_distortion=float(p.get("organic_distortion", 0.58)),
+                mottle_weight=float(p.get("mottle_weight", 0.48)),
+                seed=seed,
+                tileable=p.get("tileable", tile),
+            )
+
         if op == "anatomical_muscle_scales":
             mc = self.mesh_context
             if mc is None:
@@ -1799,16 +1847,19 @@ class TexGraph:
                 wpn, wn, ao_m, bev_m, cav_m, luv = mc.world_pos_norm, mc.world_normal, mc.baked_ao, mc.edge_bevel, mc.joint_cavity, mc.local_uv
             return anatomical_muscle_scales(
                 wpn, wn, ao_m, bev_m, cav_m, luv,
-                scale_stops=p.get("scale_stops", ((0.00, "#11101C"), (0.24, "#24253B"), (0.52, "#3E4766"), (0.78, "#647496"), (0.94, "#9BB0CF"), (1.00, "#DCE8FA"))),
+                scale_stops=p.get("scale_stops", ((0.00, "#0A0C1D"), (0.24, "#1C2445"), (0.50, "#354C7E"), (0.76, "#5C82B8"), (0.92, "#97C2EB"), (1.00, "#E0F3FF"))),
                 belly_stops=p.get("belly_stops", ((0.00, "#2E2733"), (0.42, "#6E646C"), (0.80, "#B8AE9E"), (1.00, "#ECE4D3"))),
-                plate_cols=int(p.get("plate_cols", 24)),
-                plate_rows=int(p.get("plate_rows", 28)),
+                plate_cols=int(p.get("plate_cols", 84)),
+                plate_rows=int(p.get("plate_rows", 84)),
                 muscle_groove_depth=float(p.get("muscle_groove_depth", 0.42)),
-                scale_relief=float(p.get("scale_relief", 0.36)),
-                roughness_base=float(p.get("roughness_base", 0.40)),
-                metallic_crown=float(p.get("metallic_crown", 0.14)),
-                smooth_blend=float(p.get("smooth_blend", 0.62)),
-                quantize_steps=int(p.get("quantize_steps", 7)),
+                scale_relief=float(p.get("scale_relief", 0.44)),
+                organic_distortion=float(p.get("organic_distortion", 0.64)),
+                softness=float(p.get("softness", 0.58)),
+                hue_variation=float(p.get("hue_variation", 0.32)),
+                roughness_base=float(p.get("roughness_base", 0.38)),
+                metallic_crown=float(p.get("metallic_crown", 0.18)),
+                smooth_blend=float(p.get("smooth_blend", 0.64)),
+                quantize_steps=int(p.get("quantize_steps", 8)),
                 seed=seed,
             )
 
@@ -1818,16 +1869,19 @@ class TexGraph:
                 ins["trail_v"],
                 face_is_down=ins.get("face_is_down"),
                 palette_stops=p.get("palette_stops", ((0.00, "#1A0D1C"), (0.24, "#3B182E"), (0.52, "#6E2B3E"), (0.78, "#B45646"), (0.94, "#E9A26E"), (1.00, "#FFF0CC"))),
+                dorsal_palette_stops=p.get("dorsal_palette_stops"),
                 rim_color=str(p.get("rim_color", "#2A1224")),
                 tendon_color=str(p.get("tendon_color", "#251120")),
+                dorsal_tendon_color=p.get("dorsal_tendon_color"),
                 arch_depth=float(p.get("arch_depth", 0.26)),
                 arches=int(p.get("arches", 1)),
                 tatter_strength=float(p.get("tatter_strength", 0.09)),
                 tendon_ribs=int(p.get("tendon_ribs", 3)),
                 pleat_count=float(p.get("pleat_count", 9.0)),
-                pleat_strength=float(p.get("pleat_strength", 0.18)),
+                pleat_strength=float(p.get("pleat_strength", 0.16)),
+                organic_distortion=float(p.get("organic_distortion", 0.55)),
                 backlit_sss=float(p.get("backlit_sss", 0.85)),
-                smooth_blend=float(p.get("smooth_blend", 0.74)),
+                smooth_blend=float(p.get("smooth_blend", 0.78)),
                 quantize_steps=int(p.get("quantize_steps", 8)),
                 seed=seed,
             )

@@ -284,13 +284,48 @@ def material_grade(
     despeckle_threshold: float = 0.0,
     detail_normal: np.ndarray | None = None,
     detail_normal_strength: float = 0.5,
+    world_normal: np.ndarray | None = None,
+    world_pos_norm: np.ndarray | None = None,
+    atmosphere_strength: float = 0.0,
+    sky_tint: tuple[float, float, float] = (0.14, 0.24, 0.42),
+    bounce_tint: tuple[float, float, float] = (0.12, 0.08, 0.24),
+    organic_wash_strength: float = 0.0,
+    seed: int = 42,
     tileable: bool = False,
 ) -> dict[str, np.ndarray]:
-    """Pass-4 Atmospheric Lighting, Contact AO, Color Balance, Vibrance & RNM Detail Normal Grading on a `MATERIAL` bus."""
+    """Pass-4 Unified World-Space Atmosphere, Contact AO, Color Balance, Vibrance & RNM Detail Normal Grading."""
     m = _ensure_bus(mat, tileable=tileable)
     alb = m["albedo"].copy()
     ao = m["ao"].copy()
     nrm = m["normal"].copy()
+
+    # Unified World-Space Atmospheric Light Wrap & Organic Pigment Unity (harmonizes hide, gold, claws & wings!)
+    atm = float(np.clip(atmosphere_strength, 0.0, 0.6))
+    if atm > 1e-4 and world_normal is not None:
+        wn = np.asarray(world_normal, dtype=np.float32)
+        sky_w = np.clip(wn[..., 1] * 0.5 + 0.5, 0.0, 1.0)
+        bnc_w = np.clip(-wn[..., 1] * 0.5 + 0.5, 0.0, 1.0)
+        if world_pos_norm is not None:
+            wpn = np.asarray(world_pos_norm, dtype=np.float32)
+            elev = np.clip(wpn[..., 1], 0.0, 1.0)
+            sky_w = np.clip(sky_w * (0.65 + 0.35 * elev), 0.0, 1.0)
+            bnc_w = np.clip(bnc_w * (1.0 - 0.35 * elev), 0.0, 1.0)
+        st = np.array(sky_tint, dtype=np.float32)[None, None, :]
+        bt = np.array(bounce_tint, dtype=np.float32)[None, None, :]
+        # Soft atmospheric additive/screen sky zenith lift + velvety under-bounce tint
+        alb[..., :3] = np.clip(
+            alb[..., :3] * (1.0 - 0.16 * atm * bnc_w[..., None] + 0.14 * atm * sky_w[..., None])
+            + atm * 0.38 * sky_w[..., None] * st * (1.0 - alb[..., :3] * 0.55)
+            + atm * 0.32 * bnc_w[..., None] * bt * (1.0 - alb[..., :3] * 0.65),
+            0.0,
+            1.0,
+        )
+
+    ow = float(np.clip(organic_wash_strength, 0.0, 0.35))
+    if ow > 1e-4 and world_pos_norm is not None:
+        from .generators_noise import noise_3d_field
+        wash_3d = noise_3d_field(np.asarray(world_pos_norm, dtype=np.float32), scale=2.8, octaves=2, mode="fbm", seed=int(seed) + 19)
+        alb[..., :3] = np.clip(alb[..., :3] * (1.0 + (wash_3d - 0.5)[..., None] * ow * 1.4), 0.0, 1.0)
 
     if ao_bake is not None:
         ab = _to_scalar_2d(ao_bake, alb.shape[0], alb.shape[1], 1.0)

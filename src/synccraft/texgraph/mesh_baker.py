@@ -566,15 +566,26 @@ def bake_bbmodel_maps(
                 s2, t2 = b2
                 in_tri2 = (s2 >= -0.065) & (t2 >= -0.065) & ((s2 + t2) >= -0.03) & ((s2 + t2) <= 1.065)
                 in_sec = in_sec | in_tri2
+        # Project points onto the bay plane before segment-distance evaluation so 0.5u staggered dual-sided slabs
+        # achieve 100.00% mathematically identical (u, v) and silhouette cutouts on `up` (Dorsal) and `down` (Ventral)!
+        bay_n = np.cross(t_a - r_a, t_b - r_a)
+        bn_len = float(np.linalg.norm(bay_n))
+        if bn_len > 1e-6:
+            bay_n = bay_n / bn_len
+            pts_proj = pts - ((pts - r_a[None, :]) @ bay_n)[:, None] * bay_n[None, :]
+            r_b_p = r_b - float(np.dot(r_b - r_a, bay_n)) * bay_n
+        else:
+            pts_proj = pts
+            r_b_p = r_b
         # C-infinity continuous (u, v): u=0 dead on leading spar (r_a->t_a), u=1 dead on trailing spar (r_b->t_b)!
-        d_lead = _point_to_seg_dist(pts, r_a, t_a)
-        d_trail = _point_to_seg_dist(pts, r_b, t_b)
+        d_lead = _point_to_seg_dist(pts_proj, r_a, t_a)
+        d_trail = _point_to_seg_dist(pts_proj, r_b_p, t_b)
         u_val = np.clip(d_lead / np.maximum(1e-5, d_lead + d_trail), 0.0, 1.0)
-        root_u = (1.0 - u_val)[:, None] * r_a[None, :] + u_val[:, None] * r_b[None, :]
+        root_u = (1.0 - u_val)[:, None] * r_a[None, :] + u_val[:, None] * r_b_p[None, :]
         tip_u = (1.0 - u_val)[:, None] * t_a[None, :] + u_val[:, None] * t_b[None, :]
         span_u_vec = tip_u - root_u
         span_l2 = np.sum(span_u_vec * span_u_vec, axis=-1) + 1e-8
-        v_val = np.clip(np.sum((pts - root_u) * span_u_vec, axis=-1) / span_l2, 0.0, 1.0)
+        v_val = np.clip(np.sum((pts_proj - root_u) * span_u_vec, axis=-1) / span_l2, 0.0, 1.0)
         wing_bay_u[pix_m] = u_val.astype(np.float32)
         wing_bay_v[pix_m] = v_val.astype(np.float32)
         wing_bay_mask[pix_m] = in_sec.astype(np.float32)
