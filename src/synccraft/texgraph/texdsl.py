@@ -239,6 +239,10 @@ _OP_ALIASES: dict[str, str] = {
     "dither": "pixel_dither",
     "outline": "pixel_outline",
     "mirror": "pixel_mirror",
+    "triplanar": "triplanar_project",
+    "seam_heal": "uv_seam_heal",
+    "block_edge": "block_edge_transition",
+    "shadow_pbr": "precompute_shadow_pbr",
     "shade": "directional_shade",
     "scales": "imbricated_scales",
     "feathers": "feather_barbs",
@@ -299,13 +303,20 @@ _POSITIONAL_PARAMS: dict[str, tuple[str, ...]] = {
     "chromatic_aberration": ("shift_x", "shift_y"),
     "vignette": ("strength", "radius"),
     "bake_emissive_bounce": ("radius_units", "intensity"),
+    # TexGraph v10 Seamless UV-Edge & Precomputed Shadow Special PBR ops
+    "triplanar_project": ("scale", "sharpness"),
+    "uv_seam_heal": ("strength", "radius_px"),
+    "block_edge_transition": ("neighbors", "style"),
+    "precompute_shadow_pbr": ("preset", "bake_into_albedo"),
 }
 
 # Canonical mesh_channel short aliases
 _MESH_CHANNEL_ALIASES: dict[str, str] = {
     "ao": "baked_ao",
+    "shadow": "baked_shadow",
     "bevel": "edge_bevel",
     "cavity": "joint_cavity",
+    "seam": "uv_seam",
     "mask": "island_mask",
 }
 

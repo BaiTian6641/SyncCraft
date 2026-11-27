@@ -105,6 +105,9 @@ def pack_labpbr_1_3(
     metallic: np.ndarray | float | None = None,
     metal_id: np.ndarray | int | None = None,
     ao: np.ndarray | float | None = None,
+    shadow: np.ndarray | float | None = None,
+    bent_normal: np.ndarray | None = None,
+    thickness: np.ndarray | float | None = None,
     porosity: np.ndarray | float | None = None,
     sss: np.ndarray | float | None = None,
     emissive: np.ndarray | float | None = None,
@@ -112,7 +115,7 @@ def pack_labpbr_1_3(
     normal_strength: float = 2.4,
     tileable: bool = False,
 ) -> dict[str, np.ndarray]:
-    """Pack TexGraph channels into spec-compliant Minecraft LabPBR 1.3 + Bedrock MER uint8 arrays.
+    """Pack TexGraph channels into LabPBR 1.3 + Bedrock MER + Unreal/glTF ORM + Unity MaskMap + Special PBR Shadow/BentNormal/Thickness.
 
     Returns dict with uint8 RGBA arrays:
       - ``albedo``      : sRGB Albedo + Alpha
@@ -184,7 +187,7 @@ def pack_labpbr_1_3(
     ones_u8 = np.full((H, W), 255, dtype=np.uint8)
     bedrock_mer = np.stack((m_u8, em_u8, r_u8, ones_u8), axis=-1)
 
-    # 4. Standard standalone RGBA visualizations
+    # 4. Standard standalone RGBA + Unreal/glTF ORM + Unity URP/HDRP MaskMap + Special PBR Shadow/BentNormal/Thickness!
     normal_std = np.stack((nx_u8, ny_u8, nz_u8, ones_u8), axis=-1)
     h_vis = np.clip(np.rint(h_map * 255.0), 0, 255).astype(np.uint8)
     height_u8 = np.stack((h_vis, h_vis, h_vis, ones_u8), axis=-1)
@@ -192,17 +195,39 @@ def pack_labpbr_1_3(
     metallic_u8 = np.stack((m_u8, m_u8, m_u8, ones_u8), axis=-1)
     ao_vis_u8 = np.stack((ao_u8, ao_u8, ao_u8, ones_u8), axis=-1)
 
-    return {
+    # Unreal / glTF 2.0 / Three.js ORM: R=AO, G=Roughness, B=Metallic, A=255
+    orm_u8 = np.stack((ao_u8, r_u8, m_u8, ones_u8), axis=-1)
+    # Unity URP/HDRP MaskMap: R=Metallic, G=AO, B=Height/Detail, A=Smoothness
+    unity_maskmap = np.stack((m_u8, ao_u8, h_vis, smooth_u8), axis=-1)
+
+    out_maps: dict[str, np.ndarray] = {
         "albedo": alb_u8,
         "labpbr_n": labpbr_n,
         "labpbr_s": labpbr_s,
         "bedrock_mer": bedrock_mer,
+        "orm_u8": orm_u8,
+        "unity_maskmap": unity_maskmap,
         "normal_rgb": normal_std,
         "height_u8": height_u8,
         "roughness_u8": roughness_u8,
         "metallic_u8": metallic_u8,
         "ao_u8": ao_vis_u8,
     }
+    if shadow is not None:
+        sh_m = _scalar_map(shadow, (H, W), 1.0)
+        sh_b = np.clip(np.rint(sh_m * 255.0), 0, 255).astype(np.uint8)
+        out_maps["shadow_u8"] = np.stack((sh_b, sh_b, sh_b, ones_u8), axis=-1)
+    if bent_normal is not None:
+        bn_a = np.asarray(bent_normal, dtype=np.float32)
+        if bn_a.ndim == 3 and bn_a.shape[2] >= 3:
+            bn_01 = bn_a[..., :3] * 0.5 + 0.5 if float(bn_a.min()) < -0.01 else bn_a[..., :3]
+            bn_u8 = np.clip(np.rint(np.clip(bn_01, 0.0, 1.0) * 255.0), 0, 255).astype(np.uint8)
+            out_maps["bent_normal_u8"] = np.concatenate((bn_u8, ones_u8[..., None]), axis=-1)
+    if thickness is not None:
+        th_m = _scalar_map(thickness, (H, W), 0.5)
+        th_b = np.clip(np.rint(th_m * 255.0), 0, 255).astype(np.uint8)
+        out_maps["thickness_u8"] = np.stack((th_b, th_b, th_b, ones_u8), axis=-1)
+    return out_maps
 
 
 def render_pbr_preview_2d(
@@ -425,6 +450,16 @@ def export_pbr_bundle(
         written["roughness"] = _save(f"{stem}_roughness.png", pbr_maps["roughness_u8"])
         written["metallic"] = _save(f"{stem}_metallic.png", pbr_maps["metallic_u8"])
         written["ao"] = _save(f"{stem}_ao.png", pbr_maps["ao_u8"])
+        if "orm_u8" in pbr_maps:
+            written["orm"] = _save(f"{stem}_orm.png", pbr_maps["orm_u8"])
+        if "unity_maskmap" in pbr_maps:
+            written["unity_maskmap"] = _save(f"{stem}_maskmap.png", pbr_maps["unity_maskmap"])
+        if "shadow_u8" in pbr_maps:
+            written["shadow"] = _save(f"{stem}_shadow.png", pbr_maps["shadow_u8"])
+        if "bent_normal_u8" in pbr_maps:
+            written["bent_normal"] = _save(f"{stem}_bent_normal.png", pbr_maps["bent_normal_u8"])
+        if "thickness_u8" in pbr_maps:
+            written["thickness"] = _save(f"{stem}_thickness.png", pbr_maps["thickness_u8"])
         if emissive_rgba is not None:
             written["emissive"] = _save(f"{stem}_emissive.png", rgba_float_to_u8(emissive_rgba))
 
@@ -600,13 +635,25 @@ def bake_pbr_to_albedo(
         sss_c = sss_m * s_sss * (1.0 - metal) * base_lin * (wrap * 0.45)
         return (diff + spec) * rad[None, None, :] * ndotl + sss_c * rad[None, None, :]
 
+    # Integrate precomputed 3D ray-traced shadow, bent-normal sky IBL & thickness SSS when available!
+    sh_vis = np.ones((H, W, 1), dtype=np.float32)
+    if "shadow_u8" in pbr_maps:
+        sh_vis = np.clip(pbr_maps["shadow_u8"][..., 0:1].astype(np.float32) / 255.0, 0.12, 1.0)
+    if "thickness_u8" in pbr_maps:
+        th_f = np.clip(pbr_maps["thickness_u8"][..., 0:1].astype(np.float32) / 255.0, 0.0, 1.0)
+        sss_m = np.clip(sss_m + (1.0 - th_f) * 0.28, 0.0, 1.0)
+
     col = (
-        _shade(L1, np.array(cfg["key_rgb"], dtype=np.float32))
+        _shade(L1, np.array(cfg["key_rgb"], dtype=np.float32)) * (0.28 + 0.72 * sh_vis)
         + _shade(L2, np.array(cfg["fill_rgb"], dtype=np.float32))
     )
 
-    # Hemisphere IBL + crisp metallic sky reflection
-    sky_w = np.clip(0.5 + 0.5 * N[..., 1:2], 0.0, 1.0)
+    # Hemisphere IBL (bent-normal guided when present!) + crisp metallic sky reflection
+    if "bent_normal_u8" in pbr_maps:
+        bn_y = (pbr_maps["bent_normal_u8"][..., 1:2].astype(np.float32) / 127.5) - 1.0
+        sky_w = np.clip(0.5 + 0.5 * (0.55 * N[..., 1:2] + 0.45 * bn_y), 0.0, 1.0)
+    else:
+        sky_w = np.clip(0.5 + 0.5 * N[..., 1:2], 0.0, 1.0)
     sky_c = np.array(cfg["sky_rgb"], dtype=np.float32)[None, None, :]
     gnd_c = np.array(cfg["ground_rgb"], dtype=np.float32)[None, None, :]
     env_diff = sky_w * sky_c + (1.0 - sky_w) * gnd_c
@@ -683,11 +730,11 @@ def export_baked_pbr_package(
 
     H, W = baked_u8.shape[:2]
     manifest: dict[str, Any] = {
-        "schema": "synccraft.pbr.bundle/1.0",
+        "schema": "synccraft.pbr.bundle/2.0",
         "stem": stem,
         "width": W,
         "height": H,
-        "pbr_standard": "labpbr_1_3+bedrock_mer",
+        "pbr_standard": "synccraft_special_pbr+labpbr_1_3+bedrock_mer+gltf_orm+unity_maskmap",
         "bake_preset": preset,
         "bake_params": {**BAKE_LIGHTING_PRESETS.get(preset, BAKE_LIGHTING_PRESETS["studio_hero"]), **bp},
         "maps": {
@@ -697,6 +744,8 @@ def export_baked_pbr_package(
             "labpbr_s": f"{stem}_s.png",
             "bedrock_mer": f"{stem}_mer.png",
             "bedrock_texture_set": f"{stem}.texture_set.json",
+            "orm": f"{stem}_orm.png",
+            "unity_maskmap": f"{stem}_maskmap.png",
             "normal": f"{stem}_normal.png",
             "height": f"{stem}_height.png",
             "roughness": f"{stem}_roughness.png",
@@ -704,6 +753,12 @@ def export_baked_pbr_package(
             "ao": f"{stem}_ao.png",
         },
     }
+    if "shadow_u8" in pbr_maps:
+        manifest["maps"]["shadow"] = f"{stem}_shadow.png"
+    if "bent_normal_u8" in pbr_maps:
+        manifest["maps"]["bent_normal"] = f"{stem}_bent_normal.png"
+    if "thickness_u8" in pbr_maps:
+        manifest["maps"]["thickness"] = f"{stem}_thickness.png"
     if emissive_rgba is not None:
         manifest["maps"]["emissive"] = f"{stem}_emissive.png"
     if recipe_path:

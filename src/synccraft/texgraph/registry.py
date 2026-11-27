@@ -22,12 +22,37 @@ class PortSchema:
 @dataclass(frozen=True)
 class ParamSchema:
     name: str
-    widget: str  # "slider" | "int" | "select" | "color" | "gradient_stops" | "curve" | "checkbox" | "text" | "points"
+    widget: str  # "slider" | "int" | "select" | "color" | "gradient_stops" | "palette" | "curve" | "checkbox" | "text" | "points" | "vec2" | "vec3"
     default: Any
     min_val: float | None = None
     max_val: float | None = None
     step: float | None = None
     choices: tuple[str, ...] = ()
+    group: str = "General"
+    animatable: bool = True
+    tooltip: str = ""
+    visible_if: dict[str, Any] | None = None
+
+
+PORT_COLORS: dict[str, str] = {
+    "SCALAR": "#94A3B8",
+    "MASK": "#F8FAFC",
+    "HEIGHT": "#38BDF8",
+    "RGBA": "#F59E0B",
+    "NORMAL": "#818CF8",
+    "MATERIAL": "#10B981",
+    "ANY": "#E879F9",
+}
+
+PORT_COMPATIBILITY: dict[str, tuple[str, ...]] = {
+    "SCALAR": ("SCALAR", "MASK", "HEIGHT", "ANY"),
+    "MASK": ("MASK", "SCALAR", "HEIGHT", "ANY"),
+    "HEIGHT": ("HEIGHT", "SCALAR", "MASK", "ANY"),
+    "RGBA": ("RGBA", "ANY"),
+    "NORMAL": ("NORMAL", "RGBA", "ANY"),
+    "MATERIAL": ("MATERIAL", "RGBA", "ANY"),
+    "ANY": ("SCALAR", "MASK", "HEIGHT", "RGBA", "NORMAL", "MATERIAL", "ANY"),
+}
 
 
 @dataclass(frozen=True)
@@ -45,43 +70,48 @@ class NodeMeta:
 
 NODE_CATALOG: dict[str, NodeMeta] = {
     # --- Gradients & Smooth Paths ---
-    "constant": NodeMeta("constant", "Gradients & Paths", "Constant", "Uniform scalar or hex color fill.", (), "ANY", (ParamSchema("value", "text", 0.5),)),
-    "gradient": NodeMeta("gradient", "Gradients & Paths", "Simple Gradient", "Basic directional/radial scalar gradient.", (), "SCALAR", (ParamSchema("direction", "select", "vertical", choices=("vertical", "horizontal", "radial")),)),
-    "gradient_field": NodeMeta("gradient_field", "Gradients & Paths", "Studio Gradient Field", "Linear, radial, conical, diamond, box or reflected smooth gradient with easing.", (), "SCALAR", (
+    "constant": NodeMeta("constant", "Gradients & Paths", "Constant", "Uniform scalar or hex color fill.", (), "ANY", params=(ParamSchema("value", "text", 0.5, tooltip="Numeric float or #RRGGBB hex"),)),
+    "gradient": NodeMeta("gradient", "Gradients & Paths", "Simple Gradient", "Basic directional/radial scalar gradient.", (), "SCALAR", params=(ParamSchema("direction", "select", "vertical", choices=("vertical", "top_to_bottom", "horizontal", "left_to_right", "diagonal", "radial")),)),
+    "gradient_field": NodeMeta("gradient_field", "Gradients & Paths", "Studio Gradient Field", "Linear, radial, conical, diamond, box or reflected smooth gradient with easing.", (), "SCALAR", params=(
         ParamSchema("kind", "select", "linear", choices=("linear", "radial", "radial_out", "diamond", "box", "conical", "reflected")),
         ParamSchema("angle_deg", "slider", 90.0, -180.0, 180.0, 1.0),
         ParamSchema("radius", "slider", 0.55, 0.05, 2.0, 0.01),
         ParamSchema("ease", "select", "smoothstep", choices=("linear", "smoothstep", "smootherstep", "ease_in", "ease_out")),
     )),
-    "multi_stop_gradient": NodeMeta("multi_stop_gradient", "Gradients & Paths", "Multi-Stop OKLab Gradient", "Silky smooth perceptual OKLab multi-stop color ramp with smooth-to-pixel blend.", (PortSchema("src", "SCALAR"), PortSchema("alpha_mask", "MASK", True)), "RGBA", (
+    "multi_stop_gradient": NodeMeta("multi_stop_gradient", "Gradients & Paths", "Multi-Stop OKLab Gradient", "Silky smooth perceptual OKLab multi-stop color ramp with smooth-to-pixel blend.", (PortSchema("src", "SCALAR"), PortSchema("alpha_mask", "MASK", True)), "RGBA", params=(
         ParamSchema("stops", "gradient_stops", [(0.0, "#190E33"), (0.5, "#7C3AED"), (1.0, "#A5F3FC")]),
         ParamSchema("space", "select", "oklab", choices=("oklab", "srgb")),
         ParamSchema("smooth_blend", "slider", 1.0, 0.0, 1.0, 0.05),
         ParamSchema("quantize_steps", "int", 0, 0, 32, 1),
     )),
-    "cosine_gradient": NodeMeta("cosine_gradient", "Gradients & Paths", "Cosine Palette (Gradient Cos)", "Iridescent procedural cosine color ramp.", (PortSchema("src", "SCALAR"),), "RGBA", (), time_aware=True),
-    "spline_path": NodeMeta("spline_path", "Gradients & Paths", "Spline Path Gradient", "Smooth Catmull-Rom curve ribbon, along-path gradient, or distance field.", (), "SCALAR", (
+    "cosine_gradient": NodeMeta("cosine_gradient", "Gradients & Paths", "Cosine Palette (Gradient Cos)", "Iridescent procedural cosine color ramp.", (PortSchema("src", "SCALAR"),), "RGBA", params=(
+        ParamSchema("a", "vec3", [0.5, 0.5, 0.5]),
+        ParamSchema("b", "vec3", [0.5, 0.5, 0.5]),
+        ParamSchema("c", "vec3", [1.0, 1.0, 1.0]),
+        ParamSchema("d", "vec3", [0.0, 0.33, 0.67]),
+    ), time_aware=True),
+    "spline_path": NodeMeta("spline_path", "Gradients & Paths", "Spline Path Gradient", "Smooth Catmull-Rom curve ribbon, along-path gradient, or distance field.", (), "SCALAR", params=(
         ParamSchema("points", "points", [(0.1, 0.2), (0.5, 0.7), (0.9, 0.3)]),
         ParamSchema("stroke_width", "slider", 0.12, 0.01, 0.5, 0.01),
         ParamSchema("output", "select", "ribbon", choices=("ribbon", "along", "sdf")),
     )),
-    "per_island_gradient": NodeMeta("per_island_gradient", "Gradients & Paths", "Per-Island Face Gradient", "Smooth top-to-bottom, convex center-out, or edge-rim gradient per Blockbench face.", (), "SCALAR", (
+    "per_island_gradient": NodeMeta("per_island_gradient", "Gradients & Paths", "Per-Island Face Gradient", "Smooth top-to-bottom, convex center-out, or edge-rim gradient per Blockbench face.", (), "SCALAR", params=(
         ParamSchema("direction", "select", "top_to_bottom", choices=("top_to_bottom", "bottom_to_top", "left_to_right", "diag", "center_out", "edge_rim")),
         ParamSchema("curve", "slider", 1.0, 0.2, 3.0, 0.05),
     )),
-    "body_flow_gradient": NodeMeta("body_flow_gradient", "Gradients & Paths", "3D Body-Flow Gradient", "Seamless creature-space dorsal-ventral, head-to-tail, root-to-tip, or half-Lambert light wrap.", (), "SCALAR", (
+    "body_flow_gradient": NodeMeta("body_flow_gradient", "Gradients & Paths", "3D Body-Flow Gradient", "Seamless creature-space dorsal-ventral, head-to-tail, root-to-tip, or half-Lambert light wrap.", (), "SCALAR", params=(
         ParamSchema("axis", "select", "dorsal_ventral", choices=("dorsal_ventral", "head_to_tail", "center_to_tips", "top_light_wrap")),
         ParamSchema("bias", "slider", 0.0, -0.5, 0.5, 0.02),
         ParamSchema("gamma", "slider", 1.0, 0.3, 3.0, 0.05),
     )),
     # --- Noise ---
-    "value_noise": NodeMeta("value_noise", "Noise", "Value Noise", "Tileable bicubic value noise.", (), "SCALAR", (ParamSchema("scale", "slider", 8.0, 1.0, 64.0, 0.5),)),
-    "perlin": NodeMeta("perlin", "Noise", "Perlin Noise", "Tileable gradient Perlin noise with seamless time loop.", (), "SCALAR", (ParamSchema("scale", "slider", 8.0, 1.0, 64.0, 0.5),), time_aware=True),
-    "fbm": NodeMeta("fbm", "Noise", "fBm / Ridged / Billow", "Multi-octave fractal Brownian motion noise.", (), "SCALAR", (ParamSchema("scale", "slider", 6.0, 1.0, 48.0, 0.5), ParamSchema("octaves", "int", 4, 1, 8, 1), ParamSchema("mode", "select", "fbm", choices=("fbm", "ridged", "billow", "turbulence"))), time_aware=True),
-    "voronoi": NodeMeta("voronoi", "Noise", "Voronoi / Cellular", "Tileable Worley cellular F1, F2, cracks, edge, or cell ID.", (), "SCALAR", (ParamSchema("scale", "slider", 6.0, 1.0, 48.0, 0.5), ParamSchema("output", "select", "edge", choices=("f1", "f2", "f2_minus_f1", "edge", "cracks", "cell_id"))), time_aware=True),
-    "gabor": NodeMeta("gabor", "Noise", "Anisotropic Gabor", "Directional brushed metal, striations, and bone flutes.", (), "SCALAR", (ParamSchema("scale", "slider", 12.0, 2.0, 64.0, 1.0), ParamSchema("angle_deg", "slider", 0.0, -180.0, 180.0, 1.0))),
-    "domain_warp": NodeMeta("domain_warp", "Noise", "Domain / Curl Warp", "Organic vector-field distortion warp.", (PortSchema("src", "ANY"),), "ANY", (ParamSchema("strength", "slider", 0.08, 0.0, 0.5, 0.01), ParamSchema("mode", "select", "fbm", choices=("fbm", "curl"))), time_aware=True),
-    "noise_3d": NodeMeta("noise_3d", "Noise", "3D Rest-Space Noise", "Seamless 3D world-space noise across creature UV seams.", (), "SCALAR", (ParamSchema("scale", "slider", 0.22, 0.02, 2.0, 0.02), ParamSchema("mode", "select", "fbm", choices=("fbm", "ridged", "billow"))), time_aware=True),
+    "value_noise": NodeMeta("value_noise", "Noise", "Value Noise", "Tileable bicubic value noise.", (), "SCALAR", params=(ParamSchema("scale", "slider", 8.0, 1.0, 64.0, 0.5),)),
+    "perlin": NodeMeta("perlin", "Noise", "Perlin Noise", "Tileable gradient Perlin noise with seamless time loop.", (), "SCALAR", params=(ParamSchema("scale", "slider", 8.0, 1.0, 64.0, 0.5),), time_aware=True),
+    "fbm": NodeMeta("fbm", "Noise", "fBm / Ridged / Billow", "Multi-octave fractal Brownian motion noise.", (), "SCALAR", params=(ParamSchema("scale", "slider", 6.0, 1.0, 48.0, 0.5), ParamSchema("octaves", "int", 4, 1, 8, 1), ParamSchema("mode", "select", "fbm", choices=("fbm", "ridged", "billow", "turbulence"))), time_aware=True),
+    "voronoi": NodeMeta("voronoi", "Noise", "Voronoi / Cellular", "Tileable Worley cellular F1, F2, cracks, edge, or cell ID.", (), "SCALAR", params=(ParamSchema("scale", "slider", 6.0, 1.0, 48.0, 0.5), ParamSchema("output", "select", "edge", choices=("f1", "f2", "f2_minus_f1", "edge", "cracks", "cell_id"))), time_aware=True),
+    "gabor": NodeMeta("gabor", "Noise", "Anisotropic Gabor", "Directional brushed metal, striations, and bone flutes.", (), "SCALAR", params=(ParamSchema("scale", "slider", 12.0, 2.0, 64.0, 1.0), ParamSchema("angle_deg", "slider", 0.0, -180.0, 180.0, 1.0))),
+    "domain_warp": NodeMeta("domain_warp", "Noise", "Domain / Curl Warp", "Organic vector-field distortion warp.", (PortSchema("src", "ANY"),), "ANY", params=(ParamSchema("strength", "slider", 0.08, 0.0, 0.5, 0.01), ParamSchema("mode", "select", "fbm", choices=("fbm", "curl"))), time_aware=True),
+    "noise_3d": NodeMeta("noise_3d", "Noise", "3D Rest-Space Noise", "Seamless 3D world-space noise across creature UV seams.", (), "SCALAR", params=(ParamSchema("scale", "slider", 0.22, 0.02, 2.0, 0.02), ParamSchema("mode", "select", "fbm", choices=("fbm", "ridged", "billow"))), time_aware=True),
     # --- Geometric & Structural Patterns ---
     "grid": NodeMeta("grid", "Geometric Patterns", "Grid Tiles", "Beveled rectangular tiles & mortar.", (), "HEIGHT"),
     "brick": NodeMeta("brick", "Geometric Patterns", "Brick Masonry", "Running, stacked, herringbone, or basketweave brickwork.", (), "HEIGHT"),
@@ -90,10 +120,10 @@ NODE_CATALOG: dict[str, NodeMeta] = {
     "diamond": NodeMeta("diamond", "Geometric Patterns", "Diamond / Chevron", "Quilted diamond or herringbone chevron.", (), "HEIGHT"),
     "truchet": NodeMeta("truchet", "Geometric Patterns", "Truchet Curves", "Interlocking calligraphic arcs & tiles.", (), "SCALAR"),
     "mosaic": NodeMeta("mosaic", "Geometric Patterns", "Voronoi Mosaic", "Beveled irregular stone/scute mosaic.", (), "HEIGHT"),
-    "radial_rings": NodeMeta("radial_rings", "Geometric Patterns", "Radial Rings", "Concentric mandala/astrolabe rings & spokes.", (), "SCALAR", (), time_aware=True),
-    "energy_veins": NodeMeta("energy_veins", "Geometric Patterns", "Energy Veins", "Animated lightning, circuit, or nebula energy streams.", (), "MASK", (), time_aware=True),
+    "radial_rings": NodeMeta("radial_rings", "Geometric Patterns", "Radial Rings", "Concentric mandala/astrolabe rings & spokes.", (), "SCALAR", time_aware=True),
+    "energy_veins": NodeMeta("energy_veins", "Geometric Patterns", "Energy Veins", "Animated lightning, circuit, or nebula energy streams.", (), "MASK", time_aware=True),
     # --- Painterly & Biological Craft ---
-    "brushstrokes": NodeMeta("brushstrokes", "Painterly & Bio", "Directional Brushstrokes", "Long smooth overlapping hand-painted studio strokes.", (), "SCALAR", (ParamSchema("angle_deg", "slider", 0.0, -180.0, 180.0, 1.0), ParamSchema("contrast", "slider", 0.35, 0.05, 1.0, 0.05))),
+    "brushstrokes": NodeMeta("brushstrokes", "Painterly & Bio", "Directional Brushstrokes", "Long smooth overlapping hand-painted studio strokes.", (), "SCALAR", params=(ParamSchema("angle_deg", "slider", 0.0, -180.0, 180.0, 1.0), ParamSchema("contrast", "slider", 0.35, 0.05, 1.0, 0.05))),
     "layered_plates": NodeMeta("layered_plates", "Painterly & Bio", "Chunky Scale / Armor Plates", "Calm Blockbench staggered scale/armor plates with 1px lit rim + under-seam.", (), "HEIGHT"),
     "smooth_wing_rgba": NodeMeta("smooth_wing_rgba", "Painterly & Bio", "Master Dragon Wing Membrane", "Backlit translucent smooth-gradient dragon wing with bone AO, tension folds & organic scalloped edge.", (PortSchema("local_u", "SCALAR"), PortSchema("local_v", "SCALAR")), "RGBA"),
     "sculpted_pinion_wing": NodeMeta(
@@ -656,17 +686,217 @@ NODE_CATALOG: dict[str, NodeMeta] = {
         "bake_emissive_bounce", "PBR & Normal", "3D Baked Emissive Bounce Light (MATERIAL)",
         "Hytale Golem_Firesteel 3D world-space GI bounce: projects warm/colored glow from eyes, runes & magma fissures onto adjacent dark armor, obsidian & skin.",
         (PortSchema("mat", "MATERIAL"),), "MATERIAL",
-        outputs=(PortSchema("albedo", "RGBA"), PortSchema("height", "HEIGHT"), PortSchema("normal", "NORMAL"), PortSchema("roughness", "SCALAR"), PortSchema("metallic", "SCALAR"), PortSchema("ao", "SCALAR"), PortSchema("emissive", "RGBA"), PortSchema("sss", "SCALAR")),
+        outputs=(PortSchema("albedo", "RGBA"), PortSchema("height", "HEIGHT"), PortSchema("normal", "NORMAL"), PortSchema("roughness", "SCALAR"), PortSchema("metallic", "SCALAR"), PortSchema("ao", "SCALAR"), PortSchema("shadow", "SCALAR"), PortSchema("bent_normal", "NORMAL"), PortSchema("thickness", "SCALAR"), PortSchema("emissive", "RGBA"), PortSchema("sss", "SCALAR")),
+        params=(
+            ParamSchema("radius_units", "slider", 7.5, 1.0, 24.0, 0.5, group="Bounce Light"),
+            ParamSchema("intensity", "slider", 0.52, 0.0, 1.5, 0.02, group="Bounce Light"),
+            ParamSchema("posterize_steps", "int", 0, 0, 12, 1, group="Stylization"),
+        ),
+    ),
+    # --- TexGraph v10 Seamless UV-Geometric Edge Solving & Precomputed Shadow Special PBR ---
+    "triplanar_project": NodeMeta(
+        "triplanar_project", "3D Mesh Baker", "Triplanar 3D Projection (UE5/Substance)",
+        "Seamless 3D World/Local normal-blended (or UE 5.7 Bayer-dithered) triplanar projection across scalar, RGBA, or full 12-channel MATERIAL bus — eliminates 90-degree UV seams & re-projects tangent normals!",
+        (PortSchema("src", "ANY"),), "ANY",
+        outputs=(PortSchema("albedo", "RGBA"), PortSchema("height", "HEIGHT"), PortSchema("normal", "NORMAL"), PortSchema("roughness", "SCALAR"), PortSchema("metallic", "SCALAR"), PortSchema("ao", "SCALAR")),
+        params=(
+            ParamSchema("scale", "slider", 0.08, 0.005, 2.0, 0.005, group="Projection"),
+            ParamSchema("sharpness", "slider", 6.0, 0.5, 24.0, 0.5, group="Projection"),
+            ParamSchema("space", "select", "world", choices=("world", "local_norm"), group="Projection"),
+            ParamSchema("dither_blend", "checkbox", False, group="Pixel Craft", tooltip="UE 5.7 single-axis dithered triplanar selection"),
+            ParamSchema("pixel_snap", "checkbox", True, group="Pixel Craft"),
+        ),
+    ),
+    "uv_seam_heal": NodeMeta(
+        "uv_seam_heal", "3D Mesh Baker", "3D UV-Edge Seam Healer",
+        "Uses the solved 3D UV-Edge Adjacency graph to seamlessly stitch albedo, height, roughness & world-reoriented normals across shared 3D edges between UV islands!",
+        (PortSchema("src", "ANY"),), "ANY",
+        params=(
+            ParamSchema("strength", "slider", 0.72, 0.0, 1.0, 0.02, group="Seam Healing"),
+            ParamSchema("radius_px", "int", 2, 0, 4, 1, group="Seam Healing"),
+            ParamSchema("heal_normals", "checkbox", True, group="Seam Healing"),
+        ),
+    ),
+    "block_edge_transition": NodeMeta(
+        "block_edge_transition", "World Blocks (PBR)", "Connected Block-Edge Transition",
+        "Connected multi-block edge & corner transition solver (bevel_trim, moss_overhang, worn_stone, metal_frame, glow_circuit) driven by 4-bit NESW neighbor masks!",
+        (PortSchema("base", "MATERIAL", True),), "MATERIAL",
+        outputs=(PortSchema("albedo", "RGBA"), PortSchema("height", "HEIGHT"), PortSchema("normal", "NORMAL"), PortSchema("roughness", "SCALAR"), PortSchema("metallic", "SCALAR"), PortSchema("ao", "SCALAR"), PortSchema("emissive", "RGBA"), PortSchema("edge_mask", "MASK"), PortSchema("corner_mask", "MASK"), PortSchema("transition_h", "HEIGHT")),
+        params=(
+            ParamSchema("neighbors", "select", "exposed_all", choices=("exposed_all", "connected_all", "top_exposed", "bottom_exposed", "pillar_mid", "beam_mid", "corner_tl", "corner_tr", "corner_bl", "corner_br"), group="Connectivity"),
+            ParamSchema("style", "select", "bevel_trim", choices=("bevel_trim", "moss_overhang", "worn_stone", "metal_frame", "glow_circuit"), group="Style"),
+            ParamSchema("border_width", "slider", 0.14, 0.03, 0.40, 0.01, group="Geometry"),
+            ParamSchema("corner_strength", "slider", 0.65, 0.0, 1.0, 0.05, group="Geometry"),
+            ParamSchema("transition_color", "color", "#3E4B5E", group="Colors"),
+            ParamSchema("highlight_color", "color", "#B6C8D6", group="Colors"),
+            ParamSchema("moss_color", "color", "#4E823E", group="Colors", visible_if={"style": "moss_overhang"}),
+            ParamSchema("glow_color", "color", "#38D9F5", group="Colors", visible_if={"style": "glow_circuit"}),
+        ),
+    ),
+    "precompute_shadow_pbr": NodeMeta(
+        "precompute_shadow_pbr", "PBR & Normal", "Precomputed Shadow & Special PBR (12-Ch)",
+        "SyncCraft Special PBR Pipeline: integrates true 3D ray-traced directional shadows, hemisphere bent-normal IBL & ray-traced thickness SSS into both separated 12-channel PBR maps and optional pre-baked stylized albedo!",
+        (PortSchema("mat", "MATERIAL"),), "MATERIAL",
+        outputs=(PortSchema("albedo", "RGBA"), PortSchema("height", "HEIGHT"), PortSchema("normal", "NORMAL"), PortSchema("roughness", "SCALAR"), PortSchema("metallic", "SCALAR"), PortSchema("ao", "SCALAR"), PortSchema("shadow", "SCALAR"), PortSchema("bent_normal", "NORMAL"), PortSchema("thickness", "SCALAR"), PortSchema("emissive", "RGBA"), PortSchema("sss", "SCALAR"), PortSchema("porosity", "SCALAR")),
+        params=(
+            ParamSchema("preset", "select", "studio_hero", choices=("studio_hero", "dramatic_boss", "golden_rim", "overcast_soft"), group="Lighting"),
+            ParamSchema("shadow_strength", "slider", 0.62, 0.0, 1.2, 0.02, group="Shadows"),
+            ParamSchema("bent_normal_strength", "slider", 0.48, 0.0, 1.2, 0.02, group="IBL"),
+            ParamSchema("thickness_sss_strength", "slider", 0.42, 0.0, 1.2, 0.02, group="Subsurface"),
+            ParamSchema("bake_into_albedo", "slider", 0.45, 0.0, 1.0, 0.02, group="Output", tooltip="0.0 = pure separated PBR channels; 0.45-0.85 = stylized pre-baked lighting"),
+            ParamSchema("shadow_tint", "color", "#1F2442", group="Shadows"),
+            ParamSchema("sky_tint", "color", "#B6D2F5", group="IBL"),
+            ParamSchema("sss_color", "color", "#EA723D", group="Subsurface"),
+            ParamSchema("shadow_posterize_steps", "int", 0, 0, 10, 1, group="Stylization"),
+        ),
     ),
 }
 
 
+# Comprehensive typed ParamSchema defaults ensuring 100% of all 144 nodes expose GUI inspector widgets!
+_PARAM_OVERRIDES: dict[str, tuple[ParamSchema, ...]] = {
+    "grid": (ParamSchema("cols", "int", 4, 1, 32, 1), ParamSchema("rows", "int", 4, 1, 32, 1), ParamSchema("mortar", "slider", 0.08, 0.01, 0.4, 0.01)),
+    "brick": (ParamSchema("cols", "int", 4, 1, 32, 1), ParamSchema("rows", "int", 8, 1, 32, 1), ParamSchema("style", "select", "running", choices=("running", "stacked", "herringbone", "basketweave"))),
+    "hex_grid": (ParamSchema("cols", "int", 4, 1, 24, 1), ParamSchema("mortar", "slider", 0.08, 0.01, 0.35, 0.01)),
+    "tri_grid": (ParamSchema("cols", "int", 6, 1, 32, 1),),
+    "diamond": (ParamSchema("cols", "int", 6, 1, 32, 1), ParamSchema("rows", "int", 6, 1, 32, 1), ParamSchema("style", "select", "diamond", choices=("diamond", "chevron"))),
+    "truchet": (ParamSchema("cols", "int", 6, 1, 24, 1), ParamSchema("style", "select", "arcs", choices=("arcs", "diagonals"))),
+    "mosaic": (ParamSchema("scale", "slider", 7.0, 2.0, 32.0, 0.5),),
+    "radial_rings": (ParamSchema("freq", "slider", 6.0, 1.0, 24.0, 0.5),),
+    "energy_veins": (ParamSchema("scale", "slider", 5.0, 1.0, 24.0, 0.5), ParamSchema("style", "select", "lightning", choices=("lightning", "circuit", "nebula"))),
+    "layered_plates": (ParamSchema("cols", "int", 8, 2, 32, 1), ParamSchema("rows", "int", 12, 2, 32, 1), ParamSchema("output", "select", "height", choices=("height", "rim", "seam"))),
+    "imbricated_scales": (ParamSchema("cols", "int", 8, 2, 32, 1), ParamSchema("rows", "int", 10, 2, 32, 1), ParamSchema("shape", "select", "dragon", choices=("dragon", "fish", "reptile", "hex"))),
+    "feather_barbs": (ParamSchema("cols", "int", 4, 1, 16, 1),),
+    "fur_tufts": (ParamSchema("cols", "int", 10, 2, 32, 1), ParamSchema("rows", "int", 8, 2, 32, 1)),
+    "temple_stone": (ParamSchema("cols", "int", 2, 1, 16, 1), ParamSchema("rows", "int", 4, 1, 16, 1)),
+    "wood_planks": (ParamSchema("planks", "int", 4, 1, 16, 1), ParamSchema("output", "select", "height", choices=("height", "grain", "seam"))),
+    "foliage_clusters": (ParamSchema("cols", "int", 5, 2, 16, 1), ParamSchema("rows", "int", 5, 2, 16, 1)),
+    "gray_scott": (ParamSchema("preset", "select", "labyrinth", choices=("labyrinth", "coral", "spots", "stripes", "nebula")), ParamSchema("steps", "int", 320, 40, 800, 20)),
+    "cellular_automata": (ParamSchema("preset", "select", "cave", choices=("cave", "coral", "crystal")), ParamSchema("steps", "int", 6, 1, 24, 1)),
+    "iterate": (ParamSchema("operation", "select", "erode_weather", choices=("erode_weather", "sharpen", "ridge", "moss_spread")), ParamSchema("steps", "int", 6, 1, 24, 1)),
+    "weathering_drip": (ParamSchema("strength", "slider", 0.55, 0.0, 1.0, 0.05), ParamSchema("length", "int", 8, 2, 32, 1)),
+    "kuwahara": (ParamSchema("radius", "int", 2, 1, 6, 1), ParamSchema("sharpness", "slider", 8.0, 1.0, 16.0, 0.5)),
+    "bilateral": (ParamSchema("radius", "int", 2, 1, 6, 1), ParamSchema("sigma_s", "slider", 1.5, 0.3, 6.0, 0.1), ParamSchema("sigma_r", "slider", 0.14, 0.02, 0.5, 0.02)),
+    "tv_denoise": (ParamSchema("weight", "slider", 0.08, 0.01, 0.5, 0.01), ParamSchema("iterations", "int", 12, 2, 40, 2)),
+    "nlm_denoise": (ParamSchema("patch_radius", "int", 1, 1, 3, 1), ParamSchema("search_radius", "int", 3, 1, 6, 1), ParamSchema("h_param", "slider", 0.08, 0.01, 0.4, 0.01)),
+    "despeckle": (ParamSchema("threshold", "slider", 0.14, 0.01, 0.5, 0.01),),
+    "cluster_mode": (ParamSchema("iterations", "int", 1, 1, 4, 1),),
+    "tile_transform": (ParamSchema("scale_x", "slider", 1.0, 0.25, 8.0, 0.05), ParamSchema("scale_y", "slider", 1.0, 0.25, 8.0, 0.05), ParamSchema("rot_deg", "slider", 0.0, -180.0, 180.0, 1.0)),
+    "polar_warp": (ParamSchema("to_polar", "checkbox", True),),
+    "twirl_distort": (ParamSchema("strength_deg", "slider", 90.0, -360.0, 360.0, 5.0), ParamSchema("radius", "slider", 0.5, 0.05, 1.5, 0.05)),
+    "wave_distort": (ParamSchema("amp_x", "slider", 0.04, 0.0, 0.3, 0.005), ParamSchema("freq_y", "slider", 4.0, 0.5, 24.0, 0.5)),
+    "gaussian_blur": (ParamSchema("radius", "int", 2, 1, 12, 1), ParamSchema("sigma", "slider", 0.0, 0.0, 8.0, 0.2)),
+    "directional_blur": (ParamSchema("angle_deg", "slider", 0.0, -180.0, 180.0, 5.0), ParamSchema("length", "int", 4, 1, 24, 1)),
+    "unsharp_mask": (ParamSchema("radius", "int", 1, 1, 6, 1), ParamSchema("amount", "slider", 0.65, 0.0, 3.0, 0.05)),
+    "sobel_edges": (ParamSchema("strength", "slider", 1.5, 0.1, 6.0, 0.1),),
+    "sdf_from_mask": (ParamSchema("max_dist_px", "slider", 12.0, 1.0, 64.0, 1.0), ParamSchema("invert", "checkbox", False)),
+    "morph_op": (ParamSchema("morph_op", "select", "dilate", choices=("dilate", "erode", "open", "close")), ParamSchema("radius", "int", 1, 1, 6, 1)),
+    "bloom_glow": (ParamSchema("threshold", "slider", 0.72, 0.0, 1.0, 0.02), ParamSchema("radius", "int", 3, 1, 12, 1), ParamSchema("intensity", "slider", 0.55, 0.0, 2.0, 0.05)),
+    "levels": (ParamSchema("in_min", "slider", 0.0, 0.0, 1.0, 0.01), ParamSchema("in_max", "slider", 1.0, 0.0, 1.0, 0.01), ParamSchema("gamma", "slider", 1.0, 0.1, 4.0, 0.05), ParamSchema("invert", "checkbox", False)),
+    "curves": (ParamSchema("points", "curve", [(0.0, 0.0), (0.5, 0.5), (1.0, 1.0)]),),
+    "color_balance": (ParamSchema("shadows", "vec3", [0.0, 0.0, 0.0]), ParamSchema("midtones", "vec3", [0.0, 0.0, 0.0]), ParamSchema("highlights", "vec3", [0.0, 0.0, 0.0])),
+    "oklch_adjust": (ParamSchema("hue_shift_deg", "slider", 0.0, -180.0, 180.0, 1.0), ParamSchema("chroma_scale", "slider", 1.0, 0.0, 2.5, 0.05), ParamSchema("lightness_offset", "slider", 0.0, -0.5, 0.5, 0.01)),
+    "posterize_soft": (ParamSchema("steps", "int", 6, 2, 24, 1), ParamSchema("blend", "slider", 0.5, 0.0, 1.0, 0.05)),
+    "hue_ramp": (ParamSchema("base_hex", "color", "#567B48"), ParamSchema("steps", "int", 6, 3, 12, 1), ParamSchema("hue_swing_deg", "slider", 42.0, 0.0, 90.0, 2.0)),
+    "palette_quantize": (ParamSchema("palette_hex", "palette", ["#1B1726", "#4D5368", "#949FB5", "#E5EEF7"]), ParamSchema("dither", "select", "none", choices=("none", "bayer2", "bayer4", "floyd"))),
+    "vibrance_grade": (ParamSchema("vibrance", "slider", 0.22, -0.5, 1.0, 0.02), ParamSchema("contrast", "slider", 1.06, 0.5, 2.0, 0.02), ParamSchema("shadow_cool", "slider", 0.05, 0.0, 0.3, 0.01)),
+    "selout": (ParamSchema("strength", "slider", 0.65, 0.0, 1.0, 0.05),),
+    "blend": (ParamSchema("mode", "select", "normal", choices=("normal", "multiply", "screen", "overlay", "soft_light", "hard_light", "add", "sub", "max", "min")), ParamSchema("opacity", "slider", 1.0, 0.0, 1.0, 0.02)),
+    "math": (ParamSchema("math_op", "select", "mul", choices=("mul", "add", "sub", "div", "max", "min", "lerp")),),
+    "set_alpha": (ParamSchema("threshold", "slider", 0.5, 0.0, 1.0, 0.05),),
+    "mesh_channel": (ParamSchema("channel", "select", "baked_ao", choices=("baked_ao", "baked_shadow", "bent_normal", "thickness", "curvature_3d", "uv_seam", "edge_bevel", "joint_cavity", "top_grad", "front_grad", "normal_y", "zone", "element", "face", "outward_eye", "island_mask", "local_u", "local_v")), ParamSchema("pattern", "text", "", visible_if={"channel": "element"}), ParamSchema("zone", "text", "torso", visible_if={"channel": "zone"})),
+    "directional_shade": (ParamSchema("light_az_deg", "slider", -38.0, -180.0, 180.0, 2.0), ParamSchema("light_el_deg", "slider", 52.0, 5.0, 90.0, 2.0)),
+    "height_to_normal": (ParamSchema("strength", "slider", 2.4, 0.2, 8.0, 0.1), ParamSchema("convention", "select", "opengl", choices=("opengl", "directx"))),
+    "normal_blend": (ParamSchema("strength", "slider", 1.0, 0.0, 2.0, 0.05),),
+    "ao_from_height": (ParamSchema("radius", "int", 3, 1, 12, 1), ParamSchema("strength", "slider", 1.0, 0.0, 2.0, 0.05)),
+    "emissive_albedo": (ParamSchema("glow_bleed_px", "int", 2, 0, 8, 1), ParamSchema("glow_strength", "slider", 0.35, 0.0, 1.5, 0.05)),
+    "emissive_composite": (ParamSchema("glow_bleed_px", "int", 2, 0, 8, 1), ParamSchema("glow_strength", "slider", 0.35, 0.0, 1.5, 0.05)),
+    "pad_islands": (ParamSchema("pad", "int", 2, 0, 8, 1),),
+    "material_pad_islands": (ParamSchema("pad", "int", 2, 0, 8, 1),),
+    "material_set_alpha": (ParamSchema("preserve_emissive", "checkbox", False),),
+    "material_grade": (ParamSchema("ao_darken", "slider", 0.35, 0.0, 1.0, 0.02), ParamSchema("atmosphere_strength", "slider", 0.14, 0.0, 0.6, 0.02), ParamSchema("vibrance", "slider", 0.14, -0.5, 0.8, 0.02), ParamSchema("contrast", "slider", 1.05, 0.6, 1.6, 0.02), ParamSchema("shadow_cool", "slider", 0.04, 0.0, 0.25, 0.01)),
+    "scroll": (ParamSchema("speed_x", "slider", 0.0, -4.0, 4.0, 0.25), ParamSchema("speed_y", "slider", 1.0, -4.0, 4.0, 0.25)),
+    "pulse": (ParamSchema("min_val", "slider", 0.45, 0.0, 1.0, 0.05), ParamSchema("max_val", "slider", 1.0, 0.0, 2.0, 0.05), ParamSchema("freq", "slider", 1.0, 0.25, 8.0, 0.25)),
+    "sdf_boolean": (ParamSchema("bool_op", "select", "smooth_union", choices=("union", "subtract", "intersect", "xor", "smooth_union", "smooth_subtract", "smooth_intersect")), ParamSchema("smoothness", "slider", 0.04, 0.0, 0.3, 0.005)),
+    "tile_sampler": (ParamSchema("count_x", "int", 5, 1, 24, 1), ParamSchema("count_y", "int", 5, 1, 24, 1), ParamSchema("distribution", "select", "jitter_grid", choices=("jitter_grid", "stagger_grid", "random")), ParamSchema("scale_base", "slider", 0.92, 0.2, 3.0, 0.05), ParamSchema("rot_jitter_deg", "slider", 25.0, 0.0, 180.0, 5.0), ParamSchema("density", "slider", 1.0, 0.0, 1.0, 0.02)),
+    "flood_fill": (ParamSchema("threshold", "slider", 0.25, 0.01, 0.99, 0.02),),
+    "histogram_scan": (ParamSchema("position", "slider", 0.5, 0.0, 1.0, 0.01), ParamSchema("contrast", "slider", 0.6, 0.0, 1.0, 0.02), ParamSchema("invert", "checkbox", False)),
+    "histogram_select": (ParamSchema("position", "slider", 0.5, 0.0, 1.0, 0.01), ParamSchema("range_width", "slider", 0.25, 0.02, 1.0, 0.02), ParamSchema("contrast", "slider", 0.5, 0.0, 1.0, 0.02)),
+    "auto_levels": (ParamSchema("low_pct", "slider", 1.0, 0.0, 20.0, 0.5), ParamSchema("high_pct", "slider", 99.0, 80.0, 100.0, 0.5)),
+    "curvature": (ParamSchema("radius", "int", 2, 1, 8, 1), ParamSchema("strength", "slider", 2.2, 0.2, 8.0, 0.1)),
+    "edge_wear": (ParamSchema("wear_amount", "slider", 0.45, 0.0, 1.0, 0.02), ParamSchema("chip_scale", "slider", 8.0, 2.0, 32.0, 0.5), ParamSchema("grime_amount", "slider", 0.55, 0.0, 1.0, 0.02)),
+    "displace_uv": (ParamSchema("strength_x", "slider", 2.0, -24.0, 24.0, 0.5), ParamSchema("strength_y", "slider", 2.0, -24.0, 24.0, 0.5), ParamSchema("pixel_snap", "checkbox", False)),
+    "normal_light_2d": (ParamSchema("light_az_deg", "slider", -45.0, -180.0, 180.0, 2.0), ParamSchema("light_el_deg", "slider", 48.0, 5.0, 90.0, 2.0), ParamSchema("light_color", "color", "#FFF7E6"), ParamSchema("ambient_strength", "slider", 0.34, 0.0, 1.0, 0.02)),
+    "directional_selout": (ParamSchema("light_angle_deg", "slider", -135.0, -180.0, 180.0, 5.0), ParamSchema("lit_darken", "slider", 0.64, 0.1, 1.0, 0.02), ParamSchema("shadow_darken", "slider", 0.30, 0.05, 0.9, 0.02)),
+    "pixel_dither": (ParamSchema("palette", "palette", ["#1B1726", "#4D5368", "#949FB5", "#E5EEF7"]), ParamSchema("pattern", "select", "bayer_2x2", choices=("bayer_2x2", "bayer_4x4", "bayer_8x8", "diamond", "blue_noise", "floyd_steinberg", "atkinson")), ParamSchema("contrast", "slider", 1.0, 0.0, 2.5, 0.05), ParamSchema("mode", "select", "color", choices=("color", "alpha"))),
+    "palette_posterize": (ParamSchema("palette", "palette", ["#1B1726", "#4D5368", "#949FB5", "#E5EEF7"]), ParamSchema("space", "select", "oklab", choices=("oklab", "rgb", "luma_rank")), ParamSchema("posterize_alpha", "checkbox", True)),
+    "color_replace": (ParamSchema("src_palette", "palette", ["#1B1726", "#949FB5"]), ParamSchema("dst_palette", "palette", ["#261414", "#F5D08A"]), ParamSchema("tolerance", "slider", 0.25, 0.01, 1.0, 0.02)),
+    "level_selector": (ParamSchema("center", "slider", 0.75, 0.0, 1.0, 0.01), ParamSchema("width", "slider", 0.20, 0.02, 1.0, 0.01), ParamSchema("softness", "slider", 0.05, 0.0, 0.5, 0.01)),
+    "de_stray": (ParamSchema("strictness", "select", "medium", choices=("low", "medium", "high")), ParamSchema("iterations", "int", 1, 1, 4, 1)),
+    "de_corner": (ParamSchema("strictness", "select", "medium", choices=("low", "medium", "high")), ParamSchema("iterations", "int", 1, 1, 4, 1)),
+    "pixel_clusters": (ParamSchema("palette", "palette", ["#1B1726", "#4D5368", "#949FB5", "#E5EEF7"]), ParamSchema("direction", "select", "isotropic", choices=("isotropic", "horizontal", "vertical", "diag_pos", "diag_neg", "omni")), ParamSchema("cluster_size", "int", 2, 1, 4, 1), ParamSchema("dither_strength", "slider", 0.0, 0.0, 1.0, 0.05)),
+    "pixel_bevel_directional": (ParamSchema("light_angle_deg", "slider", -135.0, -180.0, 180.0, 5.0), ParamSchema("bevel_width", "slider", 0.11, 0.03, 0.35, 0.01), ParamSchema("chip_amount", "slider", 0.42, 0.0, 1.0, 0.02)),
+    "pixel_outline": (ParamSchema("width", "int", 1, 1, 4, 1), ParamSchema("position", "select", "outside", choices=("outside", "inside")), ParamSchema("color", "color", "#161224"), ParamSchema("corner_mode", "select", "4way", choices=("4way", "8way"))),
+    "heightmap_shadow": (ParamSchema("light_angle_deg", "slider", -135.0, -180.0, 180.0, 5.0), ParamSchema("elevation_deg", "slider", 34.0, 8.0, 82.0, 2.0), ParamSchema("max_steps", "int", 8, 1, 16, 1), ParamSchema("strength", "slider", 0.72, 0.0, 1.0, 0.02)),
+    "pixel_mirror": (ParamSchema("axis", "select", "x", choices=("x", "y", "xy")),),
+    "pixel_sort": (ParamSchema("axis", "select", "vertical", choices=("vertical", "horizontal")), ParamSchema("low_thresh", "slider", 0.25, 0.0, 1.0, 0.02), ParamSchema("high_thresh", "slider", 0.85, 0.0, 1.0, 0.02), ParamSchema("reverse", "checkbox", False)),
+    "chromatic_aberration": (ParamSchema("shift_x", "int", 1, -6, 6, 1), ParamSchema("shift_y", "int", 0, -6, 6, 1), ParamSchema("strength", "slider", 0.65, 0.0, 1.0, 0.05)),
+    "vignette": (ParamSchema("strength", "slider", 0.35, 0.0, 1.0, 0.02), ParamSchema("radius", "slider", 0.72, 0.1, 1.2, 0.02), ParamSchema("color", "color", "#120E1D")),
+    "orc_flesh_skin": (ParamSchema("stops", "gradient_stops", [(0.0, "#1B2822"), (0.5, "#4F6E43"), (1.0, "#C5D694")]), ParamSchema("scar_amount", "slider", 0.32, 0.0, 1.0, 0.02), ParamSchema("warpaint_amount", "slider", 0.14, 0.0, 1.0, 0.02), ParamSchema("warpaint_color", "color", "#782224")),
+    "stitched_leather": (ParamSchema("stops", "gradient_stops", [(0.0, "#231616"), (0.5, "#6E4630"), (1.0, "#BD936B")]), ParamSchema("stitch_density", "slider", 1.0, 0.0, 2.0, 0.05), ParamSchema("wear", "slider", 0.35, 0.0, 1.0, 0.02)),
+    "forged_battle_metal": (ParamSchema("stops", "gradient_stops", [(0.0, "#1A1B24"), (0.5, "#4B5263"), (1.0, "#E0EAF2")]), ParamSchema("scratches", "slider", 0.50, 0.0, 1.0, 0.02), ParamSchema("rivets", "slider", 0.50, 0.0, 1.0, 0.02), ParamSchema("rust", "slider", 0.20, 0.0, 1.0, 0.02)),
+    "woven_battle_cloth": (ParamSchema("stops", "gradient_stops", [(0.0, "#240C16"), (0.5, "#882730"), (1.0, "#DF786E")]), ParamSchema("style", "select", "drape", choices=("drape", "rope")), ParamSchema("fold_contrast", "slider", 0.44, 0.05, 1.0, 0.02)),
+    "keratin_horn_bone": (ParamSchema("stops", "gradient_stops", [(0.0, "#352826"), (0.6, "#B89F7D"), (1.0, "#F5ECD8")]), ParamSchema("orientation", "select", "tip_up", choices=("tip_up", "tip_down", "tip_out")), ParamSchema("ring_count", "slider", 5.0, 1.0, 14.0, 0.5)),
+    "paint_entity_eyes_and_parts": (ParamSchema("eye_facing", "select", "auto", choices=("auto", "front", "lateral", "both")), ParamSchema("eye_style", "select", "gradient", choices=("gradient", "creature")), ParamSchema("eye_iris", "color", "#FF6E1A"), ParamSchema("eye_glow", "slider", 0.85, 0.0, 1.0, 0.02), ParamSchema("eye_blink", "slider", 0.0, 0.0, 1.0, 0.02), ParamSchema("rune_glow", "slider", 0.85, 0.0, 1.0, 0.02)),
+    "cobblestone_masonry": (ParamSchema("cols", "int", 4, 2, 12, 1), ParamSchema("rows", "int", 4, 2, 12, 1), ParamSchema("moss_amount", "slider", 0.22, 0.0, 1.0, 0.02)),
+    "bark_and_timber": (ParamSchema("furrow_count", "slider", 7.0, 2.0, 20.0, 0.5), ParamSchema("moss_amount", "slider", 0.18, 0.0, 1.0, 0.02)),
+    "crystalline_ore_vein": (ParamSchema("ore_density", "slider", 0.35, 0.05, 0.9, 0.02), ParamSchema("glow_strength", "slider", 0.75, 0.0, 1.0, 0.02)),
+    "caustic_water": (ParamSchema("scale", "slider", 5.5, 2.0, 16.0, 0.5), ParamSchema("foam_amount", "slider", 0.32, 0.0, 1.0, 0.02)),
+    "organic_fur_pelt": (ParamSchema("pattern", "select", "saddle", choices=("solid", "saddle", "tabby", "spots", "dappled")), ParamSchema("tuft_scale", "slider", 10.0, 4.0, 24.0, 0.5), ParamSchema("countershade_height", "slider", 0.44, 0.0, 1.0, 0.02)),
+    "layered_plumage": (ParamSchema("marking", "select", "barred", choices=("solid", "barred", "speckled", "iridescent")), ParamSchema("cols", "int", 8, 3, 24, 1), ParamSchema("rows", "int", 10, 3, 24, 1), ParamSchema("iridescence", "slider", 0.18, 0.0, 1.0, 0.02)),
+    "chitin_carapace": (ParamSchema("segments", "int", 6, 2, 18, 1), ParamSchema("iridescence", "slider", 0.26, 0.0, 1.0, 0.02), ParamSchema("glossiness", "slider", 0.72, 0.1, 0.95, 0.02)),
+    "aquatic_scales_skin": (ParamSchema("mode", "select", "fish_scales", choices=("fish_scales", "amphibian", "koi_calico")), ParamSchema("wetness", "slider", 0.82, 0.1, 1.0, 0.02)),
+    "elemental_golem_surface": (ParamSchema("slab_scale", "slider", 4.5, 1.5, 16.0, 0.25), ParamSchema("glow_strength", "slider", 0.85, 0.0, 1.0, 0.02)),
+    "sprite_mask": (ParamSchema("shape", "text", "sword"),),
+    "smooth_wing_rgba": (ParamSchema("arches", "int", 2, 1, 6, 1), ParamSchema("smooth_blend", "slider", 0.78, 0.0, 1.0, 0.02)),
+    "smooth_wing_multi": (ParamSchema("arches", "int", 2, 1, 6, 1), ParamSchema("smooth_blend", "slider", 0.78, 0.0, 1.0, 0.02)),
+    "colossal_dragon_membrane": (ParamSchema("tendon_ribs", "int", 3, 1, 8, 1), ParamSchema("backlit_sss", "slider", 0.85, 0.0, 1.0, 0.02)),
+    "gradient_eye_rgba": (ParamSchema("pupil_shape", "select", "slit", choices=("slit", "round")), ParamSchema("glow_strength", "slider", 0.85, 0.0, 1.0, 0.02)),
+    "gradient_eye_multi": (ParamSchema("pupil_shape", "select", "slit", choices=("slit", "round")), ParamSchema("glow_strength", "slider", 0.85, 0.0, 1.0, 0.02)),
+    "eye_paint_rgba": (ParamSchema("pupil_shape", "select", "slit", choices=("slit", "round")),),
+}
+
+
+def _populate_complete_param_schemas() -> None:
+    """Guarantee 100% of registered nodes expose clean typed ParamSchema definitions (zero blank GUI inspectors!)."""
+    for op, meta in list(NODE_CATALOG.items()):
+        if not meta.params:
+            p_spec = _PARAM_OVERRIDES.get(op) or (ParamSchema("seed", "int", 42, 0, 99999, 1, group="General"),)
+            NODE_CATALOG[op] = NodeMeta(
+                op=meta.op,
+                category=meta.category,
+                display_name=meta.display_name,
+                description=meta.description,
+                inputs=meta.inputs,
+                output_type=meta.output_type,
+                outputs=meta.outputs,
+                params=p_spec,
+                time_aware=meta.time_aware,
+            )
+
+
+_populate_complete_param_schemas()
+
+
 def export_node_schema_json() -> dict[str, Any]:
-    """Return a clean UI-ready JSON descriptor grouping all TexGraph nodes & reusable Subgraphs by category."""
-    from .pipeline import SUBGRAPH_REGISTRY
+    """Return a commercial GUI-ready JSON descriptor (`schema_version: 4.0`, `engine_version: 10.0`)."""
+    from .pipeline import MATERIAL_BUS_PORTS, SUBGRAPH_REGISTRY
 
     by_cat: dict[str, list[dict[str, Any]]] = {}
+    with_params = 0
     for op, meta in NODE_CATALOG.items():
+        if meta.params:
+            with_params += 1
         by_cat.setdefault(meta.category, []).append(asdict(meta))
     subgraphs = [
         {
@@ -678,10 +908,14 @@ def export_node_schema_json() -> dict[str, Any]:
         for name, info in SUBGRAPH_REGISTRY.items()
     ]
     return {
-        "schema_version": "3.1",
-        "engine_version": "9.0",
+        "schema_version": "4.0",
+        "engine_version": "10.0",
         "node_count": len(NODE_CATALOG),
         "subgraph_count": len(subgraphs),
+        "param_schema_coverage_pct": round(100.0 * with_params / max(1, len(NODE_CATALOG)), 1),
+        "port_colors": dict(PORT_COLORS),
+        "port_compatibility": {k: list(v) for k, v in PORT_COMPATIBILITY.items()},
+        "material_bus_ports": list(MATERIAL_BUS_PORTS),
         "supports_multi_port": True,
         "supports_material_bus": True,
         "supports_multipass": True,
@@ -691,6 +925,9 @@ def export_node_schema_json() -> dict[str, Any]:
         "supports_incremental_cache": True,
         "supports_texdsl": True,
         "supports_pixel_composer_fx": True,
+        "supports_gui_layout": True,
+        "supports_uv_edge_solver": True,
+        "supports_precomputed_shadow_pbr": True,
         "categories": list(by_cat.keys()),
         "nodes_by_category": by_cat,
         "subgraphs": subgraphs,

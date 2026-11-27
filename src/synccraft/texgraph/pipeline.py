@@ -33,6 +33,9 @@ MATERIAL_BUS_PORTS: tuple[str, ...] = (
     "roughness",
     "metallic",
     "ao",
+    "shadow",
+    "bent_normal",
+    "thickness",
     "emissive",
     "sss",
     "porosity",
@@ -90,13 +93,16 @@ def material_make(
     roughness: np.ndarray | float | None = 0.55,
     metallic: np.ndarray | float | None = 0.0,
     ao: np.ndarray | float | None = 1.0,
+    shadow: np.ndarray | float | None = 1.0,
+    bent_normal: np.ndarray | None = None,
+    thickness: np.ndarray | float | None = 0.5,
     emissive: np.ndarray | None = None,
     sss: np.ndarray | float | None = 0.0,
     porosity: np.ndarray | float | None = 0.0,
     normal_strength: float = 2.4,
     tileable: bool = False,
 ) -> dict[str, np.ndarray]:
-    """Pack Albedo + PBR channels into a unified Substance/MaterialX-style `MATERIAL` bus dict."""
+    """Pack Albedo + 11 PBR/Shadow channels into a unified 12-channel `MATERIAL` bus dict."""
     alb = np.asarray(albedo, dtype=np.float32)
     H, W = alb.shape[:2]
     alb4 = _to_rgba_4d(alb, H, W)
@@ -105,6 +111,16 @@ def material_make(
     r_map = _to_scalar_2d(roughness, H, W, 0.55)
     m_map = _to_scalar_2d(metallic, H, W, 0.0)
     ao_map = _to_scalar_2d(ao, H, W, 1.0)
+    sh_map = _to_scalar_2d(shadow, H, W, 1.0)
+    if bent_normal is None:
+        bn_map = np.dstack((np.full((H, W), 0.5), np.ones((H, W)), np.full((H, W), 0.5))).astype(np.float32)
+    else:
+        bn_arr = np.asarray(bent_normal, dtype=np.float32)
+        if bn_arr.ndim == 3 and bn_arr.shape[2] >= 3:
+            bn_map = np.clip(bn_arr[..., :3], 0.0, 1.0).astype(np.float32)
+        else:
+            bn_map = np.dstack((np.full((H, W), 0.5), np.ones((H, W)), np.full((H, W), 0.5))).astype(np.float32)
+    th_map = _to_scalar_2d(thickness, H, W, 0.5)
     em_map = _to_rgba_4d(emissive, H, W, default_rgba=(0.0, 0.0, 0.0, 0.0))
     sss_map = _to_scalar_2d(sss, H, W, 0.0)
     por_map = _to_scalar_2d(porosity, H, W, 0.0)
@@ -116,6 +132,9 @@ def material_make(
         "roughness": r_map,
         "metallic": m_map,
         "ao": ao_map,
+        "shadow": sh_map,
+        "bent_normal": bn_map,
+        "thickness": th_map,
         "emissive": em_map,
         "sss": sss_map,
         "porosity": por_map,
@@ -125,7 +144,6 @@ def material_make(
 def _ensure_bus(val: dict[str, np.ndarray] | np.ndarray, *, tileable: bool = False) -> dict[str, np.ndarray]:
     if is_material_bus(val):
         alb = val["albedo"]
-        H, W = alb.shape[:2]
         return material_make(
             alb,
             height=val.get("height"),
@@ -133,6 +151,9 @@ def _ensure_bus(val: dict[str, np.ndarray] | np.ndarray, *, tileable: bool = Fal
             roughness=val.get("roughness", 0.55),
             metallic=val.get("metallic", 0.0),
             ao=val.get("ao", 1.0),
+            shadow=val.get("shadow", 1.0),
+            bent_normal=val.get("bent_normal"),
+            thickness=val.get("thickness", 0.5),
             emissive=val.get("emissive"),
             sss=val.get("sss", 0.0),
             porosity=val.get("porosity", 0.0),
@@ -185,6 +206,9 @@ def material_blend(
     roughness = np.clip(b["roughness"] * (1.0 - w) + t["roughness"] * w, 0.0, 1.0).astype(np.float32)
     metallic = np.clip(b["metallic"] * (1.0 - w) + t["metallic"] * w, 0.0, 1.0).astype(np.float32)
     ao = np.clip(b["ao"] * (1.0 - w) + t["ao"] * w, 0.0, 1.0).astype(np.float32)
+    shadow = np.clip(b["shadow"] * (1.0 - w) + t["shadow"] * w, 0.0, 1.0).astype(np.float32)
+    bent_normal = np.clip(b["bent_normal"] * (1.0 - w3) + t["bent_normal"] * w3, 0.0, 1.0).astype(np.float32)
+    thickness = np.clip(b["thickness"] * (1.0 - w) + t["thickness"] * w, 0.0, 1.0).astype(np.float32)
     sss = np.clip(b["sss"] * (1.0 - w) + t["sss"] * w, 0.0, 1.0).astype(np.float32)
     porosity = np.clip(b["porosity"] * (1.0 - w) + t["porosity"] * w, 0.0, 1.0).astype(np.float32)
     em_rgb = b["emissive"][..., :3] * (1.0 - w3) + t["emissive"][..., :3] * w3
@@ -198,6 +222,9 @@ def material_blend(
         roughness=roughness,
         metallic=metallic,
         ao=ao,
+        shadow=shadow,
+        bent_normal=bent_normal,
+        thickness=thickness,
         emissive=emissive,
         sss=sss,
         porosity=porosity,
@@ -359,6 +386,9 @@ def material_grade(
         roughness=m["roughness"],
         metallic=m["metallic"],
         ao=ao,
+        shadow=m["shadow"],
+        bent_normal=m["bent_normal"],
+        thickness=m["thickness"],
         emissive=m["emissive"],
         sss=m["sss"],
         porosity=m["porosity"],
@@ -393,6 +423,9 @@ def material_set_alpha(
         roughness=m["roughness"],
         metallic=m["metallic"],
         ao=m["ao"],
+        shadow=m["shadow"],
+        bent_normal=m["bent_normal"],
+        thickness=m["thickness"],
         emissive=em,
         sss=m["sss"],
         porosity=m["porosity"],

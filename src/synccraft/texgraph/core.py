@@ -72,6 +72,12 @@ from .pixel_composer_ops import (
     pixel_sort,
     vignette,
 )
+from .seam_and_pbr_ops import (
+    block_edge_transition,
+    precompute_shadow_pbr,
+    triplanar_project,
+    uv_seam_heal,
+)
 from .generators_gradients import (
     body_flow_gradient,
     cosine_gradient,
@@ -220,6 +226,10 @@ _BUS_INPUT_KEYS: dict[str, frozenset[str]] = {
     "material_pad_islands": frozenset({"mat"}),
     "paint_entity_eyes_and_parts": frozenset({"base"}),
     "bake_emissive_bounce": frozenset({"mat"}),
+    "triplanar_project": frozenset({"src"}),
+    "uv_seam_heal": frozenset({"src"}),
+    "block_edge_transition": frozenset({"base"}),
+    "precompute_shadow_pbr": frozenset({"mat"}),
 }
 
 
@@ -262,14 +272,31 @@ class NodeSpec:
     op: str
     inputs: dict[str, str] = field(default_factory=dict)
     params: dict[str, Any] = field(default_factory=dict)
+    # GUI canvas metadata (TexGraph v10 — serialized cleanly only when non-default!)
+    pos: tuple[float, float] | None = None
+    label: str = ""
+    collapsed: bool = False
+    bypassed: bool = False
+    preview_pinned: bool = False
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        d: dict[str, Any] = {
             "id": self.id,
             "op": self.op,
             "inputs": dict(self.inputs),
             "params": copy.deepcopy(self.params),
         }
+        if self.pos is not None:
+            d["pos"] = [round(float(self.pos[0]), 1), round(float(self.pos[1]), 1)]
+        if self.label:
+            d["label"] = self.label
+        if self.collapsed:
+            d["collapsed"] = True
+        if self.bypassed:
+            d["bypassed"] = True
+        if self.preview_pinned:
+            d["preview_pinned"] = True
+        return d
 
 
 class GraphCycleError(ValueError):
@@ -404,6 +431,8 @@ class TexGraph:
                     dep_meta = NODE_CATALOG.get(self.nodes[dep].op)
                     if dep_meta and dep_meta.outputs:
                         valid_ports = {p.name for p in dep_meta.outputs} | {"rgba", "albedo"}
+                        if dep_meta.output_type == "MATERIAL":
+                            valid_ports |= set(MATERIAL_BUS_PORTS)
                         if port not in valid_ports:
                             errors.append(f"Node {nid!r} input {in_name!r} references unknown port {dep}.{port} (valid: {sorted(valid_ports)})")
 
@@ -454,12 +483,36 @@ class TexGraph:
             "tile": self.tileable,
             "seed": self.seed,
             "mesh": id(self.mesh_context) if self.mesh_context is not None else 0,
+            "bypassed": bool(sp.bypassed),
             "params": eff_params,
             "deps": dep_hashes,
             "phase": phase_tag,
         }
         raw = json.dumps(payload, sort_keys=True, default=str, separators=(",", ":")).encode("utf-8")
         return hashlib.sha256(raw).hexdigest()[:24]
+
+    def auto_layout(self, *, col_spacing: float = 280.0, row_spacing: float = 180.0) -> dict[str, tuple[float, float]]:
+        """Assign clean Sugiyama-layered GUI `(x, y)` coordinates for every node (grouped by DAG depth / `@pass`)."""
+        topo = self.topological_order()
+        depth: dict[str, int] = {}
+        for nid in topo:
+            sp = self.nodes[nid]
+            d = 0
+            for ref in sp.inputs.values():
+                dep, _ = _parse_ref(ref)
+                if dep in depth:
+                    d = max(d, depth[dep] + 1)
+            depth[nid] = d
+        cols: dict[int, list[str]] = {}
+        for nid in topo:
+            cols.setdefault(depth[nid], []).append(nid)
+        positions: dict[str, tuple[float, float]] = {}
+        for c_idx, nids in sorted(cols.items()):
+            for r_idx, nid in enumerate(nids):
+                pos = (float(c_idx) * float(col_spacing), float(r_idx) * float(row_spacing))
+                self.nodes[nid].pos = pos
+                positions[nid] = pos
+        return positions
 
     def profile(self, *, phase: float = 0.0, top_n: int = 8) -> dict[str, Any]:
         """Evaluate and return per-node runtime breakdown & incremental cache efficiency."""
@@ -660,6 +713,9 @@ class TexGraph:
         roughness_node: str | None = None,
         metallic_node: str | None = None,
         ao_node: str | None = None,
+        shadow_node: str | None = None,
+        bent_normal_node: str | None = None,
+        thickness_node: str | None = None,
         sss_node: str | None = None,
         porosity_node: str | None = None,
         normal_strength: float | None = None,
@@ -680,6 +736,9 @@ class TexGraph:
             ("roughness", roughness_node),
             ("metallic", metallic_node),
             ("ao", ao_node),
+            ("shadow", shadow_node),
+            ("bent_normal", bent_normal_node),
+            ("thickness", thickness_node),
             ("sss", sss_node),
             ("porosity", porosity_node),
         ):
@@ -701,7 +760,7 @@ class TexGraph:
         normal_strength: float | None = None,
         dielectric_f0: float | None = None,
     ) -> "TexGraph":
-        """Bind a unified `MATERIAL` bus node to ALL graph outputs (Albedo, Emissive & all LabPBR/MER channels)."""
+        """Bind a unified 12-channel `MATERIAL` bus node to ALL graph outputs (Albedo, Emissive, Shadow, BentNormal, Thickness & LabPBR/MER/ORM)."""
         base, _ = _parse_ref(mat_node_id)
         if base not in self.nodes:
             raise KeyError(f"Unknown MATERIAL bus output node: {mat_node_id!r}")
@@ -714,6 +773,9 @@ class TexGraph:
             roughness_node=f"{base}.roughness",
             metallic_node=f"{base}.metallic",
             ao_node=f"{base}.ao",
+            shadow_node=f"{base}.shadow",
+            bent_normal_node=f"{base}.bent_normal",
+            thickness_node=f"{base}.thickness",
             sss_node=f"{base}.sss",
             porosity_node=f"{base}.porosity",
             normal_strength=normal_strength,
@@ -1309,6 +1371,20 @@ class TexGraph:
     def bake_emissive_bounce(self, mat: str, *, radius_units: float = 7.5, intensity: float = 0.52, posterize_steps: int = 0, id: str | None = None, **kw: Any) -> str:
         return self.add("bake_emissive_bounce", id=id, inputs={"mat": mat}, radius_units=radius_units, intensity=intensity, posterize_steps=posterize_steps, **kw)
 
+    # --- TexGraph v10 Seamless UV-Geometric Edge Solving & Precomputed Shadow Special PBR ---
+    def triplanar_project(self, src: str, *, scale: float = 0.08, sharpness: float = 6.0, space: str = "world", dither_blend: bool = False, pixel_snap: bool = True, id: str | None = None, **kw: Any) -> str:
+        return self.add("triplanar_project", id=id, inputs={"src": src}, scale=scale, sharpness=sharpness, space=space, dither_blend=dither_blend, pixel_snap=pixel_snap, **kw)
+
+    def uv_seam_heal(self, src: str, *, strength: float = 0.72, radius_px: int = 2, heal_normals: bool = True, id: str | None = None) -> str:
+        return self.add("uv_seam_heal", id=id, inputs={"src": src}, strength=strength, radius_px=radius_px, heal_normals=heal_normals)
+
+    def block_edge_transition(self, base: str | None = None, *, neighbors: str = "exposed_all", style: str = "bevel_trim", border_width: float = 0.14, id: str | None = None, **kw: Any) -> str:
+        ins = {"base": base} if base else {}
+        return self.add("block_edge_transition", id=id, inputs=ins, neighbors=neighbors, style=style, border_width=border_width, **kw)
+
+    def precompute_shadow_pbr(self, mat: str, *, preset: str = "studio_hero", shadow_strength: float = 0.62, bent_normal_strength: float = 0.48, thickness_sss_strength: float = 0.42, bake_into_albedo: float = 0.45, id: str | None = None, **kw: Any) -> str:
+        return self.add("precompute_shadow_pbr", id=id, inputs={"mat": mat}, preset=preset, shadow_strength=shadow_strength, bent_normal_strength=bent_normal_strength, thickness_sss_strength=thickness_sss_strength, bake_into_albedo=bake_into_albedo, **kw)
+
     def sculpted_pinion_wing(
         self,
         span_u: str,
@@ -1440,7 +1516,15 @@ class TexGraph:
             mesh_context=mesh_context,
         )
         for nd in data.get("nodes", []):
-            g.add(nd["op"], id=nd["id"], inputs=nd.get("inputs") or {}, validate_refs=False, **(nd.get("params") or {}))
+            nid = g.add(nd["op"], id=nd["id"], inputs=nd.get("inputs") or {}, validate_refs=False, **(nd.get("params") or {}))
+            sp = g.nodes[nid]
+            if nd.get("pos") and len(nd["pos"]) >= 2:
+                sp.pos = (float(nd["pos"][0]), float(nd["pos"][1]))
+            if nd.get("label"):
+                sp.label = str(nd["label"])
+            sp.collapsed = bool(nd.get("collapsed", False))
+            sp.bypassed = bool(nd.get("bypassed", False))
+            sp.preview_pinned = bool(nd.get("preview_pinned", False))
         pbr_d = data.get("pbr") or {}
         pbr_cfg = data.get("pbr_config") or {}
         if data.get("output_material"):
@@ -1697,6 +1781,16 @@ class TexGraph:
                 return mc.wing_bay_u
             if ch == "wing_bay_v":
                 return mc.wing_bay_v
+            if ch in ("baked_shadow", "shadow"):
+                return mc.baked_shadow
+            if ch == "bent_normal":
+                return np.clip(mc.bent_normal * 0.5 + 0.5, 0.0, 1.0).astype(np.float32)
+            if ch == "thickness":
+                return mc.thickness
+            if ch == "curvature_3d":
+                return mc.curvature_3d
+            if ch == "uv_seam":
+                return mc.uv_seam_mask
             if ch == "wing_bay_mask":
                 return mc.wing_bay_mask
             raise ValueError(f"Unknown mesh_channel: {ch!r}")
@@ -2638,6 +2732,37 @@ class TexGraph:
                 posterize_steps=int(p.get("posterize_steps", 0)),
             )
 
+        # --- TexGraph v10 Seamless UV-Geometric Edge Solving & Precomputed Shadow Special PBR ---
+        if op == "triplanar_project":
+            return triplanar_project(
+                ins["src"],
+                self.mesh_context,
+                scale=float(p.get("scale", 0.08)),
+                sharpness=float(p.get("sharpness", 6.0)),
+                offset=tuple(p.get("offset", (0.0, 0.0, 0.0))),
+                space=str(p.get("space", "world")),
+                dither_blend=bool(p.get("dither_blend", False)),
+                pixel_snap=bool(p.get("pixel_snap", True)),
+                seed=seed,
+            )
+
+        if op == "uv_seam_heal":
+            return uv_seam_heal(
+                ins["src"],
+                self.mesh_context,
+                strength=float(p.get("strength", 0.72)),
+                radius_px=int(p.get("radius_px", 2)),
+                heal_normals=bool(p.get("heal_normals", True)),
+            )
+
+        if op == "block_edge_transition":
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return block_edge_transition(H, W, base=ins.get("base"), seed=seed, **kw)
+
+        if op == "precompute_shadow_pbr":
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return precompute_shadow_pbr(ins["mat"], self.mesh_context, **kw)
+
         raise ValueError(f"Unsupported TexGraph op: {op!r}")
 
     def evaluate(
@@ -2676,7 +2801,13 @@ class TexGraph:
                 continue
 
             t0 = time.perf_counter()
-            res = self._eval_node(sp, vals, float(phase))
+            if sp.bypassed and sp.inputs:
+                # GUI non-destructive bypass toggle: pass primary input directly through at 0.0ms!
+                first_key = next(iter(sp.inputs))
+                bus_keys = _BUS_INPUT_KEYS.get(sp.op, frozenset())
+                res = _resolve_ref(vals, sp.inputs[first_key], allow_bus=(first_key in bus_keys))
+            else:
+                res = self._eval_node(sp, vals, float(phase))
             timings[nid] = round((time.perf_counter() - t0) * 1000.0, 2)
             vals[nid] = res
             self._content_cache[nid] = (chash, res)
@@ -2691,11 +2822,15 @@ class TexGraph:
             if (self.emissive_node and _parse_ref(self.emissive_node)[0] in vals)
             else None
         )
-        pbr_ch: dict[str, np.ndarray] = {
-            k: _resolve_ref(vals, ref)
-            for k, ref in self.pbr_nodes.items()
-            if _parse_ref(ref)[0] in vals
-        }
+        pbr_ch: dict[str, np.ndarray] = {}
+        for k, ref in self.pbr_nodes.items():
+            base_r, port_r = _parse_ref(ref)
+            if base_r not in vals:
+                continue
+            v_r = vals[base_r]
+            if port_r is not None and isinstance(v_r, dict) and port_r not in v_r and k in ("shadow", "bent_normal", "thickness"):
+                continue
+            pbr_ch[k] = _resolve_ref(vals, ref)
 
         want_pbr = bool(self.pbr_nodes) if build_pbr is None else bool(build_pbr)
         pbr_maps = None
@@ -2711,6 +2846,9 @@ class TexGraph:
             r_ch = _pad_opt(pbr_ch.get("roughness"))
             m_ch = _pad_opt(pbr_ch.get("metallic"))
             ao_ch = _pad_opt(pbr_ch.get("ao", self.mesh_context.baked_ao if self.mesh_context else None))
+            sh_ch = _pad_opt(pbr_ch.get("shadow", self.mesh_context.baked_shadow if self.mesh_context else None))
+            bn_ch = _pad_opt(pbr_ch.get("bent_normal", self.mesh_context.bent_normal if self.mesh_context else None))
+            th_ch = _pad_opt(pbr_ch.get("thickness", self.mesh_context.thickness if self.mesh_context else None))
             sss_ch = _pad_opt(pbr_ch.get("sss"))
             por_ch = _pad_opt(pbr_ch.get("porosity"))
             em_ch = _pad_opt(em_arr)
@@ -2724,6 +2862,9 @@ class TexGraph:
                 roughness=r_ch,
                 metallic=m_ch,
                 ao=ao_ch,
+                shadow=sh_ch,
+                bent_normal=bn_ch,
+                thickness=th_ch,
                 porosity=por_ch,
                 sss=sss_ch,
                 emissive=em_ch,

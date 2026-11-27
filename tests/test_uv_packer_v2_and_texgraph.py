@@ -397,9 +397,9 @@ class TestTexGraphEngine(unittest.TestCase):
             sculpted_pinion_wing,
         )
 
-        # 1. Verify schema v3.1 multi-port, MATERIAL bus, multipass, drivers & subgraphs metadata
+        # 1. Verify schema v3.1+ multi-port, MATERIAL bus, multipass, drivers & subgraphs metadata
         schema = export_node_schema_json()
-        self.assertEqual(schema["schema_version"], "3.1")
+        self.assertGreaterEqual(float(schema["schema_version"]), 3.1)
         self.assertTrue(schema["supports_multi_port"])
         self.assertTrue(schema["supports_material_bus"])
         self.assertTrue(schema["supports_multipass"])
@@ -513,9 +513,9 @@ class TestTexGraphEngine(unittest.TestCase):
             particle_sim_field,
         )
 
-        # 1. Schema v3.1 + Generate/Iterate/Simulate/Animate ops & subgraphs
+        # 1. Schema v3.1+ & Generate/Iterate/Simulate/Animate ops & subgraphs
         schema = export_node_schema_json()
-        self.assertEqual(schema["schema_version"], "3.1")
+        self.assertGreaterEqual(float(schema["schema_version"]), 3.1)
         self.assertTrue(schema["supports_param_drivers"])
         self.assertTrue(schema["supports_generate_iterate_simulate_animate"])
         all_ops = {n["op"] for items in schema["nodes_by_category"].values() for n in items}
@@ -574,7 +574,7 @@ class TestTexGraphEngine(unittest.TestCase):
             self.assertTrue((td / "ember_test_baked.png").is_file())
             self.assertTrue((td / "ember_test.synccraft.pbr.json").is_file())
             manifest = json.loads((td / "ember_test.synccraft.pbr.json").read_text(encoding="utf-8"))
-            self.assertEqual(manifest["schema"], "synccraft.pbr.bundle/1.0")
+            self.assertIn(manifest["schema"], ("synccraft.pbr.bundle/1.0", "synccraft.pbr.bundle/2.0"))
             self.assertIn("embedded_data_urls", manifest)
             self.assertIn("labpbr_n", manifest["embedded_data_urls"])
             self.assertIn("bedrock_mer", manifest["embedded_data_urls"])
@@ -617,7 +617,7 @@ class TestTexGraphEngine(unittest.TestCase):
         res = disp.dispatch("pbr_rebuild", {"preset": "arcane_ember_vfx", "size": 32, "lighting_preset": "studio_hero", "embed_maps": True})
         self.assertTrue(res["ok"])
         self.assertTrue(res["baked_data_url"].startswith("data:image/png;base64,"))
-        self.assertEqual(res["manifest"]["schema"], "synccraft.pbr.bundle/1.0")
+        self.assertIn(res["manifest"]["schema"], ("synccraft.pbr.bundle/1.0", "synccraft.pbr.bundle/2.0"))
 
         # 7. Blockbench 5 PBR Rebuilder Plugin JavaScript Runtime Verification (`node` or macOS JavaScriptCore `jsc`)
         plugin_js = Path(__file__).resolve().parents[1] / "editors" / "blockbench-pbr-rebuilder" / "synccraft_pbr_rebuilder.js"
@@ -1104,9 +1104,9 @@ if (!actions[0].deleted) throw new Error("onunload did not clean up actions");
             vignette,
         )
 
-        # 1. Schema v9.0 + 140 atomic nodes + supports_pixel_composer_fx
+        # 1. Schema v9.0+ + >=140 atomic nodes + supports_pixel_composer_fx
         schema = export_node_schema_json()
-        self.assertEqual(schema["engine_version"], "9.0")
+        self.assertGreaterEqual(float(schema["engine_version"]), 9.0)
         self.assertGreaterEqual(schema["node_count"], 140)
         self.assertTrue(schema["supports_pixel_composer_fx"])
 
@@ -1244,6 +1244,140 @@ if (!actions[0].deleted) throw new Error("onunload did not clean up actions");
         # Adjacent front face MUST receive clear warm orange bounce light, significantly stronger than far back face!
         self.assertGreater(front_r_lift, 0.06)
         self.assertGreater(front_r_lift, back_r_lift * 2.5)
+
+    def test_v10_gui_schema_v4_uv_edge_solver_triplanar_and_precomputed_shadow_pbr(self) -> None:
+        from synccraft.texgraph import (
+            MATERIAL_BUS_PORTS,
+            NODE_CATALOG,
+            PORT_COLORS,
+            PORT_COMPATIBILITY,
+            ParamSchema,
+            block_edge_transition,
+            export_node_schema_json,
+            parse_texdsl,
+            precompute_shadow_pbr,
+            triplanar_project,
+            uv_seam_heal,
+        )
+
+        # 1. Commercial GUI Schema v4.0: 100% typed ParamSchema coverage across all 144 nodes, 0 misplaced!
+        schema = export_node_schema_json()
+        self.assertEqual(schema["schema_version"], "4.0")
+        self.assertEqual(schema["engine_version"], "10.0")
+        self.assertGreaterEqual(schema["node_count"], 144)
+        self.assertEqual(schema["param_schema_coverage_pct"], 100.0)
+        self.assertEqual(len(MATERIAL_BUS_PORTS), 12)
+        self.assertTrue(schema["supports_gui_layout"])
+        self.assertTrue(schema["supports_uv_edge_solver"])
+        self.assertTrue(schema["supports_precomputed_shadow_pbr"])
+        self.assertIn("MATERIAL", PORT_COLORS)
+        self.assertIn("SCALAR", PORT_COMPATIBILITY)
+        for op, meta in NODE_CATALOG.items():
+            self.assertTrue(len(meta.params) >= 1, f"Node {op!r} missing typed ParamSchema")
+            if meta.outputs:
+                self.assertFalse(isinstance(meta.outputs[0], ParamSchema), f"Node {op!r} has ParamSchema in outputs!")
+
+        # 2. Multi-box overhanging 3D scene to verify ray-traced shadow, bent_normal, thickness & UV-edge adjacency!
+        overhang_dsl = """
+        @meta { archetype: entity, target_profile: bedrock_entity, texel_density: 32, size_step: 0.5, audit_profile: sculpted }
+        @palette { stone: ramp(base_lch=[0.50, 0.04, 240], steps=5) }
+        @rig {
+          root bone shrine {
+            pivot_local: [0, 8, 0]
+            box base_pillar { size: [12, 12, 12], material: stone }
+            box canopy_roof place(base_box=base_pillar, anchor=[0, 1, 0], align=[0, -1, 0]) { size: [22, 3, 22], material: stone }
+            box thin_banner place(base_box=base_pillar, anchor=[1, 0.2, 0], align=[-1, 0, 0]) { size: [0.5, 8, 6], material: stone }
+          }
+        }
+        """
+        prog = parse_program(overhang_dsl)
+        sc = compile_geometry(prog)
+        sem = pack_semantic_uv_atlas(prog, sc, padding=2, mirror_lr_uv="none", canvas_mode="tight")
+        bb = export_bbmodel(
+            sc,
+            name="shrine_v10",
+            atlas={"width": sem["width"], "height": sem["height"], "faces": sem["faces"], "rgba": np.full((sem["height"], sem["width"], 4), 160, dtype=np.uint8)},
+            program=prog,
+        )
+        ctx = bake_bbmodel_maps(bb, padding=2, shadow_light_dir=(-0.30, 0.90, 0.30))
+
+        # 2a. Verify 3D ray-traced shadow: canopy roof casts real shadow onto top/sides of base_pillar vs lit roof top!
+        roof_top = (ctx.match_elements_mask("canopy_roof") > 0.5) & (ctx.face_filter_mask("up") > 0.5)
+        pillar_sides = (ctx.match_elements_mask("base_pillar") > 0.5) & (ctx.face_filter_mask("north,south,east,west") > 0.5)
+        self.assertTrue(np.any(roof_top) and np.any(pillar_sides))
+        self.assertGreater(float(ctx.baked_shadow[roof_top].mean()), float(ctx.baked_shadow[pillar_sides].mean()) + 0.12)
+
+        # 2b. Verify ray-traced thickness: 0.5u thin_banner MUST be much thinner than 12u base_pillar!
+        banner_m = ctx.match_elements_mask("thin_banner") > 0.5
+        pillar_m = ctx.match_elements_mask("base_pillar") > 0.5
+        self.assertLess(float(ctx.thickness[banner_m].mean()), float(ctx.thickness[pillar_m].mean()) - 0.15)
+
+        # 2c. Verify 3D Bent Normal unit length & UV-Edge Adjacency Solver paired shared 3D cube edges!
+        bn_norms = np.linalg.norm(ctx.bent_normal[ctx.island_mask], axis=-1)
+        self.assertGreater(float(bn_norms.min()), 0.95)
+        self.assertGreater(len(ctx.uv_seam_src_yx), 30)
+        self.assertGreater(float((ctx.uv_seam_mask > 0.1).sum()), 30)
+
+        # 3. Verify triplanar_project, uv_seam_heal & precompute_shadow_pbr via declarative .texdsl + auto_layout + bypass!
+        dsl_v10 = """
+        @texture { name: "shrine_seamless_v10", size: [128, 128], domain: "entity", seed: 101 }
+        @pass seamless "Triplanar + Seam Heal + Precomputed Shadow Special PBR" {
+          cobble   = cobblestone_masonry(cols=4, rows=4, moss_amount=0.18, seed=101)
+          tri      = triplanar(cobble, scale=0.06, sharpness=8.0, dither_blend=true)
+          healed   = seam_heal(tri, strength=0.80, radius_px=2, heal_normals=true)
+          lit      = shadow_pbr(healed, preset="studio_hero", shadow_strength=0.68, bake_into_albedo=0.50)
+          final    = material_pad_islands(lit, pad=2)
+        }
+        @output material(final, normal_strength=2.5)
+        """
+        g = parse_texdsl(dsl_v10, mesh_context=ctx)
+        self.assertTrue(g.validate_graph().ok, g.validate_graph().errors)
+        positions = g.auto_layout()
+        self.assertEqual(len(positions), len(g.nodes))
+        # Recipe round-trip preserves GUI node pos + bypass flag!
+        g.nodes["healed"].label = "Seam Stitch"
+        g.nodes["healed"].bypassed = True
+        rec = g.to_recipe()
+        g2 = TexGraph.from_recipe(rec, mesh_context=ctx)
+        self.assertEqual(g2.nodes["healed"].label, "Seam Stitch")
+        self.assertTrue(g2.nodes["healed"].bypassed)
+        self.assertIsNotNone(g2.nodes["healed"].pos)
+
+        # Evaluate with seam heal active vs bypassed (must run cleanly and emit all 12 PBR + multi-engine maps!)
+        g.nodes["healed"].bypassed = False
+        ev = g.evaluate(build_pbr=True)
+        self.assertIsNotNone(ev.pbr_maps)
+        for key in ("orm_u8", "unity_maskmap", "shadow_u8", "bent_normal_u8", "thickness_u8"):
+            self.assertIn(key, ev.pbr_maps, f"Missing multi-engine PBR map {key!r}")
+
+        # Direct seam-heal numerical proof: opposing seam colors converge significantly after uv_seam_heal!
+        H, W = ctx.height, ctx.width
+        seam_test = np.zeros((H, W, 4), dtype=np.float32)
+        seam_test[..., 3] = 1.0
+        # Paint every even face bright white, odd face dark navy so all shared cube edges have 1.0 seam jump!
+        seam_test[ctx.face_id_map % 2 == 0, :3] = 0.95
+        seam_test[ctx.face_id_map % 2 == 1, :3] = 0.10
+        sy, sx = ctx.uv_seam_src_yx[:, 0], ctx.uv_seam_src_yx[:, 1]
+        dy, dx = ctx.uv_seam_dst_yx[:, 0], ctx.uv_seam_dst_yx[:, 1]
+        diff_before = float(np.abs(seam_test[sy, sx, 0] - seam_test[dy, dx, 0]).mean())
+        healed_img = uv_seam_heal(seam_test, ctx, strength=1.0, radius_px=2)
+        diff_after = float(np.abs(healed_img[sy, sx, 0] - healed_img[dy, dx, 0]).mean())
+        self.assertLess(diff_after, diff_before * 0.45)
+
+        # 4. Connected Block-Edge Transition solver (`block_edge_transition`): connected sides stay 0, exposed sides get trim!
+        edge_pill = block_edge_transition(64, 64, neighbors="pillar_mid", style="metal_frame", border_width=0.16, seed=7)
+        # pillar_mid connects N & S (top/bottom = 0), exposes E & W (left/right > 0.8)!
+        self.assertLess(float(edge_pill["edge_mask"][0, 20:44].mean()), 0.05)
+        self.assertGreater(float(edge_pill["edge_mask"][20:44, 0].mean()), 0.80)
+        self.assertGreater(float(edge_pill["edge_mask"][20:44, 63].mean()), 0.80)
+
+        # 5. Export synccraft.pbr.bundle/2.0 verifies ORM, Unity MaskMap, Shadow, BentNormal & Thickness PNGs on disk!
+        with tempfile.TemporaryDirectory() as tmp:
+            pkg = g.export_baked_pbr(Path(tmp) / "v10_pbr", stem="shrine", preset="studio_hero")
+            self.assertEqual(pkg["manifest"]["schema"], "synccraft.pbr.bundle/2.0")
+            for mk in ("orm", "unity_maskmap", "shadow", "bent_normal", "thickness"):
+                self.assertIn(mk, pkg["files"], f"Missing exported file {mk!r}")
+                self.assertTrue(Path(pkg["files"][mk]).is_file())
 
 
 if __name__ == "__main__":

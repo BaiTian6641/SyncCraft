@@ -65,6 +65,12 @@ from .pixel_composer_ops import (
     pixel_sort,
     vignette,
 )
+from .seam_and_pbr_ops import (
+    block_edge_transition,
+    precompute_shadow_pbr,
+    triplanar_project,
+    uv_seam_heal,
+)
 from .texdsl import TexDslError, export_texdsl, load_texdsl, parse_texdsl
 from .production import PALETTE_BANK, BatchJobResult, BatchTextureJob, pack_sprite_atlas, run_batch
 from .quality import QualityReport, evaluate_texture_quality
@@ -202,7 +208,7 @@ from .presets import (
     build_stylized_wood_and_foliage,
     build_temple_carved_stone,
 )
-from .registry import NODE_CATALOG, NodeMeta, ParamSchema, PortSchema, export_node_schema_json, save_node_schema_json
+from .registry import NODE_CATALOG, PORT_COLORS, PORT_COMPATIBILITY, NodeMeta, ParamSchema, PortSchema, export_node_schema_json, save_node_schema_json
 from .simulation_filters import (
     GRAY_SCOTT_PRESETS,
     anisotropic_kuwahara,

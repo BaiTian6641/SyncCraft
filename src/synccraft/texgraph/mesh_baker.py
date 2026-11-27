@@ -96,6 +96,17 @@ class MeshBakeContext:
     elem_bones: list[str] = field(default_factory=list)
     elem_zones: list[str] = field(default_factory=list)
     elem_centers_x: list[float] = field(default_factory=list)
+    # TexGraph v10: Precomputed 3D Ray-Traced Shadow, Bent Normal, Thickness, Curvature & UV-Edge Solver!
+    baked_shadow: np.ndarray = field(default_factory=lambda: np.ones((1, 1), dtype=np.float32))
+    bent_normal: np.ndarray = field(default_factory=lambda: np.zeros((1, 1, 3), dtype=np.float32))
+    thickness: np.ndarray = field(default_factory=lambda: np.full((1, 1), 0.5, dtype=np.float32))
+    curvature_3d: np.ndarray = field(default_factory=lambda: np.full((1, 1), 0.5, dtype=np.float32))
+    world_tangent: np.ndarray = field(default_factory=lambda: np.zeros((1, 1, 3), dtype=np.float32))
+    world_bitangent: np.ndarray = field(default_factory=lambda: np.zeros((1, 1, 3), dtype=np.float32))
+    uv_seam_mask: np.ndarray = field(default_factory=lambda: np.zeros((1, 1), dtype=np.float32))
+    uv_seam_src_yx: np.ndarray = field(default_factory=lambda: np.zeros((0, 2), dtype=np.int32))
+    uv_seam_dst_yx: np.ndarray = field(default_factory=lambda: np.zeros((0, 2), dtype=np.int32))
+    uv_seam_weight: np.ndarray = field(default_factory=lambda: np.zeros((0,), dtype=np.float32))
 
     def match_elements_mask(self, pattern: str) -> np.ndarray:
         """Return a float32 (H, W) mask matching elements whose bone/name OR mirrored short-name matches ``pattern``."""
@@ -239,6 +250,158 @@ def _obb_signed_distance(pts: np.ndarray, obb: dict[str, Any]) -> np.ndarray:
     return out_d + in_d
 
 
+def _ray_obb_hits(
+    origins: np.ndarray,
+    ray_dir: np.ndarray,
+    obb: dict[str, Any],
+    *,
+    t_min: float = 0.08,
+    t_max: float = 1e4,
+) -> np.ndarray:
+    """Vectorized Kay-Kajiya slab Ray-vs-OBB intersection test.
+
+    Returns boolean mask (N,) where ray `origins[i] + t * ray_dir` hits ``obb`` for `t in [t_min, t_max]`.
+    """
+    loc_o = (origins - obb["center"][None, :]) @ obb["R"]  # (N, 3)
+    loc_d = obb["RT"] @ ray_dir  # (3,)
+    half = obb["half"]  # (3,)
+    t_enter = np.full(origins.shape[0], float(t_min), dtype=np.float64)
+    t_exit = np.full(origins.shape[0], float(t_max), dtype=np.float64)
+    valid = np.ones(origins.shape[0], dtype=bool)
+    for ax in range(3):
+        da = float(loc_d[ax])
+        ha = float(half[ax])
+        oa = loc_o[:, ax]
+        if abs(da) < 1e-8:
+            valid &= (oa >= -ha) & (oa <= ha)
+        else:
+            inv_d = 1.0 / da
+            t0 = (-ha - oa) * inv_d
+            t1 = (ha - oa) * inv_d
+            lo = np.minimum(t0, t1)
+            hi = np.maximum(t0, t1)
+            t_enter = np.maximum(t_enter, lo)
+            t_exit = np.minimum(t_exit, hi)
+    return valid & (t_exit >= t_enter) & (t_exit >= t_min)
+
+
+def _solve_uv_edge_adjacency(
+    islands: list[BakedIsland],
+    world_pos: np.ndarray,
+    world_normal: np.ndarray,
+    H: int,
+    W: int,
+    *,
+    seam_tol: float = 0.85,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Solve 3D Geometric UV-Edge Adjacency across distinct UV islands via spatial grid hashing!
+
+    Pairs every border texel `(y, x)` on island A with its nearest 3D-coincident border texel
+    on a DIFFERENT island B (`north<->up`, `south<->east`, contacting parent/child boxes!).
+    Returns `(src_yx, dst_yx, weight, seam_mask)`.
+    """
+    seam_mask = np.zeros((H, W), dtype=np.float32)
+    if len(islands) < 2:
+        return (
+            np.zeros((0, 2), dtype=np.int32),
+            np.zeros((0, 2), dtype=np.int32),
+            np.zeros((0,), dtype=np.float32),
+            seam_mask,
+        )
+
+    by_list: list[np.ndarray] = []
+    bx_list: list[np.ndarray] = []
+    bi_list: list[np.ndarray] = []
+    for isl_id, isl in enumerate(islands):
+        x0, y0, w, h = isl.x0, isl.y0, isl.w, isl.h
+        if w <= 0 or h <= 0 or x0 < 0 or y0 < 0 or x0 + w > W or y0 + h > H:
+            continue
+        if w <= 2 or h <= 2:
+            yy, xx = np.mgrid[y0 : y0 + h, x0 : x0 + w]
+            ys, xs = yy.ravel(), xx.ravel()
+        else:
+            top_x = np.arange(x0, x0 + w, dtype=np.int32)
+            top_y = np.full(w, y0, dtype=np.int32)
+            bot_x = top_x
+            bot_y = np.full(w, y0 + h - 1, dtype=np.int32)
+            mid_y = np.arange(y0 + 1, y0 + h - 1, dtype=np.int32)
+            lft_x = np.full(mid_y.size, x0, dtype=np.int32)
+            rgt_x = np.full(mid_y.size, x0 + w - 1, dtype=np.int32)
+            ys = np.concatenate((top_y, bot_y, mid_y, mid_y))
+            xs = np.concatenate((top_x, bot_x, lft_x, rgt_x))
+        by_list.append(ys)
+        bx_list.append(xs)
+        bi_list.append(np.full(ys.size, isl_id, dtype=np.int32))
+
+    if not by_list:
+        return (
+            np.zeros((0, 2), dtype=np.int32),
+            np.zeros((0, 2), dtype=np.int32),
+            np.zeros((0,), dtype=np.float32),
+            seam_mask,
+        )
+
+    by = np.concatenate(by_list)
+    bx = np.concatenate(bx_list)
+    bi = np.concatenate(bi_list)
+    bpos = world_pos[by, bx].astype(np.float32)  # (M, 3)
+
+    cell = max(0.35, float(seam_tol))
+    tol2 = float(seam_tol) * float(seam_tol)
+    cells = np.floor(bpos / cell).astype(np.int32)
+    grid: dict[tuple[int, int, int], list[int]] = {}
+    for idx_b in range(by.size):
+        key = (int(cells[idx_b, 0]), int(cells[idx_b, 1]), int(cells[idx_b, 2]))
+        grid.setdefault(key, []).append(idx_b)
+
+    src_pairs: list[tuple[int, int]] = []
+    dst_pairs: list[tuple[int, int]] = []
+    weights: list[float] = []
+
+    for idx_b in range(by.size):
+        cx, cy, cz = int(cells[idx_b, 0]), int(cells[idx_b, 1]), int(cells[idx_b, 2])
+        p0 = bpos[idx_b]
+        i0 = int(bi[idx_b])
+        best_j = -1
+        best_d2 = tol2
+        for ox in (-1, 0, 1):
+            for oy in (-1, 0, 1):
+                for oz in (-1, 0, 1):
+                    bucket = grid.get((cx + ox, cy + oy, cz + oz))
+                    if not bucket:
+                        continue
+                    for j in bucket:
+                        if int(bi[j]) == i0:
+                            continue
+                        dp = bpos[j] - p0
+                        d2 = float(dp[0] * dp[0] + dp[1] * dp[1] + dp[2] * dp[2])
+                        if d2 < best_d2:
+                            best_d2 = d2
+                            best_j = j
+        if best_j >= 0:
+            y_s, x_s = int(by[idx_b]), int(bx[idx_b])
+            y_d, x_d = int(by[best_j]), int(bx[best_j])
+            w_val = float(max(0.15, 1.0 - math.sqrt(best_d2) / max(1e-4, float(seam_tol))))
+            src_pairs.append((y_s, x_s))
+            dst_pairs.append((y_d, x_d))
+            weights.append(w_val)
+            seam_mask[y_s, x_s] = max(seam_mask[y_s, x_s], w_val)
+
+    if not src_pairs:
+        return (
+            np.zeros((0, 2), dtype=np.int32),
+            np.zeros((0, 2), dtype=np.int32),
+            np.zeros((0,), dtype=np.float32),
+            seam_mask,
+        )
+    return (
+        np.asarray(src_pairs, dtype=np.int32),
+        np.asarray(dst_pairs, dtype=np.int32),
+        np.asarray(weights, dtype=np.float32),
+        seam_mask,
+    )
+
+
 def bake_bbmodel_maps(
     bbmodel_doc: dict[str, Any],
     *,
@@ -246,8 +409,11 @@ def bake_bbmodel_maps(
     ao_radius: float = 4.5,
     ao_samples: int = 3,
     zone_overrides: dict[str, str] | None = None,
+    shadow_light_dir: tuple[float, float, float] = (-0.42, 0.80, 0.42),
+    bake_shadows: bool = True,
+    solve_uv_seams: bool = True,
 ) -> MeshBakeContext:
-    """Bake 3D world position, normal, multi-box Ambient Occlusion, edge bevel & zone masks from a .bbmodel."""
+    """Bake 3D world position, normal, tangent frame, multi-box AO, ray-traced shadow, bent normal, thickness, curvature & UV-edge adjacency."""
     res = bbmodel_doc.get("resolution") or {}
     W = max(1, int(res.get("width", 1)))
     H = max(1, int(res.get("height", 1)))
@@ -257,7 +423,16 @@ def bake_bbmodel_maps(
     world_pos = np.zeros((H, W, 3), dtype=np.float32)
     world_normal = np.zeros((H, W, 3), dtype=np.float32)
     world_normal[..., 1] = 1.0
+    world_tangent = np.zeros((H, W, 3), dtype=np.float32)
+    world_tangent[..., 0] = 1.0
+    world_bitangent = np.zeros((H, W, 3), dtype=np.float32)
+    world_bitangent[..., 2] = 1.0
     baked_ao = np.ones((H, W), dtype=np.float32)
+    baked_shadow = np.ones((H, W), dtype=np.float32)
+    bent_normal = np.zeros((H, W, 3), dtype=np.float32)
+    bent_normal[..., 1] = 1.0
+    thickness = np.full((H, W), 0.5, dtype=np.float32)
+    curvature_3d = np.full((H, W), 0.5, dtype=np.float32)
     edge_bevel = np.zeros((H, W), dtype=np.float32)
     joint_cavity = np.zeros((H, W), dtype=np.float32)
     local_uv = np.zeros((H, W, 2), dtype=np.float32)
@@ -268,6 +443,19 @@ def bake_bbmodel_maps(
     wing_trail_v = np.zeros((H, W), dtype=np.float32)
     face_is_down = np.zeros((H, W), dtype=np.float32)
     zone_masks: dict[str, np.ndarray] = {z: np.zeros((H, W), dtype=np.float32) for z in ANATOMICAL_ZONES}
+
+    # Normalize directional key light & build 3-ray soft penumbra cone for 3D ray-traced shadows!
+    l_main = np.asarray(shadow_light_dir, dtype=np.float64)
+    l_main = l_main / max(1e-8, float(np.linalg.norm(l_main)))
+    up_ref = np.array([0.0, 0.0, 1.0], dtype=np.float64) if abs(l_main[1]) > 0.92 else np.array([0.0, 1.0, 0.0], dtype=np.float64)
+    l_u = np.cross(up_ref, l_main)
+    l_u /= max(1e-8, float(np.linalg.norm(l_u)))
+    l_v = np.cross(l_main, l_u)
+    shadow_rays = (
+        l_main,
+        (l_main + 0.09 * l_u + 0.06 * l_v) / np.linalg.norm(l_main + 0.09 * l_u + 0.06 * l_v),
+        (l_main - 0.09 * l_u - 0.06 * l_v) / np.linalg.norm(l_main - 0.09 * l_u - 0.06 * l_v),
+    )
 
     islands: list[BakedIsland] = []
     elem_names: list[str] = []
@@ -362,11 +550,16 @@ def bake_bbmodel_maps(
             d_border = np.minimum(dx_px[None, :], dy_px[:, None])
             bevel_raw = np.clip(1.0 - d_border / 1.8, 0.0, 1.0)
 
-            # Vectorized multi-box Ambient Occlusion + Joint Crease Cavity!
+            # Vectorized multi-box Ambient Occlusion, Bent Normal, Ray-Traced Shadow, Thickness & Cavity!
             pts_flat = w_pts.reshape(-1, 3)
             n_pts = pts_flat.shape[0]
             ao_flat = np.ones(n_pts, dtype=np.float64)
             cav_flat = np.zeros(n_pts, dtype=np.float64)
+            bn_flat = np.broadcast_to(w_nrm[None, :], (n_pts, 3)).astype(np.float64).copy()
+            w_tr = R @ tr_b
+            w_tr = w_tr / max(1e-12, float(np.linalg.norm(w_tr)))
+            w_td = R @ td_b
+            w_td = w_td / max(1e-12, float(np.linalg.norm(w_td)))
 
             if neighbors:
                 # 1. Surface proximity cavity (detects buried overlap & tight joint creases!)
@@ -376,9 +569,7 @@ def bake_bbmodel_maps(
                     min_sdf = np.minimum(min_sdf, d_s)
                 cav_flat = np.clip(1.0 - min_sdf / cav_r, 0.0, 1.0)
 
-                # 2. Multi-step hemisphere AO occlusion along normal + 4 tilted directions
-                w_tr = R @ tr_b
-                w_td = R @ td_b
+                # 2. Multi-step hemisphere AO + true 3D Bent Normal (average unoccluded sky direction!)
                 dirs = (
                     w_nrm,
                     (w_nrm + 0.55 * w_tr) / np.linalg.norm(w_nrm + 0.55 * w_tr),
@@ -387,6 +578,7 @@ def bake_bbmodel_maps(
                     (w_nrm - 0.55 * w_td) / np.linalg.norm(w_nrm - 0.55 * w_td),
                 )
                 occ_sum = np.zeros(n_pts, dtype=np.float64)
+                bn_acc = np.zeros((n_pts, 3), dtype=np.float64)
                 tot_w = 0.0
                 for d_idx, dist in enumerate(probe_dists):
                     step_w = 1.0 / float(d_idx + 1)
@@ -394,25 +586,82 @@ def bake_bbmodel_maps(
                         probe = pts_flat + d_vec[None, :] * dist
                         min_d = np.full(n_pts, dist, dtype=np.float64)
                         for nb in neighbors:
-                            # Fast AABB skip per probe cloud
                             if np.any(nb["aabb_max"] < probe.min(axis=0) - dist) or np.any(nb["aabb_min"] > probe.max(axis=0) + dist):
                                 continue
                             min_d = np.minimum(min_d, _obb_signed_distance(probe, nb))
-                        # Soft occlusion ratio: 1.0 when probe hits inside neighbor, decaying smoothly to 0 at dist
-                        occ_sum += step_w * np.clip(1.0 - min_d / max(1e-4, dist), 0.0, 1.0)
+                        occ_i = np.clip(1.0 - min_d / max(1e-4, dist), 0.0, 1.0)
+                        occ_sum += step_w * occ_i
+                        bn_acc += (step_w * (1.0 - occ_i))[:, None] * d_vec[None, :]
                         tot_w += step_w
                 ao_flat = np.clip(1.0 - 0.88 * (occ_sum / max(1e-6, tot_w)), 0.14, 1.0)
+                bn_acc += 0.20 * w_nrm[None, :]
+                bn_len = np.maximum(1e-6, np.linalg.norm(bn_acc, axis=-1, keepdims=True))
+                bn_flat = bn_acc / bn_len
+
+            # 3. True 3D Ray-vs-OBB Directional Self-Shadowing (3-ray soft penumbra cone across scene!)
+            ndotl_face = float(np.dot(w_nrm, l_main))
+            self_shade = float(np.clip(ndotl_face * 0.55 + 0.45, 0.12, 1.0))
+            sh_flat = np.full(n_pts, self_shade, dtype=np.float64)
+            if bake_shadows and ndotl_face > -0.15 and len(obbs) > 1:
+                face_min = pts_flat.min(axis=0)
+                face_max = pts_flat.max(axis=0)
+                # Fast broad-phase filter: only test other OBBs lying in the +l_main half-space!
+                cast_cands = []
+                for cand in obbs:
+                    if cand["idx"] == idx:
+                        continue
+                    # Project vector from face bounds center to cand center along l_main
+                    rel_c = cand["center"] - 0.5 * (face_min + face_max)
+                    cand_r = float(np.linalg.norm(cand["aabb_max"] - cand["aabb_min"]) * 0.5)
+                    face_r = float(np.linalg.norm(face_max - face_min) * 0.5)
+                    if float(np.dot(rel_c, l_main)) > -(cand_r + face_r):
+                        cast_cands.append(cand)
+                if cast_cands:
+                    ray_orig = pts_flat + w_nrm[None, :] * 0.14
+                    lit_acc = np.zeros(n_pts, dtype=np.float64)
+                    for r_dir in shadow_rays:
+                        hit_any = np.zeros(n_pts, dtype=bool)
+                        for cand in cast_cands:
+                            if np.all(hit_any):
+                                break
+                            hit_any |= _ray_obb_hits(ray_orig, r_dir, cand, t_min=0.12, t_max=180.0)
+                        lit_acc += (~hit_any).astype(np.float64)
+                    cast_vis = 0.22 + 0.78 * (lit_acc / float(len(shadow_rays)))
+                    sh_flat = np.clip(self_shade * cast_vis, 0.08, 1.0)
+
+            # 4. Ray-traced internal volume thickness along -w_nrm (drives physically grounded SSS on wings/ears/fins!)
+            own_thick = 2.0 * float(half_n)
+            thick_flat = np.full(n_pts, own_thick, dtype=np.float64)
+            if neighbors:
+                in_probe = pts_flat - w_nrm[None, :] * max(0.5, own_thick)
+                for nb in neighbors:
+                    inside_nb = _obb_signed_distance(in_probe, nb) < 0.0
+                    if np.any(inside_nb):
+                        nb_span = float(np.linalg.norm(nb["half"])) * 1.4
+                        thick_flat = np.where(inside_nb, np.maximum(thick_flat, own_thick + nb_span * 0.5), thick_flat)
+            thick_ref = max(2.0, float(np.median(scene_span)) * 0.35) if obbs else 8.0
+            thick_norm = np.clip(thick_flat / thick_ref, 0.02, 1.0)
 
             ao_grid = ao_flat.reshape(h_px, w_px).astype(np.float32)
             cav_grid = cav_flat.reshape(h_px, w_px).astype(np.float32)
+            sh_grid = sh_flat.reshape(h_px, w_px).astype(np.float32)
+            bn_grid = bn_flat.reshape(h_px, w_px, 3).astype(np.float32)
+            th_grid = thick_norm.reshape(h_px, w_px).astype(np.float32)
 
             # Exposed edge bevel is suppressed where buried in a joint crease!
             exposed_bevel = (bevel_raw * np.clip(1.0 - cav_grid * 1.15, 0.0, 1.0) * ao_grid).astype(np.float32)
+            curv_grid = np.clip(0.5 + 0.5 * exposed_bevel - 0.5 * cav_grid, 0.0, 1.0).astype(np.float32)
 
             island_mask[y0:y1, x0:x1] = True
             world_pos[y0:y1, x0:x1] = w_pts.astype(np.float32)
             world_normal[y0:y1, x0:x1] = w_nrm.astype(np.float32)
+            world_tangent[y0:y1, x0:x1] = w_tr.astype(np.float32)
+            world_bitangent[y0:y1, x0:x1] = w_td.astype(np.float32)
             baked_ao[y0:y1, x0:x1] = ao_grid
+            baked_shadow[y0:y1, x0:x1] = sh_grid
+            bent_normal[y0:y1, x0:x1] = bn_grid
+            thickness[y0:y1, x0:x1] = th_grid
+            curvature_3d[y0:y1, x0:x1] = curv_grid
             edge_bevel[y0:y1, x0:x1] = exposed_bevel
             joint_cavity[y0:y1, x0:x1] = cav_grid
             local_uv[y0:y1, x0:x1, 0] = ug.astype(np.float32)
@@ -636,6 +885,18 @@ def bake_bbmodel_maps(
         wing_bay_v[pix_m] = v_val.astype(np.float32)
         wing_bay_mask[pix_m] = in_sec.astype(np.float32)
 
+    # 3D Geometric UV-Edge Adjacency Solver (maps shared 3D edges across distinct UV islands!)
+    if solve_uv_seams and len(islands) >= 2:
+        seam_tol = float(np.clip(float(np.linalg.norm(scene_span)) * 0.022, 0.55, 1.45)) if obbs else 0.85
+        uv_seam_src_yx, uv_seam_dst_yx, uv_seam_weight, uv_seam_mask = _solve_uv_edge_adjacency(
+            islands, world_pos, world_normal, H, W, seam_tol=seam_tol
+        )
+    else:
+        uv_seam_src_yx = np.zeros((0, 2), dtype=np.int32)
+        uv_seam_dst_yx = np.zeros((0, 2), dtype=np.int32)
+        uv_seam_weight = np.zeros((0,), dtype=np.float32)
+        uv_seam_mask = np.zeros((H, W), dtype=np.float32)
+
     return MeshBakeContext(
         width=W,
         height=H,
@@ -663,4 +924,14 @@ def bake_bbmodel_maps(
         elem_bones=elem_bones,
         elem_zones=elem_zones,
         elem_centers_x=elem_centers_x,
+        baked_shadow=baked_shadow,
+        bent_normal=bent_normal,
+        thickness=thickness,
+        curvature_3d=curvature_3d,
+        world_tangent=world_tangent,
+        world_bitangent=world_bitangent,
+        uv_seam_mask=uv_seam_mask,
+        uv_seam_src_yx=uv_seam_src_yx,
+        uv_seam_dst_yx=uv_seam_dst_yx,
+        uv_seam_weight=uv_seam_weight,
     )
