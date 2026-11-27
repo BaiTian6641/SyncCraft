@@ -32,6 +32,10 @@
     paletteSpawnPos: null,
     paletteItems: [],
     paletteIdx: 0,
+    paletteViewMode: 'grid',
+    paletteCategory: 'ALL',
+    libViewMode: 'grid',
+    nodePreviews: {},
     img2d: null,
     img2dBuf: null,
     lastDiagnosis: null,
@@ -133,8 +137,19 @@
     $('btnTileable').classList.toggle('active', !!rec.tileable);
     const resStr = String(rec.width);
     const resSel = $('resSelect');
+    const meshResBadge = $('meshResBadge');
     if ([...resSel.options].some((o) => o.value === resStr)) resSel.value = resStr;
-    resSel.disabled = !!st.has_mesh;
+    if (st.has_mesh) {
+      resSel.style.display = 'none';
+      if (meshResBadge) {
+        meshResBadge.style.display = 'inline-flex';
+        meshResBadge.textContent = `${rec.width}×${rec.height} UV`;
+      }
+    } else {
+      resSel.style.display = '';
+      resSel.disabled = false;
+      if (meshResBadge) meshResBadge.style.display = 'none';
+    }
 
     // Sync 3D mesh geometry
     if (gl3d) {
@@ -598,17 +613,48 @@
     });
   }
 
+  const LIB_CAT_COLORS = {
+    'Gradients & Paths': '#818cf8',
+    'Noise': '#38bdf8',
+    'Geometric Patterns': '#34d399',
+    'Painterly & Bio': '#2dd4bf',
+    'Region & Per-UV Pixel Composer': '#c084fc',
+    'Pixel Composer FX': '#fb923c',
+    'Material Bus (PBR)': '#f59e0b',
+    'Character & Gear PBR': '#a78bfa',
+    'World Blocks (PBR)': '#4ade80',
+    'Bio & Creature PBR': '#10b981',
+    'Seamless & Precomputed PBR': '#22d3ee',
+    'PBR & Normal': '#60a5fa',
+    'Color & Grading': '#f472b6',
+    'Denoise & Polish': '#a3e635',
+    'Transform & Distort': '#fbbf24',
+    'Filter & SDF': '#67e8f9',
+    'Simulation': '#fb7185',
+    'Animation': '#f43f5e',
+    '3D Mesh & Masks': '#94a3b8',
+    'Compositing & Math': '#94a3b8',
+  };
+
+  function getNodePreviewSrc(op) {
+    return (state.nodePreviews && state.nodePreviews[op]) || '';
+  }
+
   function renderNodeLibrary() {
     const body = $('libBody');
     const q = ($('libSearch').value || '').trim().toLowerCase();
     body.innerHTML = '';
     if (!state.schemaPayload) return;
+    const isGrid = state.libViewMode === 'grid';
+    if ($('btnLibGrid')) $('btnLibGrid').classList.toggle('active', isGrid);
+    if ($('btnLibList')) $('btnLibList').classList.toggle('active', !isGrid);
+
     const cats = state.schemaPayload.schema.nodes_by_category || {};
     let totalShown = 0;
 
     for (const [cat, nodes] of Object.entries(cats)) {
       const filtered = q
-        ? nodes.filter((n) => n.op.toLowerCase().includes(q) || (n.description || '').toLowerCase().includes(q) || cat.toLowerCase().includes(q))
+        ? nodes.filter((n) => n.op.toLowerCase().includes(q) || (n.display_name || '').toLowerCase().includes(q) || (n.description || '').toLowerCase().includes(q) || cat.toLowerCase().includes(q))
         : nodes;
       if (!filtered.length) continue;
       totalShown += filtered.length;
@@ -617,21 +663,34 @@
       wrap.className = 'lib-cat';
       const head = document.createElement('div');
       head.className = 'lib-cat-head';
-      head.innerHTML = `<span>${cat}</span><span style="color:var(--text-muted);font-family:var(--font-mono);">${filtered.length}</span>`;
+      const catColor = LIB_CAT_COLORS[cat] || '#64748b';
+      head.innerHTML = `<span style="display:inline-flex;align-items:center;gap:5px;"><span class="cat-chip-dot" style="background:${catColor};"></span>${cat}</span><span style="color:var(--text-muted);font-family:var(--font-mono);">${filtered.length}</span>`;
       const list = document.createElement('div');
-      list.className = 'lib-items';
-      // Keep non-search list tidy by expanding key categories first
-      const defaultOpen = !!q || cat.includes('Seamless') || cat.includes('Material') || cat.includes('Pixel Composer') || cat.includes('Noise');
-      list.style.display = defaultOpen ? 'grid' : 'none';
-      head.onclick = () => { list.style.display = list.style.display === 'none' ? 'grid' : 'none'; };
+      list.className = 'lib-items' + (isGrid ? '' : ' list-mode');
+      const defaultOpen = !!q || cat.includes('Region') || cat === 'Noise' || cat === 'Geometric Patterns' || cat.includes('Pixel Composer');
+      list.style.display = defaultOpen ? (isGrid ? 'grid' : 'flex') : 'none';
+      head.onclick = () => { list.style.display = list.style.display === 'none' ? (isGrid ? 'grid' : 'flex') : 'none'; };
 
       for (const n of filtered) {
         const it = document.createElement('div');
-        it.className = 'lib-item';
-        it.title = `${n.op} — ${n.description || ''}`;
+        it.className = 'lib-item' + (isGrid ? ' grid-card' : '');
+        it.title = `${n.display_name || n.op} (${n.op}) — ${n.description || ''}`;
+        it.style.setProperty('--item-accent', catColor);
         const outType = n.output_type || (n.outputs && n.outputs[0] && (n.outputs[0].dtype || n.outputs[0].port_type)) || 'RGBA';
         const col = (state.schemaPayload.schema.port_colors || {})[outType] || '#94a3b8';
-        it.innerHTML = `<span class="lib-dot" style="background:${col};"></span><span>${n.op}</span>`;
+        const prevSrc = getNodePreviewSrc(n.op);
+        if (isGrid) {
+          it.innerHTML = `
+            <div class="lib-swatch">${prevSrc ? `<img src="${prevSrc}" alt="${n.op}" loading="lazy" />` : ''}</div>
+            <div class="lib-item-name">${n.op}</div>
+          `;
+        } else {
+          it.innerHTML = `
+            <div class="lib-swatch-sm">${prevSrc ? `<img src="${prevSrc}" alt="${n.op}" loading="lazy" />` : ''}</div>
+            <span class="lib-item-name">${n.op}</span>
+            <span class="lib-dot" style="background:${col};" title="${outType}"></span>
+          `;
+        }
         it.onclick = () => {
           const cx = (-graphCanvas.panX + graphCanvas.stage.clientWidth * 0.5) / graphCanvas.zoom - 100;
           const cy = (-graphCanvas.panY + graphCanvas.stage.clientHeight * 0.45) / graphCanvas.zoom - 60;
@@ -648,17 +707,99 @@
     $('libCount').textContent = String(totalShown);
   }
 
+  function updatePalettePreview(item) {
+    const img = $('palPrevImg');
+    const title = $('palPrevTitle');
+    const opEl = $('palPrevOp');
+    const catEl = $('palPrevCat');
+    const descEl = $('palPrevDesc');
+    const portsEl = $('palPrevPorts');
+    const addBtn = $('btnPalAddSelected');
+    if (!item) {
+      if (img) img.src = '';
+      if (title) title.textContent = 'No matching nodes';
+      if (opEl) opEl.textContent = '';
+      if (catEl) catEl.textContent = '';
+      if (descEl) descEl.textContent = 'Try clearing your search or switching category.';
+      if (portsEl) portsEl.innerHTML = '';
+      if (addBtn) addBtn.disabled = true;
+      return;
+    }
+    const meta = state.opMap[item.op] || item;
+    const pColors = (state.schemaPayload && state.schemaPayload.schema.port_colors) || {};
+    if (img) img.src = getNodePreviewSrc(item.op);
+    if (title) title.textContent = meta.display_name || item.op;
+    if (opEl) opEl.textContent = item.op;
+    if (catEl) catEl.textContent = item.cat;
+    if (descEl) descEl.textContent = meta.description || item.desc || '';
+    if (portsEl) {
+      portsEl.innerHTML = '';
+      const ins = meta.inputs || [];
+      const outT = meta.output_type || 'RGBA';
+      for (const inp of ins.slice(0, 4)) {
+        const dt = inp.dtype || inp.port_type || 'ANY';
+        const tag = document.createElement('span');
+        tag.className = 'pal-port-tag';
+        tag.innerHTML = `<span class="cat-chip-dot" style="background:${pColors[dt] || '#94a3b8'};"></span>in:${inp.name}`;
+        portsEl.appendChild(tag);
+      }
+      const oTag = document.createElement('span');
+      oTag.className = 'pal-port-tag';
+      oTag.innerHTML = `<span class="cat-chip-dot" style="background:${pColors[outT] || '#94a3b8'};"></span>out:${outT}`;
+      portsEl.appendChild(oTag);
+    }
+    if (addBtn) {
+      addBtn.disabled = false;
+      addBtn.onclick = () => spawnFromPalette(item.op);
+    }
+  }
+
+  function renderPaletteCategories() {
+    const bar = $('paletteCatBar');
+    if (!bar || !state.schemaPayload) return;
+    bar.innerHTML = '';
+    const cats = Object.keys(state.schemaPayload.schema.nodes_by_category || {});
+    const mk = (id, label, color) => {
+      const b = document.createElement('button');
+      b.className = 'cat-chip' + (state.paletteCategory === id ? ' active' : '');
+      b.innerHTML = color ? `<span class="cat-chip-dot" style="background:${color};"></span>${label}` : label;
+      b.onclick = () => {
+        state.paletteCategory = id;
+        renderPaletteCategories();
+        renderPaletteList();
+      };
+      bar.appendChild(b);
+    };
+    mk('ALL', 'All Nodes', null);
+    for (const c of cats) {
+      const shortLbl = c.replace('Region & Per-UV Pixel Composer', 'Region / Per-UV').replace('Geometric Patterns', 'Patterns').replace('Material Bus (PBR)', 'Material Bus');
+      mk(c, shortLbl, LIB_CAT_COLORS[c] || '#94a3b8');
+    }
+  }
+
   function openPalette(opts) {
     opts = opts || {};
     state.paletteFilterType = opts.filterType || null;
     state.paletteConnectFrom = opts.connectFrom || null;
     state.paletteSpawnPos = opts.spawnPos || null;
+    state.paletteCategory = opts.category || 'ALL';
     $('paletteModal').classList.add('open');
     const inp = $('paletteInput');
     inp.value = '';
+    const nCount = (state.schemaPayload && state.schemaPayload.schema && state.schemaPayload.schema.node_count) || 149;
     inp.placeholder = state.paletteFilterType
       ? `Add node compatible with ${state.paletteFilterType} output...`
-      : 'Search 144 TexGraph nodes by name, category or description...';
+      : `Search ${nCount} TexGraph nodes by name, noise, material or effect...`;
+    const cBadge = $('paletteCompatBadge');
+    if (cBadge) {
+      if (state.paletteFilterType) {
+        cBadge.style.display = 'inline-flex';
+        cBadge.textContent = `Compat: ${state.paletteFilterType}`;
+      } else {
+        cBadge.style.display = 'none';
+      }
+    }
+    renderPaletteCategories();
     renderPaletteList();
     setTimeout(() => inp.focus(), 10);
   }
@@ -675,39 +816,78 @@
     list.innerHTML = '';
     if (!state.schemaPayload) return;
 
+    const isGrid = state.paletteViewMode === 'grid';
+    list.className = 'palette-results ' + (isGrid ? 'grid-mode' : 'list-mode');
+    if ($('btnPalGrid')) $('btnPalGrid').classList.toggle('active', isGrid);
+    if ($('btnPalList')) $('btnPalList').classList.toggle('active', !isGrid);
+
     const compatSet = state.paletteFilterType
       ? new Set(((state.schemaPayload.schema.port_compatibility) || {})[state.paletteFilterType] || [state.paletteFilterType])
       : null;
 
     const items = [];
     for (const [cat, nodes] of Object.entries(state.schemaPayload.schema.nodes_by_category || {})) {
+      if (state.paletteCategory !== 'ALL' && cat !== state.paletteCategory) continue;
       for (const n of nodes) {
         if (compatSet) {
           const hasCompatIn = (n.inputs || []).some((inp) => compatSet.has(inp.dtype || inp.port_type));
           if (!hasCompatIn) continue;
         }
-        if (q && !(n.op.toLowerCase().includes(q) || cat.toLowerCase().includes(q) || (n.description || '').toLowerCase().includes(q))) {
+        if (q && !(n.op.toLowerCase().includes(q) || (n.display_name || '').toLowerCase().includes(q) || cat.toLowerCase().includes(q) || (n.description || '').toLowerCase().includes(q))) {
           continue;
         }
-        items.push({ op: n.op, cat, desc: n.description || '' });
+        items.push({
+          op: n.op,
+          display_name: n.display_name || n.op,
+          cat,
+          desc: n.description || '',
+          output_type: n.output_type || 'RGBA',
+        });
       }
     }
-    state.paletteItems = items.slice(0, 45);
-    state.paletteIdx = 0;
+    state.paletteItems = items;
+    state.paletteIdx = Math.min(state.paletteIdx, Math.max(0, items.length - 1));
+    if ($('paletteCountLabel')) {
+      $('paletteCountLabel').textContent = `${items.length} node${items.length === 1 ? '' : 's'} shown`;
+    }
 
+    const pColors = state.schemaPayload.schema.port_colors || {};
     state.paletteItems.forEach((it, idx) => {
-      const row = document.createElement('div');
-      row.className = 'palette-item' + (idx === 0 ? ' sel' : '');
-      row.innerHTML = `
-        <div class="palette-item-main">
-          <span class="palette-item-name">${it.op}</span>
-          <span class="palette-item-desc">${it.desc}</span>
-        </div>
-        <span class="palette-item-cat">${it.cat}</span>
-      `;
-      row.onclick = () => spawnFromPalette(it.op);
-      list.appendChild(row);
+      const prevSrc = getNodePreviewSrc(it.op);
+      const accent = LIB_CAT_COLORS[it.cat] || '#64748b';
+      const el = document.createElement('div');
+      if (isGrid) {
+        el.className = 'palette-card' + (idx === state.paletteIdx ? ' sel' : '');
+        el.style.setProperty('--card-accent', accent);
+        el.innerHTML = `
+          <div class="palette-card-thumb">
+            ${prevSrc ? `<img src="${prevSrc}" alt="${it.op}" loading="lazy" />` : ''}
+            <span class="palette-port-pill" style="color:${pColors[it.output_type] || '#cbd5e1'};">${it.output_type}</span>
+          </div>
+          <div class="palette-card-title" title="${it.display_name}">${it.display_name}</div>
+          <div class="palette-card-op">${it.op}</div>
+        `;
+      } else {
+        el.className = 'palette-item' + (idx === state.paletteIdx ? ' sel' : '');
+        el.innerHTML = `
+          <div class="palette-list-thumb">${prevSrc ? `<img src="${prevSrc}" alt="${it.op}" loading="lazy" />` : ''}</div>
+          <div class="palette-item-main">
+            <span class="palette-item-name">${it.display_name} <span style="font-family:var(--font-mono);font-size:10px;color:var(--text-muted);font-weight:400;">${it.op}</span></span>
+            <span class="palette-item-desc">${it.desc}</span>
+          </div>
+          <span class="palette-item-cat">${it.cat}</span>
+        `;
+      }
+      el.onmouseenter = () => {
+        state.paletteIdx = idx;
+        list.querySelectorAll('.palette-card, .palette-item').forEach((n, i) => n.classList.toggle('sel', i === idx));
+        updatePalettePreview(it);
+      };
+      el.onclick = () => spawnFromPalette(it.op);
+      list.appendChild(el);
     });
+
+    updatePalettePreview(state.paletteItems[state.paletteIdx] || null);
   }
 
   function spawnFromPalette(op) {
@@ -1259,6 +1439,7 @@
           connectFrom: { node: srcNode, port: srcPort },
           spawnPos: [Math.round(wPos.x), Math.round(wPos.y)],
         }),
+        onOpenAddAt: (wPos) => openPalette({ spawnPos: [Math.round(wPos.x), Math.round(wPos.y)] }),
         onToggleBypass: (nid) => mutate({ action: 'toggle_bypass', node_id: nid }, { immediateEval: true }),
         onToggleCollapse: (nid) => mutate({ action: 'toggle_collapse', node_id: nid }, { skipEval: true }),
         onSetOutput: (nid) => mutate({ action: 'set_output', node_id: nid }, { immediateEval: true }),
@@ -1275,9 +1456,14 @@
 
     setupSplitters();
 
-    // Load Schema v4.0 + Initial Workspace State
-    const [schemaPayload, initState] = await Promise.all([apiGet('/api/schema'), apiGet('/api/state')]);
+    // Load Schema v4.0 + Initial Workspace State + Real Procedural Node Previews in parallel!
+    const [schemaPayload, initState, prevPayload] = await Promise.all([
+      apiGet('/api/schema'),
+      apiGet('/api/state'),
+      apiGet('/api/schema/previews?size=40').catch(() => ({ previews: {} })),
+    ]);
     state.schemaPayload = schemaPayload;
+    state.nodePreviews = (prevPayload && prevPayload.previews) || {};
     for (const [cat, nodes] of Object.entries(schemaPayload.schema.nodes_by_category || {})) {
       for (const n of nodes) state.opMap[n.op] = Object.assign({ category: cat }, n);
     }
@@ -1419,9 +1605,14 @@
       updateViewportHud(`(${px},${py}) ${hex}`);
     });
 
-    // Graph Toolbar
+    // Graph Toolbar & Canvas Zoom HUD
     $('btnAddNode').onclick = () => openPalette();
     $('btnOpenPaletteLib').onclick = () => openPalette();
+    if ($('btnLibList')) $('btnLibList').onclick = () => { state.libViewMode = 'list'; renderNodeLibrary(); };
+    if ($('btnLibGrid')) $('btnLibGrid').onclick = () => { state.libViewMode = 'grid'; renderNodeLibrary(); };
+    if ($('btnGraphZoomIn')) $('btnGraphZoomIn').onclick = () => graphCanvas.zoomBy(1.22);
+    if ($('btnGraphZoomOut')) $('btnGraphZoomOut').onclick = () => graphCanvas.zoomBy(0.82);
+    if ($('btnGraphZoomFit')) $('btnGraphZoomFit').onclick = () => graphCanvas.fitToView();
     $('btnAutoLayout').onclick = () => mutate({ action: 'auto_layout' }, { skipEval: true, fitGraph: true });
     $('btnFitGraph').onclick = () => graphCanvas.fitToView();
     $('btnBypassSel').onclick = () => { if (state.selectedNodeId) mutate({ action: 'toggle_bypass', node_id: state.selectedNodeId }, { immediateEval: true }); };
@@ -1463,16 +1654,27 @@
       setPhase(state.phase);
     };
 
-    // Command Palette
-    $('paletteInput').oninput = renderPaletteList;
+    // Visual Add-Node Browser & Command Palette
+    if ($('btnPalList')) $('btnPalList').onclick = () => { state.paletteViewMode = 'list'; renderPaletteList(); };
+    if ($('btnPalGrid')) $('btnPalGrid').onclick = () => { state.paletteViewMode = 'grid'; renderPaletteList(); };
+    if ($('btnClosePalette')) $('btnClosePalette').onclick = closePalette;
+    $('paletteInput').oninput = () => { state.paletteIdx = 0; renderPaletteList(); };
     $('paletteInput').onkeydown = (e) => {
       if (e.key === 'Escape') { closePalette(); return; }
-      if (e.key === 'ArrowDown') {
+      const isGrid = state.paletteViewMode === 'grid';
+      const cols = isGrid ? Math.max(1, Math.floor(($('paletteList').clientWidth - 16) / 115)) : 1;
+      if (e.key === 'ArrowRight' && isGrid) {
         e.preventDefault();
         state.paletteIdx = Math.min(state.paletteItems.length - 1, state.paletteIdx + 1);
-      } else if (e.key === 'ArrowUp') {
+      } else if (e.key === 'ArrowLeft' && isGrid) {
         e.preventDefault();
         state.paletteIdx = Math.max(0, state.paletteIdx - 1);
+      } else if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        state.paletteIdx = Math.min(state.paletteItems.length - 1, state.paletteIdx + cols);
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        state.paletteIdx = Math.max(0, state.paletteIdx - cols);
       } else if (e.key === 'Enter' && state.paletteItems[state.paletteIdx]) {
         e.preventDefault();
         spawnFromPalette(state.paletteItems[state.paletteIdx].op);
@@ -1480,7 +1682,12 @@
       } else {
         return;
       }
-      document.querySelectorAll('.palette-item').forEach((el, i) => el.classList.toggle('sel', i === state.paletteIdx));
+      const cards = $('paletteList').querySelectorAll('.palette-card, .palette-item');
+      cards.forEach((el, i) => {
+        el.classList.toggle('sel', i === state.paletteIdx);
+        if (i === state.paletteIdx) el.scrollIntoView({ block: 'nearest' });
+      });
+      updatePalettePreview(state.paletteItems[state.paletteIdx] || null);
     };
     $('paletteModal').addEventListener('click', (e) => { if (e.target === $('paletteModal')) closePalette(); });
 

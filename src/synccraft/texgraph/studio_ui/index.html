@@ -29,6 +29,7 @@
         <option value="64" selected>64×64</option>
         <option value="128">128×128</option>
       </select>
+      <span class="pill-badge" id="meshResBadge" style="display:none;" title="Active 3D .bbmodel UV Atlas Resolution">256×192 UV</span>
       <button class="btn" id="btnTileable" title="Toggle seamless toroidal tiling">Tileable</button>
     </div>
 
@@ -137,10 +138,16 @@
       <div class="pane pane-library" id="paneLibrary" data-pane="library">
         <div class="pane-header">
           <span class="pane-title">Node Library (<span id="libCount">149</span>)</span>
-          <button class="btn sm" id="btnOpenPaletteLib" title="Fuzzy Command Palette (Tab)">⌘K / Tab</button>
+          <div class="topbar-group">
+            <div class="seg-group" title="Toggle Node Library List / Visual Grid View">
+              <button class="seg-btn" id="btnLibList" title="Compact List View">☰</button>
+              <button class="seg-btn active" id="btnLibGrid" title="Visual Preview Grid">⊞</button>
+            </div>
+            <button class="btn sm" id="btnOpenPaletteLib" title="Visual Node Browser (Tab / ⌘K)">⌘K</button>
+          </div>
         </div>
         <div class="lib-search-row">
-          <input type="text" id="libSearch" class="txt-input" placeholder="Filter 149 nodes (e.g. region, inner_area, triplanar, dither)..." />
+          <input type="text" id="libSearch" class="txt-input" placeholder="Filter 149 nodes (noise, brick, scales, region, dither)..." />
         </div>
         <div class="lib-body" id="libBody"></div>
       </div>
@@ -173,8 +180,13 @@
             <svg class="graph-wires-svg" id="graphWiresSvg"></svg>
             <div id="nodesLayer"></div>
           </div>
+          <div class="graph-zoom-hud">
+            <button class="btn sm icon-only" id="btnGraphZoomOut" title="Zoom Out">−</button>
+            <button class="btn sm icon-only" id="btnGraphZoomIn" title="Zoom In">+</button>
+            <button class="btn sm" id="btnGraphZoomFit" title="Fit Graph (F)">Fit</button>
+          </div>
           <div class="graph-hint-hud" id="graphHintHud">
-            Tab: Add Node · Drag Socket: Wire · Click Wire: Sever · Mid-Drag / Space+Drag: Pan · F: Fit
+            Tab / Double-Click: Add Node · Drag Socket: Wire · Click Wire: Sever · Drag Canvas: Pan · F: Fit
           </div>
           <div class="graph-minimap" id="graphMinimap" title="Click or drag to pan graph viewport">
             <canvas id="minimapCanvas" width="176" height="112"></canvas>
@@ -268,12 +280,45 @@
   </main>
 
   <!-- =================================================================== -->
-  <!-- FUZZY COMMAND PALETTE (`Tab` / `Space` / `Cmd+K`)                   -->
+  <!-- VISUAL NODE BROWSER & COMMAND PALETTE (`+ Add Node` / `Tab` / `⌘K`) -->
   <!-- =================================================================== -->
   <div class="modal-backdrop" id="paletteModal">
-    <div class="palette-box">
-      <input type="text" id="paletteInput" class="palette-search" placeholder="Search 144 TexGraph nodes by name, category or description..." autocomplete="off" />
-      <div class="palette-list" id="paletteList"></div>
+    <div class="palette-box visual-browser">
+      <div class="palette-topbar">
+        <div class="palette-search-wrap">
+          <span class="palette-search-ico">⌕</span>
+          <input type="text" id="paletteInput" class="palette-search" placeholder="Search 149 TexGraph nodes by name, noise, material or effect..." autocomplete="off" />
+          <span class="palette-compat-badge" id="paletteCompatBadge" style="display:none;"></span>
+        </div>
+        <div class="palette-controls">
+          <div class="seg-group" title="Switch Add-Node View Mode">
+            <button class="seg-btn" id="btnPalList" title="List View with Swatches">☰ List</button>
+            <button class="seg-btn active" id="btnPalGrid" title="Visual Swatch Grid">⊞ Grid</button>
+          </div>
+          <button class="btn sm icon-only" id="btnClosePalette" title="Close (Esc)">✕</button>
+        </div>
+      </div>
+      <div class="palette-cat-bar" id="paletteCatBar"></div>
+      <div class="palette-split">
+        <div class="palette-results grid-mode" id="paletteList"></div>
+        <aside class="palette-preview-pane" id="palettePreviewPane">
+          <div class="pal-prev-img-wrap">
+            <img id="palPrevImg" alt="Node preview" />
+          </div>
+          <div class="pal-prev-head">
+            <div class="pal-prev-title" id="palPrevTitle">Select a Node</div>
+            <div class="pal-prev-op" id="palPrevOp"></div>
+          </div>
+          <div class="pal-prev-cat" id="palPrevCat"></div>
+          <div class="pal-prev-desc" id="palPrevDesc">Hover or select any node to inspect its live procedural swatch, typed ports, and description.</div>
+          <div class="pal-prev-ports" id="palPrevPorts"></div>
+          <button class="btn primary pal-prev-add" id="btnPalAddSelected">+ Add Node to Graph</button>
+        </aside>
+      </div>
+      <div class="palette-footer">
+        <span id="paletteCountLabel">149 nodes</span>
+        <span>↑↓←→ Navigate · Enter Add · Esc Close</span>
+      </div>
     </div>
   </div>
 

@@ -36,6 +36,7 @@ from synccraft import __version__
 from .ai_copilot import BUILT_IN_STYLE_PRESETS, apply_surgical_patch, diagnose_asset, extract_style_dna
 from .core import GraphCycleError, NodeSpec, TexGraph, _parse_ref
 from .mesh_baker import _FACE_BASIS, _euler_xyz_mat, MeshBakeContext, bake_bbmodel_maps
+from .node_previews import generate_node_preview_catalog
 from .pbr import BAKE_LIGHTING_PRESETS as BAKE_PRESETS, bake_pbr_to_albedo
 from .pipeline import MATERIAL_BUS_PORTS, SUBGRAPH_REGISTRY
 from .pixel_art_ops import encode_png, rgba_float_to_u8
@@ -1442,6 +1443,19 @@ def create_studio_server(
 
             if path == "/api/schema":
                 self._send_json(sess.get_schema_payload())
+                return
+
+            if path == "/api/schema/previews":
+                qs = urllib.parse.parse_qs(parsed.query)
+                sz = int((qs.get("size") or ["40"])[0])
+                previews = generate_node_preview_catalog(size=sz)
+                raw = json.dumps({"ok": True, "size": sz, "count": len(previews), "previews": previews}).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(raw)))
+                self.send_header("Cache-Control", "public, max-age=3600")
+                self.end_headers()
+                self.wfile.write(raw)
                 return
 
             if path == "/api/state":

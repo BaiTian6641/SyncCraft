@@ -8,18 +8,29 @@
   'use strict';
 
   const CAT_COLORS = {
+    'Gradients & Paths': '#818cf8',
+    'Noise': '#38bdf8',
     'Noise & Procedural': '#38bdf8',
+    'Geometric Patterns': '#34d399',
     'Patterns & Biology': '#34d399',
-    'Gradients & 3D Mesh': '#818cf8',
-    'Color & Grading': '#f472b6',
+    'Painterly & Bio': '#2dd4bf',
+    'Region & Per-UV Pixel Composer': '#c084fc',
     'Pixel Composer FX': '#fb923c',
-    'Substance & Geometry': '#2dd4bf',
     'Material Bus (PBR)': '#f59e0b',
-    'Seamless & Precomputed PBR': '#22d3ee',
     'Character & Gear PBR': '#a78bfa',
-    'World & Biome PBR': '#4ade80',
-    'Simulate & Animate': '#fb7185',
-    'Math & Masks': '#94a3b8',
+    'World Blocks (PBR)': '#4ade80',
+    'Bio & Creature PBR': '#10b981',
+    'Seamless & Precomputed PBR': '#22d3ee',
+    'PBR & Normal': '#60a5fa',
+    'Color & Grading': '#f472b6',
+    'Denoise & Polish': '#a3e635',
+    'Transform & Distort': '#fbbf24',
+    'Filter & SDF': '#67e8f9',
+    'Simulation': '#fb7185',
+    'Animation': '#f43f5e',
+    '3D Mesh & Masks': '#94a3b8',
+    'Compositing & Math': '#94a3b8',
+    'Substance & Geometry': '#2dd4bf',
   };
 
   function socketShape(portType) {
@@ -123,6 +134,17 @@
       this.zoom = Math.max(0.14, Math.min(1.12, Math.min(zx, zy)));
       this.panX = (r.width - gw * this.zoom) * 0.5 - minX * this.zoom;
       this.panY = (r.height - gh * this.zoom) * 0.5 - minY * this.zoom;
+      this.applyTransform();
+    }
+
+    zoomBy(factor) {
+      const r = this.stage.getBoundingClientRect();
+      const mx = r.width * 0.5;
+      const my = r.height * 0.5;
+      const nextZoom = Math.max(0.14, Math.min(2.2, this.zoom * factor));
+      this.panX = mx - (mx - this.panX) * (nextZoom / this.zoom);
+      this.panY = my - (my - this.panY) * (nextZoom / this.zoom);
+      this.zoom = nextZoom;
       this.applyTransform();
     }
 
@@ -405,8 +427,9 @@
           const p1 = this._socketWorldCenter(sEl) || this._nodeFallbackPortPos(srcId, 'out');
           const p2 = this._socketWorldCenter(dEl) || this._nodeFallbackPortPos(dstNode.id, 'in');
 
+          const isRel = this.selectedNodeId && (srcId === this.selectedNodeId || dstNode.id === this.selectedNodeId);
           const g = document.createElementNS(ns, 'g');
-          g.setAttribute('class', 'wire-group');
+          g.setAttribute('class', 'wire-group' + (isRel ? ' wire-active' : ''));
 
           const dStr = bezierPath(p1.x, p1.y, p2.x, p2.y);
           const hit = document.createElementNS(ns, 'path');
@@ -535,6 +558,12 @@
           this._origPanY = this.panY;
           this.stage.style.cursor = 'grabbing';
         }
+      });
+
+      this.stage.addEventListener('dblclick', (e) => {
+        if (e.target.closest('.tg-node') || e.target.closest('.graph-minimap') || e.target.closest('.graph-zoom-hud')) return;
+        const wPos = this.screenToWorld(e.clientX, e.clientY);
+        if (this.callbacks.onOpenAddAt) this.callbacks.onOpenAddAt(wPos);
       });
 
       window.addEventListener('pointermove', (e) => {

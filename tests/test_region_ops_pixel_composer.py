@@ -169,3 +169,14 @@ def test_studio_session_exposes_uv_regions_and_inner_area() -> None:
     assert "inner_area" in ev["channels"]
     assert ev["channels"]["uv_regions"].startswith("data:image/png;base64,")
     assert ev["channels"]["inner_area"].startswith("data:image/png;base64,")
+
+
+def test_real_procedural_node_preview_catalog_all_149_nodes() -> None:
+    from synccraft.texgraph.node_previews import generate_node_preview_catalog
+
+    previews = generate_node_preview_catalog(size=32)
+    assert len(previews) >= 149
+    for key in ("perlin", "fbm", "voronoi", "brick", "imbricated_scales", "region_base_fill", "region_restrained_noise", "pixel_dither"):
+        assert key in previews
+        assert previews[key].startswith("data:image/png;base64,")
+
