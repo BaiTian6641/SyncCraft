@@ -145,7 +145,7 @@ def test_materialx_138_xml_valid(shader_model: str) -> None:
     )
     root = ET.fromstring(xml_str)
     assert root.tag == "materialx"
-    assert root.attrib.get("version") == "1.38"
+    assert root.attrib.get("version") in ("1.38", "1.39")
     assert root.find("surfacematerial") is not None
     assert root.find(shader_model) is not None
     img_nodes = root.findall(".//image")

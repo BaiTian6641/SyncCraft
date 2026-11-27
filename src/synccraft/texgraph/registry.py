@@ -1472,6 +1472,26 @@ NODE_CATALOG: dict[str, NodeMeta] = {
         ParamSchema("param_k", "slider", 1.0, -8.0, 8.0, 0.05, group="Parameters", animatable=True, tooltip="Custom animatable scalar variable `k` available inside expression"),
         ParamSchema("seed", "int", 42, 0, 99999, 1, group="Randomness"),
     )),
+    # --- TexGraph v17 Commercial Pro Nodes (`decal_stamp` & `mip_safe_dilate` -> 232 Typed Nodes!) ---
+    "decal_stamp": NodeMeta("decal_stamp", "Material Bus (PBR)", "3D Projected Decal / Stencil", "Camera/planar 3D decal projection across UV seams with backface culling, normal-angle fade & exact Kay-Kajiya OBB occlusion!", (PortSchema("base", "ANY", True),), "MATERIAL", outputs=(PortSchema("mat", "MATERIAL"), PortSchema("albedo", "RGBA"), PortSchema("roughness", "SCALAR"), PortSchema("metallic", "SCALAR"), PortSchema("height", "HEIGHT"), PortSchema("normal", "NORMAL"), PortSchema("emissive", "RGBA")), params=(
+        ParamSchema("stencil", "select", "chrono_sigil", choices=("chrono_sigil", "amethyst_crest", "dragon_claw_slash", "rivet_plate_seam", "arcane_rune_ring", "weather_scorch", "guild_star", "moss_lichen_patch"), group="Stencil"),
+        ParamSchema("tint_color", "color", "#F0C85A", group="Stencil"),
+        ParamSchema("scale_u", "slider", 10.0, 1.0, 48.0, 0.5, group="Projection"),
+        ParamSchema("roll_deg", "slider", 0.0, -180.0, 180.0, 5.0, group="Projection"),
+        ParamSchema("max_angle_deg", "slider", 72.0, 15.0, 90.0, 1.0, group="Culling"),
+        ParamSchema("angle_fade_deg", "slider", 20.0, 0.0, 45.0, 1.0, group="Culling"),
+        ParamSchema("opacity", "slider", 0.95, 0.0, 1.0, 0.02, group="Blending"),
+        ParamSchema("occlusion_test", "checkbox", True, group="Culling", tooltip="Prevent decal bleeding through onto occluded rear limbs/plates"),
+        ParamSchema("height_strength", "slider", 1.0, 0.0, 2.5, 0.05, group="PBR"),
+        ParamSchema("emissive_strength", "slider", 0.75, 0.0, 1.5, 0.05, group="PBR"),
+        ParamSchema("stamps_json", "text", "", group="Stamp Stack", tooltip="Serialized multi-stamp 3D camera projection stack"),
+    )),
+    "mip_safe_dilate": NodeMeta("mip_safe_dilate", "Denoise & Polish", "Mip-Safe Voronoi UV Dilate", "Pure-NumPy Jump-Flooding (JFA+1) Voronoi edge dilation preventing dark cutout halos & mipmap UV seam bleeding (with mip level preview!).", (PortSchema("src", "ANY"),), "ANY", params=(
+        ParamSchema("bleed_px", "int", 8, 0, 32, 1, group="Dilation", tooltip="Bleed radius in pixels (0 = infinite Voronoi fill)"),
+        ParamSchema("alpha_cutoff", "slider", 0.02, 0.0, 0.5, 0.01, group="Dilation"),
+        ParamSchema("preserve_alpha", "checkbox", True, group="Dilation", tooltip="Straight-alpha bleed: dilate RGB outward while preserving transparent alpha"),
+        ParamSchema("mip_preview_level", "int", 0, 0, 4, 1, group="Inspection", tooltip="Preview texture downsampled at GPU mipmap level 0..4"),
+    )),
 }
 
 

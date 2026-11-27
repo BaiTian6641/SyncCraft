@@ -136,6 +136,17 @@ def main(argv=None):
     batch_cmd.add_argument("--max-assets", type=int, default=24)
     batch_cmd.add_argument("--no-embed", action="store_true", help="do not embed PNG data URLs inside .synccraft.pbr.json")
 
+    atlas_cmd = subs.add_parser(
+        "atlas-bake",
+        help="Multi-Material Asset Atlas Baker — MaxRects-BSSF pack multiple .bbmodel/.texdsl assets with mip-safe Voronoi dilation",
+    )
+    atlas_cmd.add_argument("input_dir", type=Path, help="folder containing .bbmodel / .texdsl assets to pack into a shared atlas")
+    atlas_cmd.add_argument("-o", "--out", type=Path, required=True, help="output directory for shared PBR atlas & remapped .bbmodel files")
+    atlas_cmd.add_argument("--stem", default="synccraft_atlas")
+    atlas_cmd.add_argument("--bleed", type=int, default=4, help="mip-safe Voronoi dilation bleed radius in pixels (0..16)")
+    atlas_cmd.add_argument("--canvas", choices=["pot", "tight"], default="pot", help="Power-of-Two (UE5/Unity/glTF) vs Tight multiple-of-16 (Blockbench)")
+    atlas_cmd.add_argument("--max-assets", type=int, default=16)
+
     # Parametric Pixel Composer & Semantic UV v2 CLI
     tg = subs.add_parser(
         "texgraph",
@@ -235,6 +246,18 @@ def main(argv=None):
                 template_texdsl=args.template,
                 max_assets=int(args.max_assets),
                 embed_manifest=not bool(args.no_embed),
+            )
+            print(_json(rep))
+            return 0 if rep.get("ok") else 2
+        elif args.command == "atlas-bake":
+            from synccraft.texgraph.v17_decal_atlas_ops import bake_multi_asset_atlas
+            rep = bake_multi_asset_atlas(
+                args.input_dir,
+                args.out,
+                stem=args.stem,
+                bleed_px=int(args.bleed),
+                canvas_mode=args.canvas,
+                max_assets=int(args.max_assets),
             )
             print(_json(rep))
             return 0 if rep.get("ok") else 2

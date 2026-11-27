@@ -66,6 +66,246 @@
     return out;
   }
 
+  // --------------------------------------------------------------------------
+  // Safe Zero-eval Pure-JS Molang Expression & Blockbench 5.0 Skeletal Evaluator
+  // --------------------------------------------------------------------------
+  const _NUM_RE = /^[-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?$/i;
+
+  function evalMolang(val, animTime) {
+    if (typeof val === 'number') return Number.isFinite(val) ? val : 0;
+    if (val == null) return 0;
+    const s = String(val).trim();
+    if (!s) return 0;
+    if (_NUM_RE.test(s)) return parseFloat(s);
+    // Tokenize safe subset of Molang math expressions (degrees for trig!)
+    const src = s.toLowerCase();
+    let idx = 0;
+    const len = src.length;
+    const skipWs = () => { while (idx < len && src.charCodeAt(idx) <= 32) idx++; };
+
+    const parseExpr = () => parseTernary();
+    const parseTernary = () => {
+      let c = parseCompare();
+      skipWs();
+      if (idx < len && src[idx] === '?') {
+        idx++;
+        const a = parseExpr();
+        skipWs();
+        if (idx < len && src[idx] === ':') idx++;
+        const b = parseExpr();
+        return c ? a : b;
+      }
+      return c;
+    };
+    const parseCompare = () => {
+      let left = parseAddSub();
+      while (true) {
+        skipWs();
+        const two = src.slice(idx, idx + 2);
+        if (two === '<=' || two === '>=' || two === '==' || two === '!=') {
+          idx += 2;
+          const r = parseAddSub();
+          if (two === '<=') left = left <= r ? 1 : 0;
+          else if (two === '>=') left = left >= r ? 1 : 0;
+          else if (two === '==') left = Math.abs(left - r) < 1e-6 ? 1 : 0;
+          else left = Math.abs(left - r) >= 1e-6 ? 1 : 0;
+        } else if (src[idx] === '<' || src[idx] === '>') {
+          const op = src[idx++];
+          const r = parseAddSub();
+          left = op === '<' ? (left < r ? 1 : 0) : (left > r ? 1 : 0);
+        } else break;
+      }
+      return left;
+    };
+    const parseAddSub = () => {
+      let left = parseMulDiv();
+      while (true) {
+        skipWs();
+        const ch = src[idx];
+        if (ch === '+' || ch === '-') {
+          idx++;
+          const r = parseMulDiv();
+          left = ch === '+' ? left + r : left - r;
+        } else break;
+      }
+      return left;
+    };
+    const parseMulDiv = () => {
+      let left = parseUnary();
+      while (true) {
+        skipWs();
+        const ch = src[idx];
+        if (ch === '*' || ch === '/') {
+          idx++;
+          const r = parseUnary();
+          left = ch === '*' ? left * r : (Math.abs(r) > 1e-8 ? left / r : 0);
+        } else break;
+      }
+      return left;
+    };
+    const parseUnary = () => {
+      skipWs();
+      const ch = src[idx];
+      if (ch === '+') { idx++; return parseUnary(); }
+      if (ch === '-') { idx++; return -parseUnary(); }
+      if (ch === '!') { idx++; return parseUnary() ? 0 : 1; }
+      return parsePrimary();
+    };
+    const parsePrimary = () => {
+      skipWs();
+      if (idx >= len) return 0;
+      if (src[idx] === '(') {
+        idx++;
+        const v = parseExpr();
+        skipWs();
+        if (src[idx] === ')') idx++;
+        return v;
+      }
+      // Number literal
+      const start = idx;
+      if ((src[idx] >= '0' && src[idx] <= '9') || src[idx] === '.') {
+        while (idx < len && ((src[idx] >= '0' && src[idx] <= '9') || src[idx] === '.')) idx++;
+        if (idx < len && (src[idx] === 'e' || src[idx] === 'E')) {
+          idx++;
+          if (src[idx] === '+' || src[idx] === '-') idx++;
+          while (idx < len && src[idx] >= '0' && src[idx] <= '9') idx++;
+        }
+        return parseFloat(src.slice(start, idx)) || 0;
+      }
+      // Identifier / function call (query.anim_time, math.sin(...), etc.)
+      while (idx < len && /[a-z0-9_.]/.test(src[idx])) idx++;
+      const ident = src.slice(start, idx);
+      skipWs();
+      if (idx < len && src[idx] === '(') {
+        idx++;
+        const args = [];
+        skipWs();
+        if (src[idx] !== ')') {
+          while (idx < len) {
+            args.push(parseExpr());
+            skipWs();
+            if (src[idx] === ',') { idx++; continue; }
+            break;
+          }
+        }
+        if (src[idx] === ')') idx++;
+        const a0 = args[0] || 0, a1 = args[1] || 0, a2 = args[2] || 0;
+        const D2R = Math.PI / 180.0;
+        const R2D = 180.0 / Math.PI;
+        switch (ident) {
+          case 'math.sin': case 'sin': return Math.sin(a0 * D2R);
+          case 'math.cos': case 'cos': return Math.cos(a0 * D2R);
+          case 'math.tan': case 'tan': return Math.tan(a0 * D2R);
+          case 'math.asin': return Math.asin(Math.max(-1, Math.min(1, a0))) * R2D;
+          case 'math.acos': return Math.acos(Math.max(-1, Math.min(1, a0))) * R2D;
+          case 'math.atan': return Math.atan(a0) * R2D;
+          case 'math.atan2': return Math.atan2(a0, a1) * R2D;
+          case 'math.abs': case 'abs': return Math.abs(a0);
+          case 'math.floor': return Math.floor(a0);
+          case 'math.ceil': return Math.ceil(a0);
+          case 'math.round': return Math.round(a0);
+          case 'math.sqrt': return Math.sqrt(Math.max(0, a0));
+          case 'math.pow': return Math.pow(a0, a1);
+          case 'math.mod': return a1 !== 0 ? a0 % a1 : 0;
+          case 'math.min': return Math.min(a0, a1);
+          case 'math.max': return Math.max(a0, a1);
+          case 'math.clamp': return Math.max(a1, Math.min(a2, a0));
+          case 'math.lerp': return a0 + (a1 - a0) * a2;
+          case 'math.hermite_blend': { const u = Math.max(0, Math.min(1, a0)); return u * u * (3 - 2 * u); }
+          default: return 0;
+        }
+      }
+      if (ident === 'query.anim_time' || ident === 'q.anim_time' || ident === 'query.life_time' || ident === 'q.life_time' || ident === 'time') {
+        return animTime;
+      }
+      if (ident === 'math.pi' || ident === 'pi') return Math.PI;
+      return 0;
+    };
+
+    try {
+      const res = parseExpr();
+      return Number.isFinite(res) ? res : 0;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  function _evalKfVec(kf, animTime, usePost) {
+    const pts = kf.p;
+    const raw = (usePost && pts.length > 1) ? pts[1] : pts[0];
+    return [evalMolang(raw[0], animTime), evalMolang(raw[1], animTime), evalMolang(raw[2], animTime)];
+  }
+
+  function evalBoneChannel(kfs, t, length, loopMode, isScale) {
+    const def = isScale ? [1, 1, 1] : [0, 0, 0];
+    if (!kfs || !kfs.length) return def;
+    const n = kfs.length;
+    if (n === 1) return _evalKfVec(kfs[0], t, false);
+    if (t <= kfs[0].t) return _evalKfVec(kfs[0], t, false);
+    if (t >= kfs[n - 1].t) {
+      const last = kfs[n - 1];
+      return _evalKfVec(last, t, last.p.length > 1);
+    }
+    let i1 = 1;
+    while (i1 < n - 1 && kfs[i1].t < t) i1++;
+    const i0 = i1 - 1;
+    const k0 = kfs[i0];
+    const k1 = kfs[i1];
+    const dt = Math.max(1e-6, k1.t - k0.t);
+    const u = Math.max(0, Math.min(1, (t - k0.t) / dt));
+    const v0 = _evalKfVec(k0, t, k0.p.length > 1);
+    if (k0.i === 'step') return v0;
+    const v1 = _evalKfVec(k1, t, false);
+    if (k0.i === 'catmullrom' || k1.i === 'catmullrom') {
+      const im = i0 > 0 ? i0 - 1 : (loopMode === 'loop' ? n - 1 : 0);
+      const ip = i1 < n - 1 ? i1 + 1 : (loopMode === 'loop' ? 0 : n - 1);
+      const vm = _evalKfVec(kfs[im], t, false);
+      const vp = _evalKfVec(kfs[ip], t, false);
+      const u2 = u * u, u3 = u2 * u;
+      const out = [0, 0, 0];
+      for (let c = 0; c < 3; c++) {
+        out[c] = 0.5 * (
+          (2 * v0[c]) +
+          (-vm[c] + v1[c]) * u +
+          (2 * vm[c] - 5 * v0[c] + 4 * v1[c] - vp[c]) * u2 +
+          (-vm[c] + 3 * v0[c] - 3 * v1[c] + vp[c]) * u3
+        );
+      }
+      return out;
+    }
+    return [
+      v0[0] + (v1[0] - v0[0]) * u,
+      v0[1] + (v1[1] - v0[1]) * u,
+      v0[2] + (v1[2] - v0[2]) * u,
+    ];
+  }
+
+  /** Build 4x4 column-major local bone matrix T(tx,ty,tz) * Rz(rz) * Ry(ry) * Rx(rx) * S(sx,sy,sz). */
+  function m4BoneLocal(tx, ty, tz, rxDeg, ryDeg, rzDeg, sx, sy, sz) {
+    const D2R = Math.PI / 180.0;
+    const rx = rxDeg * D2R, ry = ryDeg * D2R, rz = rzDeg * D2R;
+    const cx = Math.cos(rx), sxr = Math.sin(rx);
+    const cy = Math.cos(ry), syr = Math.sin(ry);
+    const cz = Math.cos(rz), szr = Math.sin(rz);
+    // R = Rz * Ry * Rx (matches Python _euler_xyz_mat exactly!)
+    const r00 = cz * cy;
+    const r01 = cz * syr * sxr - szr * cx;
+    const r02 = cz * syr * cx + szr * sxr;
+    const r10 = szr * cy;
+    const r11 = szr * syr * sxr + cz * cx;
+    const r12 = szr * syr * cx - cz * sxr;
+    const r20 = -syr;
+    const r21 = cy * sxr;
+    const r22 = cy * cx;
+    // Column-major storage for m4Mul
+    return new Float32Array([
+      r00 * sx, r10 * sx, r20 * sx, 0,
+      r01 * sy, r11 * sy, r21 * sy, 0,
+      r02 * sz, r12 * sz, r22 * sz, 0,
+      tx,       ty,       tz,       1,
+    ]);
+  }
+
   function buildBoxGeom(sx, sy, sz, uvScale) {
     const hx = sx * 0.5, hy = sy * 0.5, hz = sz * 0.5;
     const us = uvScale || 1.0;
@@ -389,7 +629,7 @@
     ${GLSL_HDRI_ENV}
     void main() {
       if (uShowBg == 0) {
-        vec3 base = mix(vec3(0.082, 0.095, 0.122), vec3(0.122, 0.140, 0.176), vUv.y);
+        vec3 base = mix(vec3(0.086, 0.090, 0.100), vec3(0.126, 0.132, 0.146), vUv.y);
         gl_FragColor = vec4(base, 1.0);
         return;
       }
@@ -517,6 +757,8 @@
       this.lightDragMode = false;
       this.pickMode = false;
       this.brushMode = false;
+      this.decalMode = false;
+      this.showBones = false;
       this.splitWipe = false;
       this.splitPos = 0.5;
       this.splitRightChannel = 'normal';
@@ -526,7 +768,25 @@
       this.onPickPart = null;
       this.onHoverPart = null;
       this.onBrush3d = null;
+      this.onDecalStamp = null;
       this.onLightChange = null;
+      this.onSkelTimeUpdate = null;
+
+      // Live Blockbench 5.0 Skeletal Animation State
+      this.bones = [];
+      this.animations = [];
+      this.skelClipIdx = -1;
+      this.skelTime = 0.0;
+      this.skelPlaying = false;
+      this.skelSpeed = 1.0;
+      this._boneLineCount = 0;
+      this._boneJointCount = 0;
+      this._bbBounds = null;
+      this._bbScale = 1.0;
+      this._skinPos = null;
+      this._skinNrm = null;
+      this._skinTan = null;
+      this._lastSkelHudPush = 0;
 
       this.primitive = 'bbmodel';
       this.channel = 'pbr_lit';
@@ -563,6 +823,23 @@
         this._lastT = t;
         if (this.spin && !this._dragging && !this._lightDragging && !this._brushDragging) {
           this.yaw += dt * 0.36;
+        }
+        if (this.skelPlaying && this.hasBBModel && this.skelClipIdx >= 0 && this.skelClipIdx < this.animations.length) {
+          const clip = this.animations[this.skelClipIdx];
+          const len = Math.max(0.05, clip.length || 1.0);
+          let nextT = this.skelTime + dt * (this.skelSpeed || 1.0);
+          if (clip.loop === 'loop' || clip.loop === true) {
+            nextT = ((nextT % len) + len) % len;
+          } else if (nextT >= len) {
+            nextT = len;
+            this.skelPlaying = false;
+          }
+          this.skelTime = nextT;
+          this._updateSkelPose(nextT);
+          if (this.onSkelTimeUpdate && (t - this._lastSkelHudPush) > 45) {
+            this._lastSkelHudPush = t;
+            this.onSkelTimeUpdate(this.skelTime, len, this.skelPlaying);
+          }
         }
         this.render();
         requestAnimationFrame(loop);
@@ -679,6 +956,8 @@
       gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, -1,1, 1,-1, 1,1]), gl.STATIC_DRAW);
 
       this.lightGizmoBuf = gl.createBuffer();
+      this.boneLinesBuf = gl.createBuffer();
+      this.boneJointsBuf = gl.createBuffer();
 
       this.textures = {
         albedo: this._makeSolidTex([180, 180, 180, 255]),
@@ -716,30 +995,325 @@
     }
 
     setBBModelMesh(mesh) {
+      const prevClipName = (this.skelClipIdx >= 0 && this.animations[this.skelClipIdx]) ? this.animations[this.skelClipIdx].name : null;
+      const prevTime = this.skelTime;
+      const prevPlaying = this.skelPlaying;
+
       this.bbMeshRaw = mesh || null;
       this.elemMeta = (mesh && mesh.elem_meta) || [];
+      this.bones = (mesh && Array.isArray(mesh.bones)) ? mesh.bones : [];
+      this.animations = (mesh && Array.isArray(mesh.animations)) ? mesh.animations : [];
       this.hasBBModel = !!(mesh && mesh.positions && mesh.positions.length >= 9);
       this.highlightPickId = 0;
-      if (!this.isWebGL || !this.hasBBModel) return;
+      this._boneLineCount = 0;
+      this._boneJointCount = 0;
+
+      if (!this.isWebGL || !this.hasBBModel) {
+        this.skelClipIdx = -1;
+        this.skelTime = 0;
+        this.skelPlaying = false;
+        return;
+      }
       const b = mesh.bounds;
       const cx = b.center[0], cy = b.center[1], cz = b.center[2];
       const sc = 1.2 / Math.max(1.0, b.radius);
+      this._bbBounds = b;
+      this._bbScale = sc;
       const pos = new Float32Array(mesh.positions.length);
       for (let i = 0; i < mesh.positions.length; i += 3) {
         pos[i] = (mesh.positions[i] - cx) * sc;
         pos[i + 1] = (mesh.positions[i + 1] - cy) * sc;
         pos[i + 2] = (mesh.positions[i + 2] - cz) * sc;
       }
-      this.geoms.bbmodel = this._uploadGeom({
-        positions: pos,
-        normals: mesh.normals,
-        tangents: mesh.tangents,
-        uvs: mesh.uvs,
-        pick_ids: mesh.pick_ids,
+      this._restPos = pos;
+      this._restNrm = new Float32Array(mesh.normals);
+      this._restTan = new Float32Array(mesh.tangents);
+      this._skinPos = new Float32Array(pos.length);
+      this._skinNrm = new Float32Array(mesh.normals.length);
+      this._skinTan = new Float32Array(mesh.tangents.length);
+
+      const gl = this.gl;
+      const mkDyn = (arr) => {
+        const buf = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(arr), gl.DYNAMIC_DRAW);
+        return buf;
+      };
+      const mkStat = (arr) => {
+        const buf = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(arr), gl.STATIC_DRAW);
+        return buf;
+      };
+      const picks = mesh.pick_ids && mesh.pick_ids.length === mesh.vertex_count ? mesh.pick_ids : new Float32Array(mesh.vertex_count);
+      this.geoms.bbmodel = {
+        pos: mkDyn(pos),
+        nrm: mkDyn(mesh.normals),
+        tan: mkDyn(mesh.tangents),
+        uv: mkStat(mesh.uvs),
+        pick: mkStat(picks),
         count: mesh.vertex_count,
-      });
+      };
       const minY = (b.min[1] - cy) * sc - 0.02;
       this._uploadGridBuffers(minY);
+
+      // Preserve active skeletal animation across texture re-evaluations of the same rig!
+      let restoredIdx = -1;
+      if (prevClipName) {
+        restoredIdx = this.animations.findIndex((a) => a.name === prevClipName);
+      }
+      if (restoredIdx >= 0) {
+        this.skelClipIdx = restoredIdx;
+        this.skelTime = Math.min(prevTime, this.animations[restoredIdx].length || 1.0);
+        this.skelPlaying = prevPlaying;
+        this._updateSkelPose(this.skelTime);
+      } else {
+        this.skelClipIdx = -1;
+        this.skelTime = 0.0;
+        this.skelPlaying = false;
+        this._updateSkelPose(0.0);
+      }
+    }
+
+    setSkeletonClip(idx, autoPlay) {
+      if (!this.hasBBModel || !this.animations.length || idx < 0 || idx >= this.animations.length) {
+        this.skelClipIdx = -1;
+        this.skelTime = 0.0;
+        this.skelPlaying = false;
+        this._updateSkelPose(0.0);
+        if (this.onSkelTimeUpdate) this.onSkelTimeUpdate(0, 1, false);
+        return;
+      }
+      this.skelClipIdx = idx;
+      this.skelTime = 0.0;
+      this.skelPlaying = autoPlay !== false;
+      this._updateSkelPose(0.0);
+      const clip = this.animations[idx];
+      if (this.onSkelTimeUpdate) this.onSkelTimeUpdate(0, clip.length || 1.0, this.skelPlaying);
+    }
+
+    setSkeletonTime(t) {
+      if (!this.hasBBModel || this.skelClipIdx < 0 || this.skelClipIdx >= this.animations.length) return;
+      const clip = this.animations[this.skelClipIdx];
+      const len = Math.max(0.05, clip.length || 1.0);
+      this.skelTime = Math.max(0, Math.min(len, Number(t) || 0));
+      this._updateSkelPose(this.skelTime);
+      if (this.onSkelTimeUpdate) this.onSkelTimeUpdate(this.skelTime, len, this.skelPlaying);
+    }
+
+    setSkeletonPlaying(on) {
+      if (!this.hasBBModel || !this.animations.length) {
+        this.skelPlaying = false;
+        return;
+      }
+      if (on && this.skelClipIdx < 0) {
+        this.skelClipIdx = 0;
+        this.skelTime = 0.0;
+      }
+      this.skelPlaying = !!on;
+      const clip = this.animations[this.skelClipIdx];
+      this._updateSkelPose(this.skelTime);
+      if (this.onSkelTimeUpdate && clip) this.onSkelTimeUpdate(this.skelTime, clip.length || 1.0, this.skelPlaying);
+    }
+
+    _updateSkelPose(t) {
+      if (!this.isWebGL || !this.hasBBModel || !this.geoms.bbmodel || !this.bbMeshRaw || !this._bbBounds) return;
+      const mesh = this.bbMeshRaw;
+      const bones = this.bones || [];
+      const b = this._bbBounds;
+      const cx = b.center[0], cy = b.center[1], cz = b.center[2];
+      const sc = this._bbScale;
+      const clip = (this.skelClipIdx >= 0 && this.skelClipIdx < this.animations.length) ? this.animations[this.skelClipIdx] : null;
+      const tracks = (clip && clip.tracks) || {};
+      const clipLen = clip ? (clip.length || 1.0) : 1.0;
+      const clipLoop = clip ? clip.loop : 'loop';
+
+      // 1. Compute Forward-Kinematics M_world[bi] for every bone (parent-before-child order!)
+      const worldMats = new Array(bones.length);
+      for (let bi = 0; bi < bones.length; bi++) {
+        const bn = bones[bi];
+        const pIdx = bn.parent;
+        const pOrig = (pIdx >= 0 && pIdx < bones.length) ? bones[pIdx].origin : [0, 0, 0];
+        let dx = bn.origin[0] - pOrig[0];
+        let dy = bn.origin[1] - pOrig[1];
+        let dz = bn.origin[2] - pOrig[2];
+        let rx = bn.rest_rot[0], ry = bn.rest_rot[1], rz = bn.rest_rot[2];
+        let sx = 1, sy = 1, sz = 1;
+
+        const tr = clip ? tracks[String(bi)] : null;
+        if (tr) {
+          if (tr.position) {
+            const dp = evalBoneChannel(tr.position, t, clipLen, clipLoop, false);
+            dx += dp[0]; dy += dp[1]; dz += dp[2];
+          }
+          if (tr.rotation) {
+            const dr = evalBoneChannel(tr.rotation, t, clipLen, clipLoop, false);
+            rx += dr[0]; ry += dr[1]; rz += dr[2];
+          }
+          if (tr.scale) {
+            const ds = evalBoneChannel(tr.scale, t, clipLen, clipLoop, true);
+            sx = ds[0]; sy = ds[1]; sz = ds[2];
+          }
+        }
+        const mLoc = m4BoneLocal(dx, dy, dz, rx, ry, rz, sx, sy, sz);
+        worldMats[bi] = (pIdx >= 0 && worldMats[pIdx]) ? m4Mul(worldMats[pIdx], mLoc) : mLoc;
+      }
+
+      // 2. Build 3D X-Ray Bone Hierarchy Gizmo buffers (limbs + joint markers)
+      const gl = this.gl;
+      const bLines = [];
+      const jLines = [];
+      const jRad = 0.032;
+      for (let bi = 0; bi < bones.length; bi++) {
+        const m = worldMats[bi];
+        const jx = (m[12] - cx) * sc;
+        const jy = (m[13] - cy) * sc;
+        const jz = (m[14] - cz) * sc;
+        // Amber joint crosshair marker
+        jLines.push(jx - jRad, jy, jz, jx + jRad, jy, jz);
+        jLines.push(jx, jy - jRad, jz, jx, jy + jRad, jz);
+        jLines.push(jx, jy, jz - jRad, jx, jy, jz + jRad);
+        const pIdx = bones[bi].parent;
+        if (pIdx >= 0 && worldMats[pIdx]) {
+          const pm = worldMats[pIdx];
+          const px = (pm[12] - cx) * sc;
+          const py = (pm[13] - cy) * sc;
+          const pz = (pm[14] - cz) * sc;
+          bLines.push(px, py, pz, jx, jy, jz);
+        }
+      }
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.boneLinesBuf);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(bLines), gl.DYNAMIC_DRAW);
+      this._boneLineCount = bLines.length / 3;
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.boneJointsBuf);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(jLines), gl.DYNAMIC_DRAW);
+      this._boneJointCount = jLines.length / 3;
+
+      // 3. Transform bone-local vertices into posed GPU vertex buffers (or restore exact rest buffers in Bind Pose!)
+      const g = this.geoms.bbmodel;
+      if (!clip || !mesh.local_positions || !mesh.bone_ids || mesh.bone_ids.length !== mesh.vertex_count) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, g.pos);
+        gl.bufferSubData(gl.ARRAY_BUFFER, 0, this._restPos);
+        gl.bindBuffer(gl.ARRAY_BUFFER, g.nrm);
+        gl.bufferSubData(gl.ARRAY_BUFFER, 0, this._restNrm);
+        gl.bindBuffer(gl.ARRAY_BUFFER, g.tan);
+        gl.bufferSubData(gl.ARRAY_BUFFER, 0, this._restTan);
+        return;
+      }
+
+      const lPos = mesh.local_positions;
+      const lNrm = mesh.local_normals;
+      const lTan = mesh.local_tangents;
+      const bIds = mesh.bone_ids;
+      const outP = this._skinPos;
+      const outN = this._skinNrm;
+      const outT = this._skinTan;
+      const vCount = mesh.vertex_count;
+
+      for (let v = 0; v < vCount; v++) {
+        const bi = bIds[v];
+        const i3 = v * 3;
+        const px = lPos[i3], py = lPos[i3 + 1], pz = lPos[i3 + 2];
+        const nx = lNrm[i3], ny = lNrm[i3 + 1], nz = lNrm[i3 + 2];
+        const tx = lTan[i3], ty = lTan[i3 + 1], tz = lTan[i3 + 2];
+        if (bi >= 0 && bi < worldMats.length) {
+          const m = worldMats[bi];
+          const wx = m[0] * px + m[4] * py + m[8] * pz + m[12];
+          const wy = m[1] * px + m[5] * py + m[9] * pz + m[13];
+          const wz = m[2] * px + m[6] * py + m[10] * pz + m[14];
+          outP[i3] = (wx - cx) * sc;
+          outP[i3 + 1] = (wy - cy) * sc;
+          outP[i3 + 2] = (wz - cz) * sc;
+
+          let rnx = m[0] * nx + m[4] * ny + m[8] * nz;
+          let rny = m[1] * nx + m[5] * ny + m[9] * nz;
+          let rnz = m[2] * nx + m[6] * ny + m[10] * nz;
+          const nl = Math.hypot(rnx, rny, rnz) || 1;
+          outN[i3] = rnx / nl; outN[i3 + 1] = rny / nl; outN[i3 + 2] = rnz / nl;
+
+          let rtx = m[0] * tx + m[4] * ty + m[8] * tz;
+          let rty = m[1] * tx + m[5] * ty + m[9] * tz;
+          let rtz = m[2] * tx + m[6] * ty + m[10] * tz;
+          const tl = Math.hypot(rtx, rty, rtz) || 1;
+          outT[i3] = rtx / tl; outT[i3 + 1] = rty / tl; outT[i3 + 2] = rtz / tl;
+        } else {
+          outP[i3] = (px - cx) * sc;
+          outP[i3 + 1] = (py - cy) * sc;
+          outP[i3 + 2] = (pz - cz) * sc;
+          outN[i3] = nx; outN[i3 + 1] = ny; outN[i3 + 2] = nz;
+          outT[i3] = tx; outT[i3 + 1] = ty; outT[i3 + 2] = tz;
+        }
+      }
+      gl.bindBuffer(gl.ARRAY_BUFFER, g.pos);
+      gl.bufferSubData(gl.ARRAY_BUFFER, 0, outP);
+      gl.bindBuffer(gl.ARRAY_BUFFER, g.nrm);
+      gl.bufferSubData(gl.ARRAY_BUFFER, 0, outN);
+      gl.bindBuffer(gl.ARRAY_BUFFER, g.tan);
+      gl.bufferSubData(gl.ARRAY_BUFFER, 0, outT);
+    }
+
+    /** Compute exact `.bbmodel`-space 3D decal projector basis through a viewport click (or viewport center). */
+    getCameraProjectorAt(clientX, clientY) {
+      const rect = this.canvas.getBoundingClientRect();
+      const nx = (clientX != null) ? (clientX - rect.left) / Math.max(1, rect.width) : 0.5;
+      const ny = (clientY != null) ? (clientY - rect.top) / Math.max(1, rect.height) : 0.5;
+      const ndcX = nx * 2.0 - 1.0;
+      const ndcY = 1.0 - ny * 2.0;
+
+      const eye = [
+        Math.cos(this.pitch) * Math.sin(this.yaw) * this.dist,
+        Math.sin(this.pitch) * this.dist,
+        Math.cos(this.pitch) * Math.cos(this.yaw) * this.dist,
+      ];
+      const tgt = [0, -0.09, 0];
+      let fx = tgt[0] - eye[0], fy = tgt[1] - eye[1], fz = tgt[2] - eye[2];
+      const fl = Math.hypot(fx, fy, fz) || 1;
+      fx /= fl; fy /= fl; fz /= fl;
+
+      // Camera right = normalize(cross(fwd, worldUp))
+      let rx = fy * 0 - fz * 1, ry = fz * 0 - fx * 0, rz = fx * 1 - fy * 0;
+      const rl = Math.hypot(rx, ry, rz) || 1;
+      rx /= rl; ry /= rl; rz /= rl;
+      // Camera up = normalize(cross(right, fwd))
+      const ux = ry * fz - rz * fy;
+      const uy = rz * fx - rx * fz;
+      const uz = rx * fy - ry * fx;
+
+      const aspect = Math.max(0.1, rect.width / Math.max(1, rect.height));
+      const tanHalf = Math.tan(20 * Math.PI / 180);
+      let dx = fx + rx * ndcX * tanHalf * aspect + ux * ndcY * tanHalf;
+      let dy = fy + ry * ndcX * tanHalf * aspect + uy * ndcY * tanHalf;
+      let dz = fz + rz * ndcX * tanHalf * aspect + uz * ndcY * tanHalf;
+      const dl = Math.hypot(dx, dy, dz) || 1;
+      dx /= dl; dy /= dl; dz /= dl;
+
+      // Orthonormalize projector right/up around the exact clicked ray direction
+      let prx = dy * uz - dz * uy;
+      let pry = dz * ux - dx * uz;
+      let prz = dx * uy - dy * ux;
+      const prl = Math.hypot(prx, pry, prz) || 1;
+      prx /= prl; pry /= prl; prz /= prl;
+      const pux = pry * dz - prz * dy;
+      const puy = prz * dx - prx * dz;
+      const puz = prx * dy - pry * dx;
+
+      // Map camera eye into .bbmodel world space (any surface along ray `eye + t*rayDir` projects cleanly to u=0.5, v=0.5!)
+      let origin = [0, 12, 24];
+      if (this._bbBounds && this._bbScale > 1e-6) {
+        const c = this._bbBounds.center;
+        const invS = 1.0 / this._bbScale;
+        origin = [eye[0] * invS + c[0], eye[1] * invS + c[1], eye[2] * invS + c[2]];
+      }
+      return {
+        origin: origin.map((v) => Number(v.toFixed(4))),
+        forward: [dx, dy, dz].map((v) => Number(v.toFixed(5))),
+        right: [prx, pry, prz].map((v) => Number(v.toFixed(5))),
+        up: [pux, puy, puz].map((v) => Number(v.toFixed(5))),
+      };
+    }
+
+    getCenterCameraProjector() {
+      return this.getCameraProjectorAt(null, null);
     }
 
     _uploadImgToTex(tex, img, wrapRepeat) {
@@ -1055,7 +1629,18 @@
       this._dragging = false;
       this._dragMoved = false;
       let lx = 0, ly = 0;
+      this.canvas.addEventListener('contextmenu', (e) => {
+        if (this.decalMode || this.brushMode) e.preventDefault();
+      });
       this.canvas.addEventListener('pointerdown', (e) => {
+        // 0. 3D Camera-Projected Decal Stamping (left-click stamps through exact cursor ray; right-drag still orbits!)
+        if (this.decalMode && e.button === 0 && !e.shiftKey && !e.altKey) {
+          if (this.onDecalStamp) {
+            const proj = this.getCameraProjectorAt(e.clientX, e.clientY);
+            this.onDecalStamp(proj);
+          }
+          return;
+        }
         // 1. Direct 3D Brush Mask Painting
         if (this.brushMode && e.button === 0) {
           const hit = this.pickUvAt(e.clientX, e.clientY);
@@ -1323,6 +1908,26 @@
         gl.enableVertexAttribArray(lPos);
         gl.vertexAttribPointer(lPos, 3, gl.FLOAT, false, 0, 0);
         gl.drawArrays(gl.LINES, 0, geom.count);
+      }
+
+      // Optional X-Ray 3D Skeletal Bone Hierarchy Gizmo Overlay (cyan limbs + amber joints!)
+      if (this.showBones && this.hasBBModel && this.primitive === 'bbmodel' && this._boneJointCount > 0) {
+        gl.disable(gl.DEPTH_TEST);
+        gl.useProgram(this.progLine);
+        gl.uniformMatrix4fv(gl.getUniformLocation(this.progLine, 'uMvp'), false, mvp);
+        if (this._boneLineCount > 0) {
+          gl.uniform4f(gl.getUniformLocation(this.progLine, 'uColor'), 0.22, 0.88, 1.0, 0.92);
+          gl.bindBuffer(gl.ARRAY_BUFFER, this.boneLinesBuf);
+          gl.enableVertexAttribArray(lPos);
+          gl.vertexAttribPointer(lPos, 3, gl.FLOAT, false, 0, 0);
+          gl.drawArrays(gl.LINES, 0, this._boneLineCount);
+        }
+        gl.uniform4f(gl.getUniformLocation(this.progLine, 'uColor'), 0.98, 0.78, 0.24, 0.96);
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.boneJointsBuf);
+        gl.enableVertexAttribArray(lPos);
+        gl.vertexAttribPointer(lPos, 3, gl.FLOAT, false, 0, 0);
+        gl.drawArrays(gl.LINES, 0, this._boneJointCount);
+        gl.enable(gl.DEPTH_TEST);
       }
 
       // 3. Post-Process Emissive Bloom Pass -> Screen

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>SyncCraft Studio — Commercial Procedural Texture &amp; 3D PBR Workstation</title>
+  <title>SyncCraft Studio · Procedural Texture &amp; 3D PBR Workstation</title>
   <link rel="stylesheet" href="/assets/studio.css" />
 </head>
 <body>
@@ -15,7 +15,7 @@
       <div class="brand">
         <div class="brand-mark">SC</div>
         <span>SyncCraft Studio</span>
-        <span class="brand-sub" id="versionBadge">v16 · 230</span>
+        <span class="brand-sub" id="versionBadge">v17 · 232</span>
       </div>
 
       <select id="projectSelect" class="sel-input" title="Load Flagship Sample or Built-in Preset" style="width: 132px;"></select>
@@ -98,35 +98,29 @@
         </div>
 
         <div class="viewport-toolbar">
-          <div class="topbar-group vp-tools-wrap" id="vpTools3d">
-            <select id="primSelect" class="sel-input" style="height:21px;font-size:10px;max-width:86px;padding:0 4px;" title="3D Preview Geometry">
+          <div class="topbar-group vp-tools-single" id="vpTools3d">
+            <div class="seg-group vp-mode-rail" id="vpModeRail" title="3D Viewport Interaction Tool">
+              <button class="seg-btn active" id="btnOrbit3d" title="Orbit Camera (Drag)">Orbit</button>
+              <button class="seg-btn" id="btnPickPart" title="Click 3D model to mask that body part (Alt+Click)">Pick</button>
+              <button class="seg-btn" id="btnBrush3d" title="Paint mask or multi-channel PBR layers directly in 3D">Paint</button>
+              <button class="seg-btn" id="btnDecal3d" title="Project 3D camera-space PBR decals seamlessly across UV seams">Decal</button>
+              <button class="seg-btn" id="btnLightDrag" title="Drag viewport to orbit Key Light and HDRI sky (Shift+Drag)">Light</button>
+            </div>
+            <select id="primSelect" class="sel-input vp-prim-sel" title="3D Preview Geometry">
               <option value="bbmodel">.bbmodel</option>
-              <option value="cube">Block Cube</option>
+              <option value="cube">Cube</option>
               <option value="wall">3×3 Wall</option>
               <option value="pillar">Pillar</option>
               <option value="sphere">Sphere</option>
             </select>
-            <button class="btn sm" id="btnPickPart" title="Click 3D model to mask that exact body part (or Alt+Click)">🎯 Pick</button>
-            <button class="btn sm" id="btnBrush3d" title="Paint custom grayscale mask directly onto the 3D model surface!">🖌 Brush</button>
-            <button class="btn sm" id="btnLightDrag" title="Drag in 3D viewport to spin HDRI &amp; Key Light Direction (or Shift+Drag)">☀ Light</button>
-            <button class="btn sm" id="btnSplitWipe" title="Toggle Split Before/After Channel Comparison Wipe">◧ Wipe</button>
-            <button class="btn sm" id="btnRecordGif" title="Record 360° 3D Turntable Animated GIF">🎬 GIF</button>
-            <button class="btn sm" id="btnSpin3d" title="Auto-Turntable">Spin</button>
-            <button class="btn sm" id="btnWire3d" title="Toggle Mesh Edges">Wire</button>
-            <button class="btn sm active" id="btnEnvBg3d" title="Toggle Procedural HDRI Environment Backdrop">Env</button>
-            <button class="btn sm" id="btnResetCam3d" title="Reset Orbit Camera">Reset</button>
-            <select id="lightingPresetSelect" class="sel-input" style="height:21px;font-size:10px;max-width:88px;padding:0 4px;margin-left:auto;" title="Procedural Studio HDRI Lighting Rig">
-              <option value="studio_hero">Studio HDRI</option>
-              <option value="sunset_forge">Sunset Forge</option>
-              <option value="cyber_neon">Cyber Neon</option>
-              <option value="dramatic_rim">Dramatic Rim</option>
-              <option value="high_noon">High Noon</option>
-              <option value="moonlit_obsidian">Moonlit</option>
-            </select>
+            <div class="vp-pop-triggers">
+              <button class="btn sm" id="btnLightingPop" title="Studio HDRI Rig, Light Angle, Clearcoat and Bloom">Lighting ▾</button>
+              <button class="btn sm" id="btnViewPop" title="Environment Sky, Wireframe, X-Ray Bones, Wipe and GIF">View ▾</button>
+            </div>
           </div>
           <div class="topbar-group vp-tools-wrap" id="vpTools2d" style="display:none;">
-            <button class="btn sm" id="btnPickPart2d" title="Click any UV island on 2D canvas to mask that 3D body part!">🎯 Pick UV</button>
-            <button class="btn sm" id="btnBrush2d" title="Paint custom grayscale mask directly onto 2D UV Canvas!">🖌 Brush</button>
+            <button class="btn sm" id="btnPickPart2d" title="Click any UV island on 2D canvas to mask that 3D body part">Pick UV</button>
+            <button class="btn sm" id="btnBrush2d" title="Paint mask or PBR layers directly on 2D UV Canvas">Paint</button>
             <button class="btn sm" id="btnUvWire2d" title="Toggle 3D .bbmodel UV Wireframe Overlay">UV Wire</button>
             <button class="btn sm" id="btnTile3x3" title="Toggle 3x3 Seamless Wrap Verification">3×3 Tile</button>
             <button class="btn sm" id="btnZoom2dFit" title="Fit 2D View">Fit</button>
@@ -135,46 +129,106 @@
           </div>
         </div>
 
-        <div class="brush-subbar" id="brushToolbar" style="display:none;">
-          <div class="brush-row">
-            <div class="seg-group" title="Switch between Grayscale Mask Brush and Multi-Channel 3D PBR Paint Stack">
-              <button class="seg-btn active" id="btnBrushModeMask">Mask</button>
-              <button class="seg-btn" id="btnBrushModePbr">PBR Layers</button>
-            </div>
-            <input type="range" id="brushSizeSlider" min="2" max="24" value="6" style="width:58px;" />
-            <span class="vp-val" id="brushSizeVal">6px</span>
-            <span id="brushMaskControls" style="display:inline-flex;gap:3px;align-items:center;">
-              <button class="btn sm active" id="btnBrushAdd" title="Paint White (Mask Include)">+ Add</button>
-              <button class="btn sm" id="btnBrushErase" title="Erase Black (Mask Exclude)">− Erase</button>
-              <button class="btn sm danger-hover" id="btnBrushClear" title="Clear Mask Buffer">Clear</button>
-            </span>
-            <span id="brushPbrControls" style="display:none;gap:3px;align-items:center;">
-              <select id="pbrBrushPresetSelect" class="sel-input" style="height:20px;font-size:10px;max-width:86px;padding:0 3px;" title="Multi-Channel PBR Brush Preset">
-                <option value="gold_trim">Gold Trim</option>
-                <option value="chipped_steel">Forged Steel</option>
-                <option value="arcane_glow">Arcane Glow</option>
-                <option value="amethyst_rune">Amethyst Rune</option>
-                <option value="worn_rust">Worn Rust</option>
-                <option value="matte_ink">Shadow Ink</option>
-                <option value="eraser">Eraser</option>
-              </select>
-              <input type="color" id="pbrBrushColor" value="#F0C85A" style="width:22px;height:20px;border:1px solid var(--border-subtle);background:none;padding:0;cursor:pointer;" title="Albedo Brush Color" />
-              <button class="btn sm" id="btnPbrAddLayer" title="Add New PBR Paint Layer">+ Lyr</button>
-              <button class="btn sm danger-hover" id="btnPbrClearLayer" title="Clear Active PBR Paint Layer">Clear</button>
-            </span>
-          </div>
-          <div class="brush-pbr-channels" id="brushPbrChannels" style="display:none;">
-            <span class="vp-lbl">R</span><input type="range" id="pbrBrushRough" min="0.05" max="0.98" step="0.02" value="0.18" />
-            <span class="vp-lbl">M</span><input type="range" id="pbrBrushMetal" min="0" max="1" step="0.02" value="0.95" />
-            <span class="vp-lbl">H</span><input type="range" id="pbrBrushHeight" min="0" max="1" step="0.02" value="0.78" />
-            <span class="vp-lbl">E</span><input type="range" id="pbrBrushEmissive" min="0" max="1" step="0.05" value="0.0" />
-            <div class="pbr-layer-pills" id="pbrLayerPills"></div>
-          </div>
-        </div>
-
         <div class="viewport-stage" id="viewportStage">
           <canvas id="gl3dCanvas"></canvas>
           <canvas id="canvas2d" style="display:none;"></canvas>
+
+          <!-- Floating Paint Subbar (zero vertical canvas reflow!) -->
+          <div class="vp-floating-bar brush-subbar" id="brushToolbar" style="display:none;">
+            <div class="brush-row">
+              <div class="seg-group" title="Switch between Grayscale Mask Brush and Multi-Channel 3D PBR Paint Stack">
+                <button class="seg-btn active" id="btnBrushModeMask">Mask</button>
+                <button class="seg-btn" id="btnBrushModePbr">PBR Layers</button>
+              </div>
+              <input type="range" id="brushSizeSlider" min="2" max="24" value="6" style="width:58px;" />
+              <span class="vp-val" id="brushSizeVal">6px</span>
+              <span id="brushMaskControls" style="display:inline-flex;gap:3px;align-items:center;">
+                <button class="btn sm active" id="btnBrushAdd" title="Paint White (Mask Include)">+ Add</button>
+                <button class="btn sm" id="btnBrushErase" title="Erase Black (Mask Exclude)">− Erase</button>
+                <button class="btn sm danger-hover" id="btnBrushClear" title="Clear Mask Buffer">Clear</button>
+              </span>
+              <span id="brushPbrControls" style="display:none;gap:3px;align-items:center;">
+                <select id="pbrBrushPresetSelect" class="sel-input" style="height:20px;font-size:10px;max-width:86px;padding:0 3px;" title="Multi-Channel PBR Brush Preset">
+                  <option value="gold_trim">Gold Trim</option>
+                  <option value="chipped_steel">Forged Steel</option>
+                  <option value="arcane_glow">Arcane Glow</option>
+                  <option value="amethyst_rune">Amethyst Rune</option>
+                  <option value="worn_rust">Worn Rust</option>
+                  <option value="matte_ink">Shadow Ink</option>
+                  <option value="eraser">Eraser</option>
+                </select>
+                <input type="color" id="pbrBrushColor" value="#F0C85A" style="width:22px;height:20px;border:1px solid var(--border-subtle);background:none;padding:0;cursor:pointer;" title="Albedo Brush Color" />
+                <button class="btn sm" id="btnPbrAddLayer" title="Add New PBR Paint Layer">+ Lyr</button>
+                <button class="btn sm danger-hover" id="btnPbrClearLayer" title="Clear Active PBR Paint Layer">Clear</button>
+              </span>
+            </div>
+            <div class="brush-pbr-channels" id="brushPbrChannels" style="display:none;">
+              <span class="vp-lbl">R</span><input type="range" id="pbrBrushRough" min="0.05" max="0.98" step="0.02" value="0.18" />
+              <span class="vp-lbl">M</span><input type="range" id="pbrBrushMetal" min="0" max="1" step="0.02" value="0.95" />
+              <span class="vp-lbl">H</span><input type="range" id="pbrBrushHeight" min="0" max="1" step="0.02" value="0.78" />
+              <span class="vp-lbl">E</span><input type="range" id="pbrBrushEmissive" min="0" max="1" step="0.05" value="0.0" />
+              <div class="pbr-layer-pills" id="pbrLayerPills"></div>
+            </div>
+          </div>
+
+          <!-- Floating 3D Camera-Projected Decal Stamp Overlay (zero vertical canvas reflow!) -->
+          <div class="vp-floating-bar decal-subbar" id="decalToolbar" style="display:none;">
+            <div class="brush-row">
+              <select id="decalStencilSelect" class="sel-input" style="height:21px;font-size:10px;max-width:136px;padding:0 4px;" title="3D Projected PBR Stencil Preset"></select>
+              <input type="color" id="decalTintColor" value="#F0C85A" style="width:22px;height:21px;border:1px solid var(--border-subtle);background:none;padding:0;cursor:pointer;" title="Decal Tint Color" />
+              <button class="btn sm primary" id="btnDecalStampCenter" title="Project decal from current camera center onto model">Stamp</button>
+              <button class="btn sm" id="btnDecalUndo" title="Remove last projected decal">Undo</button>
+              <button class="btn sm danger-hover" id="btnDecalClear" title="Clear all projected decals">Clear</button>
+              <span class="vp-val" id="decalStackCount" style="margin-left:auto;">0</span>
+            </div>
+            <div class="decal-sliders-grid">
+              <span class="vp-lbl">Size</span><input type="range" id="decalScaleSlider" min="3" max="24" step="0.5" value="10" /><span class="vp-val" id="decalScaleVal">10</span>
+              <span class="vp-lbl">Roll</span><input type="range" id="decalRollSlider" min="-180" max="180" step="5" value="0" /><span class="vp-val" id="decalRollVal">0°</span>
+              <span class="vp-lbl">Angle</span><input type="range" id="decalAngleSlider" min="25" max="88" step="1" value="72" /><span class="vp-val" id="decalAngleVal">72°</span>
+              <span class="vp-lbl">Opac</span><input type="range" id="decalOpacitySlider" min="0.1" max="1.0" step="0.05" value="0.95" /><span class="vp-val" id="decalOpacityVal">95%</span>
+            </div>
+          </div>
+
+          <!-- Center Decal Targeting Reticle (shown in Decal mode) -->
+          <div class="decal-reticle" id="decalReticle" style="display:none;" aria-hidden="true"></div>
+
+          <!-- Translucent Lighting Popover (collapsed out of default viewport chrome!) -->
+          <div class="vp-popover" id="lightingPopover" style="display:none;">
+            <div class="vp-pop-head">
+              <span>Studio lighting &amp; HDRI</span>
+              <select id="lightingPresetSelect" class="sel-input" style="height:22px;font-size:10.5px;width:118px;" title="Procedural Studio HDRI Lighting Rig">
+                <option value="studio_hero">Studio HDRI</option>
+                <option value="sunset_forge">Sunset Forge</option>
+                <option value="cyber_neon">Cyber Neon</option>
+                <option value="dramatic_rim">Dramatic Rim</option>
+                <option value="high_noon">High Noon</option>
+                <option value="moonlit_obsidian">Moonlit</option>
+              </select>
+            </div>
+            <div class="vp-pop-grid">
+              <span class="vp-lbl">Key Azimuth</span><input type="range" id="lightAzSlider" min="-180" max="180" value="-38" /><span class="vp-val" id="lightAzVal">-38°</span>
+              <span class="vp-lbl">Key Elevation</span><input type="range" id="lightElSlider" min="10" max="85" value="52" /><span class="vp-val" id="lightElVal">52°</span>
+              <span class="vp-lbl">HDRI Rotation</span><input type="range" id="envRotSlider" min="0" max="360" step="2" value="0" /><span class="vp-val" id="envRotVal">0°</span>
+              <span class="vp-lbl">Intensity</span><input type="range" id="lightIntSlider" min="0.2" max="2.0" step="0.05" value="1.0" /><span class="vp-val" id="lightIntVal">1.00</span>
+              <span class="vp-lbl">Clearcoat</span><input type="range" id="coatSlider" min="0" max="1" step="0.05" value="0.25" /><span class="vp-val" id="coatVal">0.25</span>
+              <span class="vp-lbl">Bloom</span><input type="range" id="bloomSlider" min="0" max="1" step="0.05" value="0.45" /><span class="vp-val" id="bloomVal">0.45</span>
+            </div>
+          </div>
+
+          <!-- Translucent View Options Popover -->
+          <div class="vp-popover vp-popover-view" id="viewPopover" style="display:none;">
+            <div class="vp-pop-head"><span>Viewport display</span></div>
+            <div class="vp-view-grid">
+              <button class="btn sm active" id="btnEnvBg3d" title="Toggle Procedural HDRI Environment Backdrop">Env Sky</button>
+              <button class="btn sm" id="btnWire3d" title="Toggle Mesh Edges">Wireframe</button>
+              <button class="btn sm" id="btnBones3d" title="Toggle X-Ray 3D Skeletal Bone Gizmo">X-Ray Bones</button>
+              <button class="btn sm" id="btnSpin3d" title="Auto-Turntable">Auto-Spin</button>
+              <button class="btn sm" id="btnSplitWipe" title="Toggle Split Before/After Channel Comparison Wipe">Split Wipe</button>
+              <button class="btn sm" id="btnRecordGif" title="Record 360° 3D Turntable Animated GIF">360° GIF</button>
+              <button class="btn sm" id="btnResetCam3d" style="grid-column:1 / -1;" title="Reset Orbit Camera">Reset Camera</button>
+            </div>
+          </div>
+
           <div class="split-wipe-bar" id="splitWipeBar" style="display:none;">
             <select id="splitRightSelect" class="sel-input" style="height:20px;font-size:10px;padding:0 4px;" title="Right-Side Wipe Comparison Channel">
               <option value="normal">Right: Normal</option>
@@ -187,28 +241,17 @@
             </select>
           </div>
           <div class="split-wipe-handle" id="splitWipeHandle" style="display:none;left:50%;" title="Drag horizontally to wipe Before/After PBR channel">⋮</div>
-          <div class="vp-hud" id="vpHud">Ready · Drag: Orbit · Shift+Drag: Spin Light/HDRI · Alt+Click: Pick Part</div>
-        </div>
+          <div class="vp-hud" id="vpHud">Ready · Drag: Orbit · Shift+Drag: Light · Alt+Click: Pick</div>
 
-        <div class="vp-light-strip">
-          <span class="vp-lbl">Az</span>
-          <input type="range" id="lightAzSlider" min="-180" max="180" value="-38" />
-          <span class="vp-val" id="lightAzVal">-38°</span>
-          <span class="vp-lbl">El</span>
-          <input type="range" id="lightElSlider" min="10" max="85" value="52" />
-          <span class="vp-val" id="lightElVal">52°</span>
-          <span class="vp-lbl" title="Rotate Studio HDRI Environment Sky &amp; Reflections">Env°</span>
-          <input type="range" id="envRotSlider" min="0" max="360" step="2" value="0" />
-          <span class="vp-val" id="envRotVal">0°</span>
-          <span class="vp-lbl" title="Key &amp; Environment Light Intensity">Int</span>
-          <input type="range" id="lightIntSlider" min="0.2" max="2.0" step="0.05" value="1.0" />
-          <span class="vp-val" id="lightIntVal">1.00</span>
-          <span class="vp-lbl" title="Dual-Lobe Clearcoat Gloss">Coat</span>
-          <input type="range" id="coatSlider" min="0" max="1" step="0.05" value="0.25" />
-          <span class="vp-val" id="coatVal">0.25</span>
-          <span class="vp-lbl" title="Post-Process Emissive Bloom Glow">Bloom</span>
-          <input type="range" id="bloomSlider" min="0" max="1" step="0.05" value="0.45" />
-          <span class="vp-val" id="bloomVal">0.45</span>
+          <!-- Live 3D Skeletal Animation Transport Dock (auto-shown when .bbmodel carries animations!) -->
+          <div class="skel-transport-dock" id="skelTransportDock" style="display:none;">
+            <button class="btn sm icon-only" id="btnSkelPlay" title="Play / Pause 3D Skeletal Animation">▶</button>
+            <select id="skelClipSelect" class="sel-input skel-clip-sel" title="Active Blockbench 5 Skeletal Clip"></select>
+            <input type="range" id="skelTimeSlider" min="0" max="1" step="0.01" value="0" title="Scrub 3D Skeletal Pose" />
+            <span class="skel-time" id="skelTimeVal">0.00s</span>
+            <button class="btn sm" id="btnSkelSpeed" title="Cycle Playback Speed (0.5x / 1.0x / 1.5x)">1.0×</button>
+            <button class="btn sm" id="btnSkelBonesQuick" title="Toggle X-Ray 3D Skeleton Bones">Bones</button>
+          </div>
         </div>
       </div>
 
@@ -218,7 +261,7 @@
       <div class="pane pane-library" id="paneLibrary" data-pane="library">
         <div class="pane-header">
           <div class="pane-tabs">
-            <button class="pane-tab active" data-lib-tab="nodes" id="tabLibNodes">Nodes (<span id="libCount">230</span>)</button>
+            <button class="pane-tab active" data-lib-tab="nodes" id="tabLibNodes">Nodes (<span id="libCount">232</span>)</button>
             <button class="pane-tab" data-lib-tab="syncmat" id="tabLibSyncmat">.syncmat</button>
             <button class="pane-tab" data-lib-tab="syncpack" id="tabLibSyncpack">Packs (<span id="syncpackCount">4</span>)</button>
           </div>
@@ -232,7 +275,7 @@
           </div>
         </div>
         <div class="lib-search-row" id="libNodesSearchRow">
-          <input type="text" id="libSearch" class="txt-input" placeholder="Filter 230 nodes (script_expr, paint_layer_stack, math, noise, brass)..." />
+          <input type="text" id="libSearch" class="txt-input" placeholder="Filter 232 nodes (decal_stamp, mip_safe_dilate, script_expr, paint_layer_stack, noise)..." />
         </div>
         <div class="lib-body" id="libBody"></div>
         <div class="lib-body" id="syncmatBody" style="display:none;">
@@ -429,7 +472,7 @@
       <div class="palette-topbar">
         <div class="palette-search-wrap">
           <span class="palette-search-ico">⌕</span>
-          <input type="text" id="paletteInput" class="palette-search" placeholder="Search 230 TexGraph nodes by name, script, paint, math, noise, brass, crystal..." autocomplete="off" />
+          <input type="text" id="paletteInput" class="palette-search" placeholder="Search 232 TexGraph nodes by name, decal, mip, script, paint, math, noise, brass..." autocomplete="off" />
           <span class="palette-compat-badge" id="paletteCompatBadge" style="display:none;"></span>
         </div>
         <div class="palette-controls">
@@ -459,7 +502,7 @@
         </aside>
       </div>
       <div class="palette-footer">
-        <span id="paletteCountLabel">230 nodes</span>
+        <span id="paletteCountLabel">232 nodes</span>
         <span>↑↓←→ Navigate · Enter Add · Esc Close</span>
       </div>
     </div>
@@ -471,51 +514,68 @@
   <div class="ctx-menu" id="graphContextMenu" style="display:none;"></div>
 
   <!-- =================================================================== -->
-  <!-- MULTI-ENGINE EXPORT MODAL                                           -->
+  <!-- MULTI-ENGINE OUTPUT TEMPLATE EXPORT MODAL (`v17`)                   -->
   <!-- =================================================================== -->
   <div class="modal-backdrop" id="exportModal">
-    <div class="modal-card">
+    <div class="modal-card" style="width:560px;max-width:94vw;">
       <div class="modal-head">
-        <span>Export Commercial PBR Bundle (`synccraft.pbr.bundle/2.0`)</span>
+        <span>Export PBR Textures &amp; Engine Templates</span>
         <button class="btn sm" id="btnCloseExport">✕</button>
       </div>
       <div class="modal-body">
-        <div style="font-size:11px;color:var(--text-secondary);">
-          Simultaneously exports <strong>ASWF MaterialX 1.38 / OpenPBR (<code>.mtlx</code>)</strong>, <strong>SyncCraft Special PBR</strong> (<code>_shadow</code>, <code>_bent_normal</code>, <code>_thickness</code>), <strong>LabPBR 1.3</strong> (<code>_n</code>, <code>_s</code>), <strong>Bedrock RTX</strong> (<code>_mer</code>), <strong>Unreal/glTF</strong> (<code>_orm</code>), <strong>Unity</strong> (<code>_maskmap</code>), <strong>Vanilla Pre-Baked Albedo</strong> (<code>_baked.png</code> / <code>_baked.bbmodel</code>), plus <code>.texdsl</code> &amp; <code>.texgraph.json</code>.
+        <div style="display:grid;grid-template-columns:1fr 126px;gap:8px;">
+          <div class="param-row">
+            <div class="param-label-row"><span>Output Template</span></div>
+            <select id="exportTemplateSelect" class="sel-input"></select>
+          </div>
+          <div class="param-row">
+            <div class="param-label-row"><span>Mip Dilation</span></div>
+            <select id="exportBleedSelect" class="sel-input" title="Mip-Safe Voronoi Edge Dilation Bleed (prevents mipmap dark seams)">
+              <option value="0">0px (Off)</option>
+              <option value="4" selected>4px (Std)</option>
+              <option value="8">8px (High)</option>
+              <option value="16">16px (Far)</option>
+            </select>
+          </div>
         </div>
-        <div class="param-row">
-          <div class="param-label-row"><span>Asset Stem</span></div>
-          <input type="text" id="exportStemInput" class="txt-input" />
+        <div class="export-template-preview" id="exportTemplatePreview"></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+          <div class="param-row">
+            <div class="param-label-row"><span>Asset Stem</span></div>
+            <input type="text" id="exportStemInput" class="txt-input" />
+          </div>
+          <div class="param-row">
+            <div class="param-label-row"><span>Lighting Bake Preset</span></div>
+            <select id="exportPresetSelect" class="sel-input">
+              <option value="studio_hero">Studio Hero</option>
+              <option value="dramatic_rim">Dramatic Rim</option>
+              <option value="high_noon">High Noon</option>
+              <option value="moonlit_obsidian">Moonlit Obsidian</option>
+            </select>
+          </div>
         </div>
-        <div class="param-row">
-          <div class="param-label-row"><span>MaterialX Shader Surface</span></div>
-          <select id="exportMtlxShader" class="sel-input">
-            <option value="open_pbr_surface">ASWF OpenPBR Surface 1.0 (Maya/Arnold/Karma/USD)</option>
-            <option value="standard_surface">Autodesk Standard Surface (Maya/3ds Max)</option>
-          </select>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+          <div class="param-row">
+            <div class="param-label-row"><span>MaterialX Shader Model</span></div>
+            <select id="exportMtlxShader" class="sel-input">
+              <option value="open_pbr_surface">OpenPBR Surface (MtlX 1.39)</option>
+              <option value="standard_surface">Standard Surface (MtlX 1.38)</option>
+            </select>
+          </div>
+          <div class="param-row">
+            <div class="param-label-row"><span>Output Folder (optional)</span></div>
+            <input type="text" id="exportDirInput" class="txt-input" placeholder="Blank = browser download" />
+          </div>
         </div>
-        <div class="param-row">
-          <div class="param-label-row"><span>Studio Lighting Bake Preset</span></div>
-          <select id="exportPresetSelect" class="sel-input">
-            <option value="studio_hero">studio_hero</option>
-            <option value="dramatic_rim">dramatic_rim</option>
-            <option value="high_noon">high_noon</option>
-            <option value="moonlit_obsidian">moonlit_obsidian</option>
-          </select>
-        </div>
-        <div class="param-row">
-          <div class="param-label-row"><span>Local Output Directory (optional — leave blank to download in browser)</span></div>
-          <input type="text" id="exportDirInput" class="txt-input" placeholder="/path/to/export_folder (optional)" />
-        </div>
-        <pre id="exportResultPre" style="display:none;max-height:140px;overflow:auto;background:var(--bg-input);border:1px solid var(--border-subtle);border-radius:4px;padding:8px;font-family:var(--font-mono);font-size:10.5px;color:#86efac;margin:0;"></pre>
+        <pre id="exportResultPre" style="display:none;max-height:132px;overflow:auto;background:var(--bg-input);border:1px solid var(--border-subtle);border-radius:4px;padding:8px;font-family:var(--font-mono);font-size:10.5px;color:#86efac;margin:0;"></pre>
       </div>
-      <div class="modal-foot" style="flex-wrap:wrap;">
-        <button class="btn" id="btnExportCtm47" title="Generate 47-Tile Connected Block Sprite Sheet + OptiFine/Continuity .properties">CTM 47-Tile</button>
-        <button class="btn" id="btnExportWang16" title="Generate 16-Tile Wang 4-Bit Autotile Sheet">Wang 16</button>
-        <button class="btn" id="btnDownloadMtlx">MaterialX (.mtlx)</button>
-        <button class="btn" id="btnDownloadTexdsl">.texdsl</button>
-        <button class="btn" id="btnDownloadRecipe">.json</button>
-        <button class="btn primary" id="btnRunExport">Export Full PBR v2.0</button>
+      <div class="modal-foot" style="justify-content:space-between;align-items:center;">
+        <div style="display:flex;gap:5px;align-items:center;">
+          <button class="btn sm" id="btnDownloadMtlx" title="Download standalone MaterialX 1.39 (.mtlx)">.mtlx</button>
+          <button class="btn sm" id="btnDownloadTexdsl" title="Download live TexDSL source">.texdsl</button>
+          <button class="btn sm" id="btnDownloadRecipe" title="Download TexGraph recipe JSON">.json</button>
+        </div>
+        <button class="btn primary" id="btnRunExport">Export Template</button>
       </div>
     </div>
   </div>
@@ -531,7 +591,7 @@
       </div>
       <div class="modal-body">
         <div style="font-size:11px;color:var(--text-secondary);">
-          Attaching a <code>.bbmodel</code> runs SyncCraft's vectorized 3D ray-vs-OBB baker (<code>baked_shadow</code>, <code>bent_normal</code>, <code>thickness</code>, <code>baked_ao</code>, <code>uv_seam_pairs</code>) and loads live geometry into the 3D WebGL PBR viewport.
+          Attaching a <code>.bbmodel</code> runs SyncCraft's vectorized 3D ray-vs-OBB baker (<code>baked_shadow</code>, <code>bent_normal</code>, <code>thickness</code>, <code>baked_ao</code>, <code>uv_seam_pairs</code>) and loads live geometry and skeletal animations into the 3D WebGL PBR viewport.
         </div>
         <div style="display:flex;flex-direction:column;gap:6px;">
           <button class="btn" id="btnMeshDragonborn">Load Kaelith Chrono-Dragonborn 3D (.bbmodel)</button>
@@ -544,43 +604,76 @@
   </div>
 
   <!-- =================================================================== -->
-  <!-- MULTI-ASSET BATCH BAKERY QUEUE MODAL (`v16`)                        -->
+  <!-- MULTI-ASSET BATCH BAKERY & SHARED ATLAS BAKER MODAL (`v17`)         -->
   <!-- =================================================================== -->
   <div class="modal-backdrop" id="batchModal">
-    <div class="modal-card" style="width:620px;max-width:94vw;">
+    <div class="modal-card" style="width:640px;max-width:94vw;">
       <div class="modal-head">
-        <span>Multi-Asset Batch Bakery Queue (<code>synccraft batch-bake</code>)</span>
+        <div style="display:flex;align-items:center;gap:10px;">
+          <span>Batch &amp; Atlas Baker</span>
+          <div class="seg-group" title="Switch between Per-Asset Batch PBR Bakery and Multi-Asset Shared Atlas Packer">
+            <button class="seg-btn active" id="btnBatchModePbr">Batch PBR</button>
+            <button class="seg-btn" id="btnBatchModeAtlas">Shared Atlas</button>
+          </div>
+        </div>
         <button class="btn sm" id="btnCloseBatch">✕</button>
       </div>
       <div class="modal-body">
-        <div style="font-size:11px;color:var(--text-secondary);">
-          Scan any folder of <code>.bbmodel</code> / <code>.texdsl</code> creatures &amp; blocks, auto-pair sibling graphs, bake 3D ray-traced maps with SHA-256 caching, run QA audits, and export full <code>PBR v2.0 + MaterialX (.mtlx)</code> bundles!
+        <div id="batchModeDesc" style="font-size:11px;color:var(--text-secondary);">
+          Scan any folder of <code>.bbmodel</code> / <code>.texdsl</code> assets, auto-pair graphs, bake 3D ray-traced maps with SHA-256 caching, run QA audits, and export full <code>PBR v2.0 + MaterialX</code> bundles.
         </div>
         <div class="param-row">
           <div class="param-label-row"><span>Input Asset Folder (leave blank to scan flagship Kaelith showcase folder)</span></div>
           <input type="text" id="batchInputDir" class="txt-input" placeholder="/path/to/bbmodels_or_showcase_folder" />
         </div>
-        <div style="display:grid;grid-template-columns:1fr 150px;gap:8px;">
+        <div id="batchPbrOptions" style="display:grid;grid-template-columns:1fr 150px;gap:8px;">
           <div class="param-row">
-            <div class="param-label-row"><span>Output Directory (optional — defaults to ~/.synccraft/batch_exports)</span></div>
+            <div class="param-label-row"><span>Output Directory (optional, defaults to ~/.synccraft/batch_exports)</span></div>
             <input type="text" id="batchOutDir" class="txt-input" placeholder="~/.synccraft/batch_exports/run_..." />
           </div>
           <div class="param-row">
             <div class="param-label-row"><span>Lighting Preset</span></div>
             <select id="batchPresetSelect" class="sel-input">
-              <option value="studio_hero">studio_hero</option>
-              <option value="dramatic_rim">dramatic_rim</option>
-              <option value="high_noon">high_noon</option>
-              <option value="moonlit_obsidian">moonlit_obsidian</option>
+              <option value="studio_hero">Studio Hero</option>
+              <option value="dramatic_rim">Dramatic Rim</option>
+              <option value="high_noon">High Noon</option>
+              <option value="moonlit_obsidian">Moonlit Obsidian</option>
             </select>
           </div>
         </div>
-        <div id="batchSummaryLine" style="font-family:var(--font-mono);font-size:10.5px;color:#93c5fd;">Ready to scan folder or run batch bakery.</div>
+        <div id="atlasBakeOptions" style="display:none;grid-template-columns:1fr 120px 92px;gap:8px;">
+          <div class="param-row">
+            <div class="param-label-row"><span>Atlas Stem</span></div>
+            <input type="text" id="atlasStemInput" class="txt-input" value="synccraft_atlas" />
+          </div>
+          <div class="param-row">
+            <div class="param-label-row"><span>Canvas Layout</span></div>
+            <select id="atlasCanvasMode" class="sel-input">
+              <option value="pot" selected>Power-of-Two</option>
+              <option value="tight">Tight (16px)</option>
+            </select>
+          </div>
+          <div class="param-row">
+            <div class="param-label-row"><span>Mip Bleed</span></div>
+            <select id="atlasBleedSelect" class="sel-input">
+              <option value="0">0px</option>
+              <option value="4" selected>4px</option>
+              <option value="8">8px</option>
+              <option value="16">16px</option>
+            </select>
+          </div>
+        </div>
+        <div id="batchSummaryLine" style="font-size:11px;color:#93c5fd;font-variant-numeric:tabular-nums;">Ready to scan folder, run batch bakery, or pack a shared mip-safe PBR atlas.</div>
+        <div class="atlas-result-card" id="atlasResultCard" style="display:none;">
+          <div class="atlas-preview-thumb"><img id="atlasPreviewImg" alt="Packed shared PBR atlas preview" /></div>
+          <div class="atlas-result-meta" id="atlasResultMeta"></div>
+        </div>
         <div class="batch-queue-list" id="batchQueueList"></div>
       </div>
       <div class="modal-foot">
         <button class="btn" id="btnBatchScan">Scan Folder</button>
         <button class="btn primary" id="btnBatchRun">Run Batch Bakery</button>
+        <button class="btn primary" id="btnAtlasRun" style="display:none;">Pack Shared Atlas</button>
       </div>
     </div>
   </div>

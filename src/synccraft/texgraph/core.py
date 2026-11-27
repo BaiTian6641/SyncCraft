@@ -299,6 +299,7 @@ from .math_utility_ops import (
     vector_math,
 )
 from .v16_pro_ops import ScriptSecurityError, paint_layer_stack_op, script_expr_op
+from .v17_decal_atlas_ops import decal_stamp_op, mip_safe_dilate_op
 
 # Nodes whose output depends on animation `phase` (re-evaluated per flipbook frame; others cached!)
 _TIME_AWARE_OPS: frozenset[str] = frozenset(
@@ -333,6 +334,8 @@ _BUS_INPUT_KEYS: dict[str, frozenset[str]] = {
     "reroute": frozenset({"in"}),
     "subgraph_group": frozenset({"in_0", "in_1", "in_2", "in_3", "in_4", "in_5"}),
     "paint_layer_stack": frozenset({"base"}),
+    "decal_stamp": frozenset({"base"}),
+    "mip_safe_dilate": frozenset({"src"}),
     "paint_entity_eyes_and_parts": frozenset({"base"}),
     "bake_emissive_bounce": frozenset({"mat"}),
     "triplanar_project": frozenset({"src"}),
@@ -3191,6 +3194,40 @@ class TexGraph:
                 param_k=float(p.get("param_k", 1.0)),
                 phase=phase,
                 seed=seed,
+            )
+
+        # --- TexGraph v17 Commercial Pro Nodes (`decal_stamp` & `mip_safe_dilate`) ---
+        if op == "decal_stamp":
+            return decal_stamp_op(
+                H,
+                W,
+                base=ins.get("base"),
+                mesh_context=self.mesh_context,
+                stencil=str(p.get("stencil", "chrono_sigil")),
+                tint_color=str(p.get("tint_color", "#F0C85A")),
+                scale_u=float(p.get("scale_u", 10.0)),
+                roll_deg=float(p.get("roll_deg", 0.0)),
+                max_angle_deg=float(p.get("max_angle_deg", 72.0)),
+                angle_fade_deg=float(p.get("angle_fade_deg", 20.0)),
+                opacity=float(p.get("opacity", 0.95)),
+                occlusion_test=bool(p.get("occlusion_test", True)),
+                height_strength=float(p.get("height_strength", 1.0)),
+                emissive_strength=float(p.get("emissive_strength", 0.75)),
+                stamps_json=p.get("stamps_json", ""),
+                tileable=tile,
+            )
+
+        if op == "mip_safe_dilate":
+            src_in = ins.get("src", ins.get("in"))
+            if src_in is None:
+                raise KeyError("mip_safe_dilate requires 'src' input")
+            return mip_safe_dilate_op(
+                src_in,
+                mesh_context=self.mesh_context,
+                bleed_px=int(p.get("bleed_px", 8)),
+                alpha_cutoff=float(p.get("alpha_cutoff", 0.02)),
+                preserve_alpha=bool(p.get("preserve_alpha", True)),
+                mip_preview_level=int(p.get("mip_preview_level", 0)),
             )
 
         # --- TexGraph v15 Nested Compound Subgraph Group (`group_input` / `subgraph_group`) ---

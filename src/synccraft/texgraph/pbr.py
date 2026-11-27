@@ -197,8 +197,8 @@ def pack_labpbr_1_3(
 
     # Unreal / glTF 2.0 / Three.js ORM: R=AO, G=Roughness, B=Metallic, A=255
     orm_u8 = np.stack((ao_u8, r_u8, m_u8, ones_u8), axis=-1)
-    # Unity URP/HDRP MaskMap: R=Metallic, G=AO, B=Height/Detail, A=Smoothness
-    unity_maskmap = np.stack((m_u8, ao_u8, h_vis, smooth_u8), axis=-1)
+    # Unity HDRP MaskMap: R=Metallic, G=AO, B=DetailMask (255 neutral per Unity HDRP spec; Height is separate), A=Smoothness
+    unity_maskmap = np.stack((m_u8, ao_u8, ones_u8, smooth_u8), axis=-1)
 
     out_maps: dict[str, np.ndarray] = {
         "albedo": alb_u8,

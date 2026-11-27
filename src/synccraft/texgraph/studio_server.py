@@ -71,6 +71,12 @@ from .v16_pro_ops import (
     scan_batch_folder,
     spawn_syncpack_macro_into_graph,
 )
+from .v17_decal_atlas_ops import (
+    DECAL_STENCILS,
+    ENGINE_EXPORT_PRESETS,
+    bake_multi_asset_atlas,
+    export_engine_preset,
+)
 
 _STUDIO_UI_DIR = Path(__file__).resolve().parent / "studio_ui"
 _STUDIO_LOG_LOCK = threading.Lock()
@@ -185,47 +191,138 @@ def _scalar_to_heatmap_u8(val: np.ndarray, *, warm: bool = False) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 
-def _build_bone_transforms(bb_doc: dict[str, Any]) -> dict[str, list[tuple[np.ndarray, np.ndarray]]]:
-    """Map element uuid -> chain of (pivot, R_mat) bone transforms from innermost to outermost."""
+def _extract_skeleton_and_animations(
+    bb_doc: dict[str, Any],
+) -> tuple[
+    list[dict[str, Any]],
+    dict[str, int],
+    dict[str, list[tuple[np.ndarray, np.ndarray]]],
+    list[dict[str, Any]],
+]:
+    """Extract Blockbench 5.0 hierarchical skeleton (`bones`), element->bone map, static chains & animation clips."""
     groups_by_id: dict[str, dict[str, Any]] = {}
     for g in bb_doc.get("groups") or []:
         if isinstance(g, dict) and g.get("uuid"):
             groups_by_id[str(g["uuid"])] = g
 
+    bones: list[dict[str, Any]] = []
+    bone_idx_by_uuid: dict[str, int] = {}
+    bone_idx_by_name: dict[str, int] = {}
+    elem_bone_idx: dict[str, int] = {}
     elem_chains: dict[str, list[tuple[np.ndarray, np.ndarray]]] = {}
 
-    def _walk(nodes: list[Any], chain: list[tuple[np.ndarray, np.ndarray]]) -> None:
+    def _walk(nodes: list[Any], parent_idx: int, chain: list[tuple[np.ndarray, np.ndarray]]) -> None:
         for item in nodes or []:
             if isinstance(item, str):
+                elem_bone_idx[item] = parent_idx
                 elem_chains[item] = list(reversed(chain))
             elif isinstance(item, dict):
-                uid = str(item.get("uuid") or "")
+                uid = str(item.get("uuid") or f"bone_{len(bones)}")
                 meta = groups_by_id.get(uid, item)
-                origin = np.array(meta.get("origin", [0.0, 0.0, 0.0]), dtype=np.float64)
-                rot = meta.get("rotation", [0.0, 0.0, 0.0])
-                R = _euler_xyz_mat(rot)
+                bname = str(meta.get("name") or item.get("name") or f"bone_{len(bones)}")
+                orig_raw = meta.get("origin", item.get("origin", [0.0, 0.0, 0.0])) or [0.0, 0.0, 0.0]
+                rot_raw = meta.get("rotation", item.get("rotation", [0.0, 0.0, 0.0])) or [0.0, 0.0, 0.0]
+                origin = np.array([float(orig_raw[0]), float(orig_raw[1]), float(orig_raw[2])], dtype=np.float64)
+                rest_rot = [round(float(rot_raw[0]), 4), round(float(rot_raw[1]), 4), round(float(rot_raw[2]), 4)]
+                b_idx = len(bones)
+                bones.append(
+                    {
+                        "id": b_idx,
+                        "uuid": uid,
+                        "name": bname,
+                        "parent": parent_idx,
+                        "origin": [round(float(origin[0]), 4), round(float(origin[1]), 4), round(float(origin[2]), 4)],
+                        "rest_rot": rest_rot,
+                    }
+                )
+                bone_idx_by_uuid[uid] = b_idx
+                bone_idx_by_name[bname] = b_idx
+                R = _euler_xyz_mat(rest_rot)
                 next_chain = chain + [(origin, R)]
-                _walk(item.get("children") or [], next_chain)
+                _walk(item.get("children") or [], b_idx, next_chain)
 
-    _walk(bb_doc.get("outliner") or [], [])
-    return elem_chains
+    _walk(bb_doc.get("outliner") or [], -1, [])
+
+    # Extract Blockbench 5 animation clips cleanly indexed by bone index!
+    animations_out: list[dict[str, Any]] = []
+    for anim in bb_doc.get("animations") or []:
+        if not isinstance(anim, dict):
+            continue
+        aname = str(anim.get("name") or f"clip_{len(animations_out) + 1}")
+        loop_val = anim.get("loop", "loop")
+        if isinstance(loop_val, bool):
+            loop_mode = "loop" if loop_val else "once"
+        else:
+            loop_mode = str(loop_val or "loop")
+        length_s = max(0.05, float(anim.get("length") or 1.0))
+        tracks: dict[str, dict[str, list[dict[str, Any]]]] = {}
+        animators = anim.get("animators") or {}
+        if isinstance(animators, dict):
+            for a_uid, a_obj in animators.items():
+                if not isinstance(a_obj, dict):
+                    continue
+                if a_obj.get("type") not in (None, "bone"):
+                    continue
+                b_idx = bone_idx_by_uuid.get(str(a_uid))
+                if b_idx is None and a_obj.get("name"):
+                    b_idx = bone_idx_by_name.get(str(a_obj["name"]))
+                if b_idx is None:
+                    continue
+                ch_map: dict[str, list[dict[str, Any]]] = {}
+                for kf in a_obj.get("keyframes") or []:
+                    if not isinstance(kf, dict):
+                        continue
+                    ch = str(kf.get("channel") or "")
+                    if ch not in ("rotation", "position", "scale"):
+                        continue
+                    pts_clean: list[list[Any]] = []
+                    for dp in kf.get("data_points") or []:
+                        if isinstance(dp, dict):
+                            pts_clean.append([dp.get("x", 0), dp.get("y", 0), dp.get("z", 0)])
+                    if not pts_clean:
+                        continue
+                    ch_map.setdefault(ch, []).append(
+                        {
+                            "t": round(float(kf.get("time", 0.0)), 4),
+                            "i": str(kf.get("interpolation") or "linear"),
+                            "p": pts_clean,
+                        }
+                    )
+                if ch_map:
+                    for ch_k in ch_map:
+                        ch_map[ch_k].sort(key=lambda r: r["t"])
+                    tracks[str(b_idx)] = ch_map
+        if tracks:
+            animations_out.append(
+                {
+                    "name": aname,
+                    "loop": loop_mode,
+                    "length": round(length_s, 4),
+                    "tracks": tracks,
+                }
+            )
+
+    return bones, elem_bone_idx, elem_chains, animations_out
 
 
 def extract_bbmodel_webgl_mesh(bb_doc: dict[str, Any]) -> dict[str, Any]:
-    """Convert a Blockbench 5 `.bbmodel` document into ready-to-upload WebGL triangle buffers.
+    """Convert a Blockbench 5 `.bbmodel` document into ready-to-upload WebGL triangle buffers + live skeleton/animations.
 
-    Preserves exact bone/element rotation hierarchies, per-face UV rectangles, outward normals,
-    and orthonormal face tangents so the Studio 3D WebGL PBR viewport matches `mesh_baker.py`
-    and Blockbench 5 pixel-for-pixel!
+    Preserves exact bone/element rotation hierarchies, bone-local rest vertices for 60 FPS skeletal
+    animation playback, per-face UV rectangles, outward normals, and orthonormal face tangents!
     """
     res = bb_doc.get("resolution") or {}
     tw = max(1.0, float(res.get("width", 64)))
     th = max(1.0, float(res.get("height", 64)))
-    bone_chains = _build_bone_transforms(bb_doc)
+    bones, elem_bone_idx, bone_chains, animations = _extract_skeleton_and_animations(bb_doc)
 
     positions: list[float] = []
     normals: list[float] = []
     tangents: list[float] = []
+    local_positions: list[float] = []
+    local_normals: list[float] = []
+    local_tangents: list[float] = []
+    bone_ids: list[int] = []
     uvs: list[float] = []
     pick_ids: list[float] = []
     elem_meta: list[dict[str, str]] = []
@@ -257,7 +354,18 @@ def extract_bbmodel_webgl_mesh(bb_doc: dict[str, Any]) -> dict[str, Any]:
 
         e_orig = np.array(elem.get("origin", [cx, cy, cz]), dtype=np.float64)
         e_rot = _euler_xyz_mat(elem.get("rotation", [0.0, 0.0, 0.0]))
-        chain = bone_chains.get(str(elem.get("uuid") or ""), [])
+        e_uid = str(elem.get("uuid") or "")
+        chain = bone_chains.get(e_uid, [])
+        b_idx = elem_bone_idx.get(e_uid, -1)
+        b_orig_ref = np.array(bones[b_idx]["origin"], dtype=np.float64) if 0 <= b_idx < len(bones) else np.zeros(3, dtype=np.float64)
+
+        def _xform_local_pt(p: np.ndarray) -> np.ndarray:
+            return (e_orig + e_rot @ (p - e_orig)) - b_orig_ref
+
+        def _xform_local_dir(d: np.ndarray) -> np.ndarray:
+            q = e_rot @ d
+            nrm = float(np.linalg.norm(q))
+            return q / nrm if nrm > 1e-8 else q
 
         def _xform_pt(p: np.ndarray) -> np.ndarray:
             q = e_orig + e_rot @ (p - e_orig)
@@ -292,16 +400,18 @@ def extract_bbmodel_webgl_mesh(bb_doc: dict[str, Any]) -> dict[str, Any]:
             tv_v = np.array(tv_l, dtype=np.float64)
             fn_v = np.array(fn_l, dtype=np.float64)
 
-            # Face center + 4 corners in box-local space: (0,0)=TL, (1,0)=TR, (1,1)=BR, (0,1)=BL
             du = tu_v * float(np.abs(np.dot(tu_v, half_l)))
             dv = tv_v * float(np.abs(np.dot(tv_v, half_l)))
             dn = fn_v * float(np.abs(np.dot(fn_v, half_l)))
             fc = center_l + dn
 
-            p_tl = _xform_pt(fc - du - dv)
-            p_tr = _xform_pt(fc + du - dv)
-            p_br = _xform_pt(fc + du + dv)
-            p_bl = _xform_pt(fc - du + dv)
+            raw_tl = fc - du - dv
+            raw_tr = fc + du - dv
+            raw_br = fc + du + dv
+            raw_bl = fc - du + dv
+
+            p_tl, p_tr, p_br, p_bl = _xform_pt(raw_tl), _xform_pt(raw_tr), _xform_pt(raw_br), _xform_pt(raw_bl)
+            lp_tl, lp_tr, lp_br, lp_bl = _xform_local_pt(raw_tl), _xform_local_pt(raw_tr), _xform_local_pt(raw_br), _xform_local_pt(raw_bl)
 
             for pt in (p_tl, p_tr, p_br, p_bl):
                 pmin = np.minimum(pmin, pt)
@@ -309,24 +419,29 @@ def extract_bbmodel_webgl_mesh(bb_doc: dict[str, Any]) -> dict[str, Any]:
 
             wn = _xform_dir(fn_v)
             wt = _xform_dir(tu_v)
+            ln = _xform_local_dir(fn_v)
+            lt = _xform_local_dir(tu_v)
 
-            # Ensure counter-clockwise winding relative to outward normal `wn`
             cross = np.cross(p_tr - p_tl, p_br - p_tl)
             if float(np.dot(cross, wn)) >= 0.0:
                 tri_verts = (
-                    (p_tl, (u0, v0)), (p_tr, (u1, v0)), (p_br, (u1, v1)),
-                    (p_tl, (u0, v0)), (p_br, (u1, v1)), (p_bl, (u0, v1)),
+                    (p_tl, lp_tl, (u0, v0)), (p_tr, lp_tr, (u1, v0)), (p_br, lp_br, (u1, v1)),
+                    (p_tl, lp_tl, (u0, v0)), (p_br, lp_br, (u1, v1)), (p_bl, lp_bl, (u0, v1)),
                 )
             else:
                 tri_verts = (
-                    (p_tl, (u0, v0)), (p_br, (u1, v1)), (p_tr, (u1, v0)),
-                    (p_tl, (u0, v0)), (p_bl, (u0, v1)), (p_br, (u1, v1)),
+                    (p_tl, lp_tl, (u0, v0)), (p_br, lp_br, (u1, v1)), (p_tr, lp_tr, (u1, v0)),
+                    (p_tl, lp_tl, (u0, v0)), (p_bl, lp_bl, (u0, v1)), (p_br, lp_br, (u1, v1)),
                 )
 
-            for pt, uv_pt in tri_verts:
+            for pt, lpt, uv_pt in tri_verts:
                 positions.extend((round(float(pt[0]), 4), round(float(pt[1]), 4), round(float(pt[2]), 4)))
                 normals.extend((round(float(wn[0]), 4), round(float(wn[1]), 4), round(float(wn[2]), 4)))
                 tangents.extend((round(float(wt[0]), 4), round(float(wt[1]), 4), round(float(wt[2]), 4)))
+                local_positions.extend((round(float(lpt[0]), 4), round(float(lpt[1]), 4), round(float(lpt[2]), 4)))
+                local_normals.extend((round(float(ln[0]), 4), round(float(ln[1]), 4), round(float(ln[2]), 4)))
+                local_tangents.extend((round(float(lt[0]), 4), round(float(lt[1]), 4), round(float(lt[2]), 4)))
+                bone_ids.append(b_idx)
                 uvs.extend((round(float(uv_pt[0]), 5), round(float(uv_pt[1]), 5)))
                 pick_ids.append(pick_id)
 
@@ -351,6 +466,12 @@ def extract_bbmodel_webgl_mesh(bb_doc: dict[str, Any]) -> dict[str, Any]:
         "positions": positions,
         "normals": normals,
         "tangents": tangents,
+        "local_positions": local_positions,
+        "local_normals": local_normals,
+        "local_tangents": local_tangents,
+        "bone_ids": bone_ids,
+        "bones": bones,
+        "animations": animations,
         "uvs": uvs,
         "pick_ids": pick_ids,
         "elem_meta": elem_meta,
@@ -820,6 +941,8 @@ class StudioSession:
             ],
             "brush_presets": PBR_BRUSH_PRESETS,
             "syncpacks": list_all_syncpacks(),
+            "decal_stencils": DECAL_STENCILS,
+            "export_presets": ENGINE_EXPORT_PRESETS,
         }
 
     def get_state_payload(self) -> dict[str, Any]:
@@ -898,7 +1021,7 @@ class StudioSession:
         tex_id = g.add(
             "region_restrained_noise",
             id="detail_noise",
-            inputs={"base": base_id},
+            inputs={"mat": base_id},
             pattern="organic_clump",
             scale=1.0,
             amplitude=0.11,
@@ -909,7 +1032,7 @@ class StudioSession:
         bev_id = g.add(
             "region_bevel_and_ao",
             id="bevel_ao",
-            inputs={"base": tex_id},
+            inputs={"mat": tex_id},
             highlight_strength=0.18,
             shadow_strength=0.22,
             ao_strength=0.28,
@@ -2668,6 +2791,179 @@ class StudioSession:
         with self._batch_lock:
             return {"ok": True, **copy.deepcopy(self._batch_state)}
 
+    # -----------------------------------------------------------------------
+    # Milestone v17: 3D Camera-Projected Decals, 6-Engine Export Presets
+    # & Multi-Material Shared Atlas Baker
+    # -----------------------------------------------------------------------
+
+    def decal_stamp_apply(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Apply, undo, or clear 3D camera-projected PBR decal/stencil stamps on a `decal_stamp` node."""
+        with self._lock:
+            g = self.graph
+            nid = payload.get("node_id")
+            created_id = None
+            if not nid or str(nid) not in g.nodes or g.nodes[str(nid)].op != "decal_stamp":
+                existing = next((n_id for n_id in reversed(g.node_order) if g.nodes[n_id].op == "decal_stamp"), None)
+                if existing and not payload.get("force_new"):
+                    nid = existing
+                else:
+                    self._push_undo()
+                    base_id = "decal_stamp"
+                    nid_s = base_id
+                    idx = 1
+                    while nid_s in g.nodes:
+                        nid_s = f"{base_id}_{idx}"
+                        idx += 1
+                    cur_out = g.output_material_node or (
+                        _parse_ref(g.output_node)[0] if g.output_node else (g.node_order[-1] if g.node_order else None)
+                    )
+                    pos = payload.get("pos")
+                    if not pos and cur_out and cur_out in g.nodes and g.nodes[cur_out].pos:
+                        pos = [g.nodes[cur_out].pos[0] + 290.0, g.nodes[cur_out].pos[1]]
+                    pos = pos or [400.0, 160.0]
+                    stamp_init = payload.get("stamp") or {}
+                    sp = NodeSpec(
+                        id=nid_s,
+                        op="decal_stamp",
+                        inputs={"base": cur_out} if cur_out and cur_out in g.nodes else {},
+                        params={
+                            "stencil": str(stamp_init.get("stencil") or "chrono_sigil"),
+                            "tint_color": str(stamp_init.get("tint_color") or "#F0C85A"),
+                            "scale_u": float(stamp_init.get("scale_u", 10.0)),
+                            "roll_deg": float(stamp_init.get("roll_deg", 0.0)),
+                            "max_angle_deg": float(stamp_init.get("max_angle_deg", 72.0)),
+                            "angle_fade_deg": float(stamp_init.get("angle_fade_deg", 20.0)),
+                            "opacity": float(stamp_init.get("opacity", 0.95)),
+                            "occlusion_test": bool(stamp_init.get("occlusion_test", True)),
+                            "height_strength": float(stamp_init.get("height_strength", 1.0)),
+                            "emissive_strength": float(stamp_init.get("emissive_strength", 0.75)),
+                            "stamps_json": "[]",
+                        },
+                        pos=(float(pos[0]), float(pos[1])),
+                    )
+                    g.nodes[nid_s] = sp
+                    g.node_order.append(nid_s)
+                    if payload.get("wire_output", True):
+                        g.set_output_material(nid_s, normal_strength=float(g.pbr_config.get("normal_strength", 2.4)))
+                    nid = nid_s
+                    created_id = nid_s
+                    self._log("info", f"Auto-wired 3D Decal Stamp node '{nid_s}' at graph output")
+
+            sp = g.nodes[str(nid)]
+            raw_sj = sp.params.get("stamps_json")
+            stamps: list[dict[str, Any]] = []
+            if isinstance(raw_sj, list):
+                stamps = [dict(s) for s in raw_sj if isinstance(s, dict)]
+            elif isinstance(raw_sj, str) and raw_sj.strip():
+                try:
+                    parsed = json.loads(raw_sj)
+                    if isinstance(parsed, list):
+                        stamps = [dict(s) for s in parsed if isinstance(s, dict)]
+                except Exception:
+                    stamps = []
+
+            act = str(payload.get("action") or "add").strip().lower()
+            if act == "clear":
+                if not created_id:
+                    self._push_undo()
+                stamps = []
+                self._log("info", f"Cleared all 3D decal stamps on '{nid}'")
+            elif act == "undo_last":
+                if stamps:
+                    if not created_id:
+                        self._push_undo()
+                    stamps.pop()
+                    self._log("info", f"Removed last 3D decal stamp on '{nid}' ({len(stamps)} remaining)")
+            else:
+                st_in = payload.get("stamp")
+                if isinstance(st_in, dict):
+                    if not created_id:
+                        self._push_undo()
+                    st_clean = copy.deepcopy(st_in)
+                    stamps.append(st_clean)
+                    for k in ("stencil", "tint_color", "scale_u", "roll_deg", "max_angle_deg", "opacity", "emissive_strength"):
+                        if k in st_clean:
+                            sp.params[k] = st_clean[k]
+                    self._log("info", f"Stamped 3D decal '{st_clean.get('stencil', 'chrono_sigil')}' onto '{nid}' (stack={len(stamps)})")
+
+            sp.params["stamps_json"] = json.dumps(stamps)
+            g._static_cache.clear()
+            self._channel_png_cache.clear()
+            st = self.get_state_payload()
+            st["decal_node_id"] = str(nid)
+            st["stamp_count"] = len(stamps)
+            if created_id:
+                st["created_node_id"] = created_id
+            return st
+
+    def export_preset(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Export one-click engine-tailored PBR preset (`unreal_ue5`, `unity_hdrp`, `java_labpbr`, `bedrock_rtx`, `maya_materialx`, `blockbench_baked`, `full_pbr_v2`)."""
+        with self._lock:
+            preset_id = str(payload.get("preset_id") or "full_pbr_v2").strip().lower()
+            stem = str(payload.get("stem") or self.graph.name or "synccraft_asset").strip() or "synccraft_asset"
+            out_dir = str(payload.get("out_dir") or "").strip() or None
+            lighting_preset = str(payload.get("lighting_preset") or payload.get("preset") or "studio_hero")
+            bleed_px = max(0, min(32, int(payload.get("bleed_px", 4))))
+            shader_model = str(payload.get("shader_model") or "open_pbr_surface")
+            coat_weight = float(payload.get("coat_weight", 0.15))
+            res = export_engine_preset(
+                self.graph,
+                preset_id,
+                stem=stem,
+                out_dir=out_dir,
+                lighting_preset=lighting_preset,
+                bleed_px=bleed_px,
+                bbmodel_doc=self.bbmodel_doc,
+                shader_model=shader_model,
+                coat_weight=coat_weight,
+            )
+            self._log(
+                "info",
+                f"Exported engine preset '{preset_id}' ({len(res.get('file_names') or [])} files, bleed={bleed_px}px, mode={res.get('mode')})",
+            )
+            return res
+
+    def atlas_bake(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Pack multiple `.bbmodel`/`.texdsl` assets into a shared mip-safe PBR atlas + remapped `.bbmodel` files."""
+        in_dir = str(payload.get("input_dir") or "").strip()
+        if not in_dir:
+            found = _find_kaelith_dragonborn_paths()
+            if found is None:
+                raise ValueError("Specify an input_dir containing .bbmodel / .texdsl files")
+            in_dir = str(found[0].parent)
+        out_dir = str(payload.get("out_dir") or (Path.home() / ".synccraft" / "atlas_exports" / f"atlas_{int(time.time())}")).strip()
+        stem = str(payload.get("stem") or "synccraft_atlas").strip() or "synccraft_atlas"
+        bleed_px = max(0, min(16, int(payload.get("bleed_px", 4))))
+        canvas_mode = str(payload.get("canvas_mode") or "pot").strip().lower()
+        if canvas_mode not in ("pot", "tight"):
+            canvas_mode = "pot"
+        max_assets = max(1, min(32, int(payload.get("max_assets", 12))))
+        mf = bake_multi_asset_atlas(
+            in_dir,
+            out_dir,
+            stem=stem,
+            bleed_px=bleed_px,
+            canvas_mode=canvas_mode,
+            max_assets=max_assets,
+        )
+        # Attach compact base64 preview thumbnail of the packed albedo atlas
+        alb_fp = mf.get("files", {}).get("albedo")
+        if alb_fp and Path(alb_fp).is_file():
+            try:
+                im = Image.open(alb_fp).convert("RGBA")
+                if max(im.size) > 384:
+                    im.thumbnail((384, 384), Image.Resampling.NEAREST)
+                buf = io.BytesIO()
+                im.save(buf, format="PNG", compress_level=2)
+                mf["albedo_preview_url"] = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+            except Exception:
+                pass
+        self._log(
+            "info",
+            f"Baked Multi-Asset Atlas '{stem}' ({mf['atlas_width']}x{mf['atlas_height']}, {mf['asset_count']} assets, fill={mf['fill_ratio']*100:.1f}%, bleed={bleed_px}px) -> {out_dir}",
+        )
+        return mf
+
     def get_bridge_latest(self, since_rev: int = -1) -> dict[str, Any]:
         with self._bridge_cond:
             if not self._bridge_payload or self._bridge_rev <= since_rev:
@@ -2755,7 +3051,7 @@ def create_studio_server(
                         "ok": True,
                         "app": "SyncCraft Studio",
                         "synccraft_version": __version__,
-                        "engine_version": "16.0",
+                        "engine_version": "17.0",
                         "schema_version": "4.0",
                         "node_count": len(NODE_REGISTRY),
                         "active_graph": sess.graph.name,
@@ -2999,6 +3295,15 @@ def create_studio_server(
                 if path == "/api/batch/start":
                     self._send_json(sess.batch_start(body))
                     return
+                if path == "/api/decal_stamp/apply":
+                    self._send_json(sess.decal_stamp_apply(body))
+                    return
+                if path == "/api/export/preset":
+                    self._send_json(sess.export_preset(body))
+                    return
+                if path == "/api/atlas/bake":
+                    self._send_json(sess.atlas_bake(body))
+                    return
                 self._send_json({"error": f"Unknown API endpoint: {path}"}, status=404)
             except (ValueError, KeyError, TypeError, FileNotFoundError, ScriptSecurityError, TexDSLParseError, GraphCycleError) as exc:
                 _write_studio_file_log("error", f"POST {path} -> 400", error=type(exc).__name__, detail=str(exc))
@@ -3023,7 +3328,7 @@ def serve_studio(
     server, _ = create_studio_server(host=host, port=port, initial_sample=initial_sample, size=size)
     actual_port = server.server_address[1]
     url = f"http://{host}:{actual_port}/"
-    print(f"SyncCraft Studio v{__version__} (TexGraph v16 / Schema v4.0 · {len(NODE_REGISTRY)} nodes)")
+    print(f"SyncCraft Studio v{__version__} (TexGraph v17 / Schema v4.0 · {len(NODE_REGISTRY)} nodes)")
     print(f"  Listening on {url}  (Press Ctrl+C to stop)")
     if open_browser:
         threading.Timer(0.4, lambda: webbrowser.open(url)).start()

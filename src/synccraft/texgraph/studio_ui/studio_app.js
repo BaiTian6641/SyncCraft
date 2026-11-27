@@ -21,6 +21,20 @@
     channel: 'pbr_lit',
     pickMode: false,
     brushMode: false,
+    decalMode: false,
+    decal: {
+      stencil: 'chrono_sigil',
+      tint_color: '#F0C85A',
+      scale_u: 10.0,
+      roll_deg: 0,
+      max_angle_deg: 72,
+      opacity: 0.95,
+      emissive_strength: 0.75,
+    },
+    showBones: false,
+    skelSpeedIdx: 1,
+    exportTemplateId: 'full_pbr_v2',
+    batchModalMode: 'pbr',
     brushTargetMode: 'mask',
     brushRadius: 6,
     brushValue: 1.0,
@@ -185,9 +199,8 @@
       if (ctx) ctx.clearRect(0, 0, c2.width, c2.height);
     }
     if (opts.fullProjectReset) {
-      if (state.pickMode) setPickMode(false);
-      if (state.brushMode) setBrushMode(false);
-      if (state.lightDragMode) setLightDragMode(false);
+      setViewportTool('orbit');
+      closeViewportPopovers();
       state.channel = 'pbr_lit';
       if ($('channelSelect')) $('channelSelect').value = 'pbr_lit';
       state.phase = 0.0;
@@ -391,7 +404,7 @@
       if (meshResBadge) meshResBadge.style.display = 'none';
     }
 
-    // Sync 3D mesh geometry
+    // Sync 3D mesh geometry + live skeletal transport dock
     if (gl3d) {
       gl3d.setBBModelMesh(st.mesh || null);
       if (opts.autoPrim) {
@@ -399,6 +412,7 @@
         $('primSelect').value = prim;
         gl3d.primitive = prim;
       }
+      syncSkelDockFromMesh(st.mesh || null);
     }
 
     // Sync TexDSL editor (unless user is actively typing in it)
@@ -413,6 +427,7 @@
     renderBreadcrumbs();
     updateBridgeBadge(st.bridge);
     syncPbrLayersFromGraph();
+    syncDecalCountFromGraph();
     renderInspector();
     renderTimelineDrivers();
     renderCurveEditor();
@@ -571,46 +586,279 @@
     }
   }
 
-  function setPickMode(on) {
-    state.pickMode = !!on;
-    if (state.pickMode) { setBrushMode(false); setLightDragMode(false); }
-    if (gl3d) gl3d.pickMode = state.pickMode;
+  function closeViewportPopovers() {
+    if ($('lightingPopover')) $('lightingPopover').style.display = 'none';
+    if ($('viewPopover')) $('viewPopover').style.display = 'none';
+    if ($('btnLightingPop')) $('btnLightingPop').classList.remove('active');
+    if ($('btnViewPop')) $('btnViewPop').classList.remove('active');
+  }
+
+  function toggleViewportPopover(which) {
+    const isLight = which === 'lighting';
+    const target = $(isLight ? 'lightingPopover' : 'viewPopover');
+    const other = $(isLight ? 'viewPopover' : 'lightingPopover');
+    const btn = $(isLight ? 'btnLightingPop' : 'btnViewPop');
+    const otherBtn = $(isLight ? 'btnViewPop' : 'btnLightingPop');
+    if (!target) return;
+    const willOpen = target.style.display === 'none' || !target.style.display;
+    if (other) other.style.display = 'none';
+    if (otherBtn) otherBtn.classList.remove('active');
+    target.style.display = willOpen ? 'flex' : 'none';
+    if (btn) btn.classList.toggle('active', willOpen);
+  }
+
+  function setViewportTool(mode) {
+    const m = ['orbit', 'pick', 'paint', 'decal', 'light'].includes(mode) ? mode : 'orbit';
+    state.pickMode = m === 'pick';
+    state.brushMode = m === 'paint';
+    state.decalMode = m === 'decal';
+    state.lightDragMode = m === 'light';
+
+    if (gl3d) {
+      gl3d.pickMode = state.pickMode;
+      gl3d.brushMode = state.brushMode;
+      gl3d.decalMode = state.decalMode;
+      gl3d.lightDragMode = state.lightDragMode;
+    }
+
+    if ($('btnOrbit3d')) $('btnOrbit3d').classList.toggle('active', m === 'orbit');
     if ($('btnPickPart')) $('btnPickPart').classList.toggle('pick-on', state.pickMode);
     if ($('btnPickPart2d')) $('btnPickPart2d').classList.toggle('pick-on', state.pickMode);
-    if ($('viewportStage')) $('viewportStage').classList.toggle('pick-active', state.pickMode || state.brushMode);
-    updateViewportHud();
-  }
-
-  function setBrushMode(on) {
-    state.brushMode = !!on;
-    if (state.brushMode) {
-      state.pickMode = false;
-      setLightDragMode(false);
-      if (gl3d) gl3d.pickMode = false;
-      if ($('btnPickPart')) $('btnPickPart').classList.remove('pick-on');
-      if ($('btnPickPart2d')) $('btnPickPart2d').classList.remove('pick-on');
-    }
-    if (gl3d) gl3d.brushMode = state.brushMode;
     if ($('btnBrush3d')) $('btnBrush3d').classList.toggle('brush-on', state.brushMode);
     if ($('btnBrush2d')) $('btnBrush2d').classList.toggle('brush-on', state.brushMode);
+    if ($('btnDecal3d')) $('btnDecal3d').classList.toggle('decal-on', state.decalMode);
+    if ($('btnLightDrag')) $('btnLightDrag').classList.toggle('light-on', state.lightDragMode);
+
     if ($('brushToolbar')) $('brushToolbar').style.display = state.brushMode ? 'flex' : 'none';
-    if ($('viewportStage')) $('viewportStage').classList.toggle('pick-active', state.pickMode || state.brushMode);
-    updateViewportHud(state.brushMode ? '🖌 BRUSH PAINT' : null);
+    if ($('decalToolbar')) $('decalToolbar').style.display = (state.decalMode && state.vpMode === '3d') ? 'flex' : 'none';
+    if ($('decalReticle')) $('decalReticle').style.display = (state.decalMode && state.vpMode === '3d') ? 'block' : 'none';
+    if ($('viewportStage')) {
+      $('viewportStage').classList.toggle('pick-active', state.pickMode || state.brushMode || state.decalMode);
+    }
+    if (m !== 'orbit') closeViewportPopovers();
+    const labelMap = {
+      orbit: null,
+      pick: 'Pick Part Mode',
+      paint: state.brushTargetMode === 'pbr' ? '3D PBR Layers' : 'Mask Paint',
+      decal: '3D Decal Stamp (Click model or press Stamp)',
+      light: 'Drag Light & HDRI',
+    };
+    updateViewportHud(labelMap[m]);
   }
 
-  function setLightDragMode(on) {
-    state.lightDragMode = !!on;
-    if (state.lightDragMode) {
-      state.pickMode = false;
-      state.brushMode = false;
-      if (gl3d) { gl3d.pickMode = false; gl3d.brushMode = false; }
-      if ($('btnPickPart')) $('btnPickPart').classList.remove('pick-on');
-      if ($('btnBrush3d')) $('btnBrush3d').classList.remove('brush-on');
-      if ($('brushToolbar')) $('brushToolbar').style.display = 'none';
+  function setPickMode(on) { setViewportTool(on ? 'pick' : 'orbit'); }
+  function setBrushMode(on) { setViewportTool(on ? 'paint' : 'orbit'); }
+  function setDecalMode(on) { setViewportTool(on ? 'decal' : 'orbit'); }
+  function setLightDragMode(on) { setViewportTool(on ? 'light' : 'orbit'); }
+
+  function setShowBones(on) {
+    state.showBones = !!on;
+    if (gl3d) gl3d.showBones = state.showBones;
+    if ($('btnBones3d')) $('btnBones3d').classList.toggle('active', state.showBones);
+    if ($('btnSkelBonesQuick')) $('btnSkelBonesQuick').classList.toggle('active', state.showBones);
+  }
+
+  function syncSkelDockFromMesh(mesh) {
+    const dock = $('skelTransportDock');
+    const stage = $('viewportStage');
+    const sel = $('skelClipSelect');
+    const anims = (mesh && Array.isArray(mesh.animations)) ? mesh.animations : [];
+    const show = !!(anims.length && state.vpMode === '3d' && (!gl3d || gl3d.primitive === 'bbmodel'));
+    if (dock) dock.style.display = show ? 'flex' : 'none';
+    if (stage) stage.classList.toggle('has-skel-dock', show);
+    if (!sel) return;
+    sel.innerHTML = '<option value="-1">Bind Pose</option>';
+    anims.forEach((a, idx) => {
+      const opt = document.createElement('option');
+      opt.value = String(idx);
+      opt.textContent = `${a.name} (${Number(a.length || 1).toFixed(1)}s)`;
+      sel.appendChild(opt);
+    });
+    const curIdx = gl3d ? gl3d.skelClipIdx : -1;
+    sel.value = String(curIdx >= 0 && curIdx < anims.length ? curIdx : -1);
+    const activeClip = (curIdx >= 0 && curIdx < anims.length) ? anims[curIdx] : null;
+    const len = activeClip ? Math.max(0.05, activeClip.length || 1.0) : 1.0;
+    const curT = gl3d ? gl3d.skelTime : 0.0;
+    if ($('skelTimeSlider')) {
+      $('skelTimeSlider').max = len.toFixed(3);
+      $('skelTimeSlider').value = curT.toFixed(3);
+      $('skelTimeSlider').disabled = !activeClip;
     }
-    if (gl3d) gl3d.lightDragMode = state.lightDragMode;
-    if ($('btnLightDrag')) $('btnLightDrag').classList.toggle('light-on', state.lightDragMode);
-    updateViewportHud(state.lightDragMode ? '☀ DRAG LIGHT/HDRI' : null);
+    if ($('skelTimeVal')) $('skelTimeVal').textContent = `${curT.toFixed(2)}s`;
+    if ($('btnSkelPlay')) {
+      const pl = !!(gl3d && gl3d.skelPlaying);
+      $('btnSkelPlay').textContent = pl ? '⏸' : '▶';
+      $('btnSkelPlay').classList.toggle('amber', pl);
+    }
+  }
+
+  function populateDecalStencils() {
+    const sel = $('decalStencilSelect');
+    const stencils = (state.schemaPayload && state.schemaPayload.decal_stencils) || {};
+    if (!sel) return;
+    sel.innerHTML = '';
+    for (const [sid, meta] of Object.entries(stencils)) {
+      const o = document.createElement('option');
+      o.value = sid;
+      o.textContent = meta.title || sid;
+      sel.appendChild(o);
+    }
+    sel.value = state.decal.stencil;
+    const cur = stencils[state.decal.stencil];
+    if (cur && $('decalTintColor')) {
+      state.decal.tint_color = cur.color || '#F0C85A';
+      state.decal.emissive_strength = cur.emissive_strength != null ? cur.emissive_strength : 0.75;
+      $('decalTintColor').value = state.decal.tint_color;
+    }
+  }
+
+  function findActiveDecalNode() {
+    const rec = state.serverState && state.serverState.recipe;
+    if (!rec || !Array.isArray(rec.nodes)) return null;
+    const sel = rec.nodes.find((n) => n.id === state.selectedNodeId && n.op === 'decal_stamp');
+    if (sel) return sel;
+    for (let i = rec.nodes.length - 1; i >= 0; i--) {
+      if (rec.nodes[i].op === 'decal_stamp') return rec.nodes[i];
+    }
+    return null;
+  }
+
+  function syncDecalCountFromGraph() {
+    const node = findActiveDecalNode();
+    let cnt = 0;
+    if (node && node.params && node.params.stamps_json) {
+      try {
+        const parsed = typeof node.params.stamps_json === 'string'
+          ? JSON.parse(node.params.stamps_json)
+          : node.params.stamps_json;
+        if (Array.isArray(parsed)) cnt = parsed.length;
+      } catch (_) {}
+    }
+    if ($('decalStackCount')) $('decalStackCount').textContent = `${cnt}`;
+  }
+
+  async function applyDecalStampFromProjector(proj, actionName) {
+    const act = actionName || 'add';
+    const node = findActiveDecalNode();
+    const payload = {
+      node_id: node ? node.id : null,
+      action: act,
+      wire_output: true,
+    };
+    if (act === 'add') {
+      const stencils = (state.schemaPayload && state.schemaPayload.decal_stencils) || {};
+      const meta = stencils[state.decal.stencil] || {};
+      payload.stamp = Object.assign({
+        stencil: state.decal.stencil,
+        tint_color: state.decal.tint_color,
+        scale_u: state.decal.scale_u,
+        scale_v: state.decal.scale_u,
+        roll_deg: state.decal.roll_deg,
+        max_angle_deg: state.decal.max_angle_deg,
+        angle_fade_deg: 20.0,
+        opacity: state.decal.opacity,
+        occlusion_test: true,
+        emissive_strength: meta.emissive_strength != null ? meta.emissive_strength : state.decal.emissive_strength,
+      }, proj || {});
+    }
+    try {
+      const st = await apiPost('/api/decal_stamp/apply', payload);
+      invalidateAnimRing();
+      applyServerState(st, { autoPrim: false });
+      await runEvaluate({ includeThumbsMode: 'all', includeQa: false });
+      if (act === 'add') {
+        const sTitle = ((state.schemaPayload && state.schemaPayload.decal_stencils && state.schemaPayload.decal_stencils[state.decal.stencil]) || {}).title || state.decal.stencil;
+        showToast(`Stamped 3D decal '${sTitle}' (stack: ${st.stamp_count || 1})`, 'ok');
+      } else if (act === 'undo_last') {
+        showToast(`Removed last 3D decal (${st.stamp_count || 0} remaining)`, 'ok');
+      } else if (act === 'clear') {
+        showToast('Cleared 3D decal stack', 'ok');
+      }
+    } catch (err) {
+      showToast(`Decal error: ${err.message}`, 'err');
+    }
+  }
+
+  const EXTRA_EXPORT_TEMPLATES = [
+    {
+      id: 'ctm47',
+      title: 'Connected Block CTM 47-Tile (OptiFine / Continuity)',
+      engine: 'Minecraft Connected Textures (CTM)',
+      normal_convention: '2D Seamless Autotile Sheet',
+      description: 'Generates a 47-tile border-connected sprite sheet + ready-to-drop OptiFine / Continuity .properties file.',
+      channels: [
+        { file: '<stem>_ctm47_sheet.png', slots: ['47 Connected Tiles (8×6 Sheet)'] },
+        { file: '<stem>.properties', slots: ['OptiFine / Continuity CTM Rules'] },
+      ],
+    },
+    {
+      id: 'wang16',
+      title: 'Wang 16-Tile 4-Bit Autotile Sheet',
+      engine: '2D / Tilemap Engine (Godot / Unity / RPG)',
+      normal_convention: '4-Bit Corner Wang Tileset',
+      description: 'Generates a seamless 16-tile 4-bit Wang autotile sprite sheet for modular terrain & walls.',
+      channels: [
+        { file: '<stem>_wang16_sheet.png', slots: ['16 Wang Tiles (4×4 Sheet)'] },
+        { file: '<stem>.properties', slots: ['Autotile Index Manifest'] },
+      ],
+    },
+  ];
+
+  function getAllExportTemplates() {
+    const base = (state.schemaPayload && Array.isArray(state.schemaPayload.export_presets))
+      ? state.schemaPayload.export_presets
+      : [];
+    return [...base, ...EXTRA_EXPORT_TEMPLATES];
+  }
+
+  function populateExportTemplates() {
+    const sel = $('exportTemplateSelect');
+    if (!sel) return;
+    const list = getAllExportTemplates();
+    sel.innerHTML = '';
+    for (const tpl of list) {
+      const o = document.createElement('option');
+      o.value = tpl.id;
+      o.textContent = tpl.title;
+      sel.appendChild(o);
+    }
+    sel.value = state.exportTemplateId || (list[0] && list[0].id) || 'full_pbr_v2';
+    renderExportTemplatePreview();
+  }
+
+  function renderExportTemplatePreview() {
+    const box = $('exportTemplatePreview');
+    const sel = $('exportTemplateSelect');
+    if (!box || !sel) return;
+    const tid = sel.value || state.exportTemplateId || 'full_pbr_v2';
+    state.exportTemplateId = tid;
+    const tpl = getAllExportTemplates().find((t) => t.id === tid);
+    if (!tpl) return;
+    const stem = ($('exportStemInput') && $('exportStemInput').value.trim()) ||
+      (state.serverState && state.serverState.recipe && state.serverState.recipe.name) || 'asset';
+    const nrm = tpl.normal_convention || '';
+    const nrmCls = nrm.includes('DirectX') ? 'dx' : (nrm.includes('OpenGL') ? 'gl' : '');
+    const rowsHtml = (tpl.channels || []).map((ch) => {
+      const fname = String(ch.file || '').replace(/<stem>/g, stem);
+      const chips = (ch.slots || []).map((s) => `<span class="exp-slot-chip">${s}</span>`).join('');
+      return `<div class="exp-channel-row"><span class="exp-ch-file">${fname}</span><span class="exp-ch-slots">${chips}</span></div>`;
+    }).join('');
+    const safeDesc = String(tpl.description || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+    box.innerHTML = `
+      <div class="exp-tpl-top">
+        <span class="exp-tpl-engine">${tpl.engine}</span>
+        <span class="exp-tpl-nrm ${nrmCls}">${nrm}</span>
+      </div>
+      <div class="exp-tpl-desc">${safeDesc}</div>
+      <div class="exp-channel-list">${rowsHtml}</div>
+    `;
+    if ($('btnRunExport')) {
+      const shortName = String(tpl.engine || 'Template').split('/')[0].trim();
+      $('btnRunExport').textContent = `Export ${shortName}`;
+    }
   }
 
   function setBrushTargetMode(mode) {
@@ -870,6 +1118,10 @@
     $('vpTools3d').style.display = mode === '3d' ? 'flex' : 'none';
     $('vpTools2d').style.display = mode === '2d' ? 'flex' : 'none';
     $('viewportStage').classList.toggle('checker', mode === '2d');
+    closeViewportPopovers();
+    if ($('decalToolbar')) $('decalToolbar').style.display = (state.decalMode && mode === '3d') ? 'flex' : 'none';
+    if ($('decalReticle')) $('decalReticle').style.display = (state.decalMode && mode === '3d') ? 'block' : 'none';
+    syncSkelDockFromMesh((state.serverState && state.serverState.mesh) || null);
     if (mode === '2d') render2DCanvas();
     updateViewportHud();
   }
@@ -2811,8 +3063,20 @@
   async function boot() {
     gl3d = new StudioGL3DViewport($('gl3dCanvas'), $('vpHud'));
     gl3d.onPickPart = (hit, shift) => handlePickedPart(hit.short, shift);
-    gl3d.onHoverPart = (hit) => updateViewportHud(hit ? `🎯 ${hit.short}` : null);
+    gl3d.onHoverPart = (hit) => updateViewportHud(hit ? `Pick: ${hit.short}` : null);
     gl3d.onBrush3d = (u, v, isStart) => queueBrushStroke(u, v, isStart);
+    gl3d.onDecalStamp = (proj) => applyDecalStampFromProjector(proj, 'add');
+    gl3d.onSkelTimeUpdate = (t, len, playing) => {
+      if ($('skelTimeSlider')) {
+        $('skelTimeSlider').max = Math.max(0.05, len).toFixed(3);
+        $('skelTimeSlider').value = t.toFixed(3);
+      }
+      if ($('skelTimeVal')) $('skelTimeVal').textContent = `${t.toFixed(2)}s`;
+      if ($('btnSkelPlay')) {
+        $('btnSkelPlay').textContent = playing ? '⏸' : '▶';
+        $('btnSkelPlay').classList.toggle('amber', !!playing);
+      }
+    };
     gl3d.onLightChange = (az, el, envRot) => {
       state.lightAz = az;
       state.lightEl = el;
@@ -2953,8 +3217,10 @@
       for (const n of nodes) state.opMap[n.op] = Object.assign({ category: cat }, n);
     }
     graphCanvas.setSchema(schemaPayload.schema);
-    $('versionBadge').textContent = `v16 · ${schemaPayload.schema.node_count}`;
+    $('versionBadge').textContent = `v17 · ${schemaPayload.schema.node_count}`;
     state.syncpacks = (schemaPayload && schemaPayload.syncpacks) || [];
+    populateDecalStencils();
+    populateExportTemplates();
 
     // Kick off non-blocking background fetch for 230 procedural swatches, anim sheet, .syncmat & .syncpack presets
     const bgAssetsPromise = Promise.all([
@@ -2977,7 +3243,7 @@
     // Populate Project / Preset Dropdown
     const pSel = $('projectSelect');
     const ogSamples = document.createElement('optgroup');
-    ogSamples.label = 'Flagship 3D Studio Projects (v16)';
+    ogSamples.label = 'Flagship 3D Studio Projects (v17)';
     for (const s of schemaPayload.samples) {
       const o = document.createElement('option');
       o.value = `sample:${s.id}`;
@@ -3148,8 +3414,115 @@
     };
     $('primSelect').onchange = (e) => {
       gl3d.primitive = e.target.value;
+      syncSkelDockFromMesh((state.serverState && state.serverState.mesh) || null);
       updateViewportTextures();
     };
+    if ($('btnOrbit3d')) $('btnOrbit3d').onclick = () => setViewportTool('orbit');
+    if ($('btnDecal3d')) $('btnDecal3d').onclick = () => setViewportTool(state.decalMode ? 'orbit' : 'decal');
+    if ($('btnLightingPop')) $('btnLightingPop').onclick = (e) => { e.stopPropagation(); toggleViewportPopover('lighting'); };
+    if ($('btnViewPop')) $('btnViewPop').onclick = (e) => { e.stopPropagation(); toggleViewportPopover('view'); };
+    window.addEventListener('pointerdown', (e) => {
+      if (!e.target.closest('.vp-popover') && !e.target.closest('.vp-pop-triggers')) {
+        closeViewportPopovers();
+      }
+    });
+    if ($('btnBones3d')) $('btnBones3d').onclick = () => setShowBones(!state.showBones);
+    if ($('btnSkelBonesQuick')) $('btnSkelBonesQuick').onclick = () => setShowBones(!state.showBones);
+
+    // Live 3D Skeletal Animation Transport Dock controls
+    if ($('skelClipSelect')) {
+      $('skelClipSelect').onchange = (e) => {
+        const idx = parseInt(e.target.value, 10);
+        if (gl3d) gl3d.setSkeletonClip(Number.isFinite(idx) ? idx : -1, idx >= 0);
+        syncSkelDockFromMesh((state.serverState && state.serverState.mesh) || null);
+      };
+    }
+    if ($('btnSkelPlay')) {
+      $('btnSkelPlay').onclick = () => {
+        if (!gl3d) return;
+        gl3d.setSkeletonPlaying(!gl3d.skelPlaying);
+        syncSkelDockFromMesh((state.serverState && state.serverState.mesh) || null);
+      };
+    }
+    if ($('skelTimeSlider')) {
+      const scrubSkel = (e) => {
+        if (!gl3d) return;
+        const targetT = parseFloat(e.target.value);
+        gl3d.skelPlaying = false;
+        gl3d.setSkeletonTime(targetT);
+        if ($('btnSkelPlay')) {
+          $('btnSkelPlay').textContent = '▶';
+          $('btnSkelPlay').classList.remove('amber');
+        }
+      };
+      $('skelTimeSlider').addEventListener('pointerdown', () => {
+        if (gl3d && gl3d.skelPlaying) {
+          gl3d.setSkeletonPlaying(false);
+          if ($('btnSkelPlay')) {
+            $('btnSkelPlay').textContent = '▶';
+            $('btnSkelPlay').classList.remove('amber');
+          }
+        }
+      });
+      $('skelTimeSlider').oninput = scrubSkel;
+      $('skelTimeSlider').onchange = scrubSkel;
+    }
+    if ($('btnSkelSpeed')) {
+      const skelSpeeds = [0.5, 1.0, 1.5, 2.0];
+      $('btnSkelSpeed').onclick = () => {
+        state.skelSpeedIdx = (state.skelSpeedIdx + 1) % skelSpeeds.length;
+        const spd = skelSpeeds[state.skelSpeedIdx];
+        if (gl3d) gl3d.skelSpeed = spd;
+        $('btnSkelSpeed').textContent = `${spd.toFixed(1)}×`;
+      };
+    }
+
+    // Floating 3D Decal Stamp Toolbar Controls
+    if ($('decalStencilSelect')) {
+      $('decalStencilSelect').onchange = (e) => {
+        const sid = e.target.value;
+        state.decal.stencil = sid;
+        const meta = (state.schemaPayload && state.schemaPayload.decal_stencils && state.schemaPayload.decal_stencils[sid]) || null;
+        if (meta) {
+          state.decal.tint_color = meta.color || state.decal.tint_color;
+          state.decal.emissive_strength = meta.emissive_strength != null ? meta.emissive_strength : 0.5;
+          if ($('decalTintColor')) $('decalTintColor').value = state.decal.tint_color;
+        }
+      };
+    }
+    if ($('decalTintColor')) $('decalTintColor').oninput = (e) => { state.decal.tint_color = e.target.value; };
+    if ($('decalScaleSlider')) {
+      $('decalScaleSlider').oninput = (e) => {
+        state.decal.scale_u = parseFloat(e.target.value) || 10;
+        if ($('decalScaleVal')) $('decalScaleVal').textContent = String(state.decal.scale_u);
+      };
+    }
+    if ($('decalRollSlider')) {
+      $('decalRollSlider').oninput = (e) => {
+        state.decal.roll_deg = parseFloat(e.target.value) || 0;
+        if ($('decalRollVal')) $('decalRollVal').textContent = `${state.decal.roll_deg}°`;
+      };
+    }
+    if ($('decalAngleSlider')) {
+      $('decalAngleSlider').oninput = (e) => {
+        state.decal.max_angle_deg = parseFloat(e.target.value) || 72;
+        if ($('decalAngleVal')) $('decalAngleVal').textContent = `${state.decal.max_angle_deg}°`;
+      };
+    }
+    if ($('decalOpacitySlider')) {
+      $('decalOpacitySlider').oninput = (e) => {
+        state.decal.opacity = parseFloat(e.target.value) || 0.95;
+        if ($('decalOpacityVal')) $('decalOpacityVal').textContent = `${Math.round(state.decal.opacity * 100)}%`;
+      };
+    }
+    if ($('btnDecalStampCenter')) {
+      $('btnDecalStampCenter').onclick = () => {
+        if (!gl3d) return;
+        applyDecalStampFromProjector(gl3d.getCenterCameraProjector(), 'add');
+      };
+    }
+    if ($('btnDecalUndo')) $('btnDecalUndo').onclick = () => applyDecalStampFromProjector(null, 'undo_last');
+    if ($('btnDecalClear')) $('btnDecalClear').onclick = () => applyDecalStampFromProjector(null, 'clear');
     $('btnSpin3d').onclick = () => {
       gl3d.spin = !gl3d.spin;
       $('btnSpin3d').classList.toggle('active', gl3d.spin);
@@ -3765,6 +4138,68 @@
       };
     }
 
+    // Milestone v17: Batch Bakery & Multi-Asset Shared Atlas Mode Switcher
+    const setBatchModalMode = (mode) => {
+      state.batchModalMode = mode === 'atlas' ? 'atlas' : 'pbr';
+      const isAtlas = state.batchModalMode === 'atlas';
+      if ($('btnBatchModePbr')) $('btnBatchModePbr').classList.toggle('active', !isAtlas);
+      if ($('btnBatchModeAtlas')) $('btnBatchModeAtlas').classList.toggle('active', isAtlas);
+      if ($('batchPbrOptions')) $('batchPbrOptions').style.display = isAtlas ? 'none' : 'grid';
+      if ($('atlasBakeOptions')) $('atlasBakeOptions').style.display = isAtlas ? 'grid' : 'none';
+      if ($('btnBatchRun')) $('btnBatchRun').style.display = isAtlas ? 'none' : '';
+      if ($('btnAtlasRun')) $('btnAtlasRun').style.display = isAtlas ? '' : 'none';
+      if ($('atlasResultCard') && !isAtlas) $('atlasResultCard').style.display = 'none';
+      if ($('batchModeDesc')) {
+        $('batchModeDesc').innerHTML = isAtlas
+          ? 'Pack multiple <code>.bbmodel</code> / <code>.texdsl</code> assets into one shared Power-of-Two or tight PBR atlas with mip-safe Voronoi edge bleed and remapped <code>*_atlas.bbmodel</code> UVs.'
+          : 'Scan any folder of <code>.bbmodel</code> / <code>.texdsl</code> assets, auto-pair graphs, bake 3D ray-traced maps with SHA-256 caching, run QA audits, and export full <code>PBR v2.0 + MaterialX</code> bundles.';
+      }
+    };
+    if ($('btnBatchModePbr')) $('btnBatchModePbr').onclick = () => setBatchModalMode('pbr');
+    if ($('btnBatchModeAtlas')) $('btnBatchModeAtlas').onclick = () => setBatchModalMode('atlas');
+    if ($('btnAtlasRun')) {
+      $('btnAtlasRun').onclick = async () => {
+        const btn = $('btnAtlasRun');
+        btn.disabled = true;
+        btn.textContent = 'Packing Atlas...';
+        try {
+          const res = await apiPost('/api/atlas/bake', {
+            input_dir: ($('batchInputDir') && $('batchInputDir').value.trim()) || '',
+            out_dir: ($('batchOutDir') && $('batchOutDir').value.trim()) || '',
+            stem: ($('atlasStemInput') && $('atlasStemInput').value.trim()) || 'synccraft_atlas',
+            canvas_mode: ($('atlasCanvasMode') && $('atlasCanvasMode').value) || 'pot',
+            bleed_px: parseInt(($('atlasBleedSelect') && $('atlasBleedSelect').value) || '4', 10),
+            max_assets: 12,
+          });
+          const fillPct = ((res.fill_ratio || 0) * 100).toFixed(1);
+          const sum = `Packed ${res.asset_count} asset(s) into ${res.atlas_width}×${res.atlas_height} (${res.canvas_mode.toUpperCase()}, ${fillPct}% fill, ${res.bleed_px}px bleed) in ${Math.round(res.elapsed_ms || 0)}ms`;
+          const rows = (res.entries || []).map((ent) => ({
+            stem: ent.stem,
+            kind: `Slot (${ent.x}, ${ent.y}) · ${ent.w}×${ent.h}`,
+            status: 'done',
+          }));
+          renderBatchQueue(rows, sum);
+          if ($('atlasResultCard')) {
+            $('atlasResultCard').style.display = 'flex';
+            if ($('atlasPreviewImg') && res.albedo_preview_url) $('atlasPreviewImg').src = res.albedo_preview_url;
+            if ($('atlasResultMeta')) {
+              $('atlasResultMeta').innerHTML = `
+                <strong style="color:var(--text-primary);">${res.stem} · ${res.atlas_width}×${res.atlas_height} (${res.canvas_mode.toUpperCase()})</strong>
+                <span>Fill efficiency: ${fillPct}% · Voronoi bleed: ${res.bleed_px}px · ${(res.remapped_bbmodels || []).length} remapped .bbmodel(s)</span>
+                <span style="font-family:var(--font-mono);font-size:9.5px;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${res.manifest_path || ''}</span>
+              `;
+            }
+          }
+          showToast(`Packed Shared PBR Atlas (${res.atlas_width}×${res.atlas_height}, ${fillPct}% fill)`, 'ok');
+        } catch (err) {
+          showToast(`Atlas bake error: ${err.message}`, 'err');
+        } finally {
+          btn.disabled = false;
+          btn.textContent = 'Pack Shared Atlas';
+        }
+      };
+    }
+
     // Visual Add-Node Browser & Command Palette
     if ($('btnPalList')) $('btnPalList').onclick = () => { state.paletteViewMode = 'list'; renderPaletteList(); };
     if ($('btnPalGrid')) $('btnPalGrid').onclick = () => { state.paletteViewMode = 'grid'; renderPaletteList(); };
@@ -3855,13 +4290,19 @@
       e.target.value = '';
     };
 
-    // Multi-Engine Export Modal
+    // Substance-Style Multi-Engine Output Template Export Modal (`v17`)
     $('btnOpenExport').onclick = () => {
       $('exportStemInput').value = (state.serverState && state.serverState.recipe && state.serverState.recipe.name) || 'synccraft_asset';
-      $('exportPresetSelect').value = state.lightingPreset;
+      if ($('exportPresetSelect') && [...$('exportPresetSelect').options].some((o) => o.value === state.lightingPreset)) {
+        $('exportPresetSelect').value = state.lightingPreset;
+      }
       $('exportResultPre').style.display = 'none';
+      if ($('exportTemplateSelect') && !$('exportTemplateSelect').options.length) populateExportTemplates();
+      renderExportTemplatePreview();
       $('exportModal').classList.add('open');
     };
+    if ($('exportTemplateSelect')) $('exportTemplateSelect').onchange = () => renderExportTemplatePreview();
+    if ($('exportStemInput')) $('exportStemInput').oninput = () => renderExportTemplatePreview();
     $('btnCloseExport').onclick = () => $('exportModal').classList.remove('open');
     $('exportModal').addEventListener('click', (e) => { if (e.target === $('exportModal')) $('exportModal').classList.remove('open'); });
     const runCtmExport = async (mode) => {
@@ -3876,27 +4317,26 @@
         }
         triggerDataUrlDownload(res.sheet_filename, res.sheet_data_url);
         triggerDownload(res.props_filename, res.optifine_properties);
-        showToast(`Exported ${res.mode.toUpperCase()} (${res.tile_count} tiles + .properties)!`, 'ok');
+        showToast(`Exported ${res.mode.toUpperCase()} (${res.tile_count} tiles + .properties)`, 'ok');
       } catch (err) {
         showToast(err.message, 'err');
       }
     };
-    if ($('btnExportCtm47')) $('btnExportCtm47').onclick = () => runCtmExport('ctm47');
-    if ($('btnExportWang16')) $('btnExportWang16').onclick = () => runCtmExport('wang16');
     if ($('btnDownloadMtlx')) {
       $('btnDownloadMtlx').onclick = async () => {
         const stem = $('exportStemInput').value.trim() || 'asset';
         const shader = ($('exportMtlxShader') && $('exportMtlxShader').value) || 'open_pbr_surface';
         const coat = $('coatSlider') ? parseFloat($('coatSlider').value) : 0.25;
+        const ver = shader === 'open_pbr_surface' ? '1.39' : '1.38';
         try {
           const res = await apiPost('/api/export/materialx', { stem, shader_model: shader, coat_weight: coat });
           triggerDownload(res.filename || `${stem}.mtlx`, res.xml);
           const pre = $('exportResultPre');
           if (pre) {
             pre.style.display = 'block';
-            pre.textContent = `Downloaded ASWF MaterialX 1.38 (${shader}): ${res.filename}\n\n${res.xml.slice(0, 620)}...`;
+            pre.textContent = `Downloaded ASWF MaterialX ${ver} (${shader}): ${res.filename}\n\n${res.xml.slice(0, 620)}...`;
           }
-          showToast(`Downloaded MaterialX 1.38 (${res.filename})`, 'ok');
+          showToast(`Downloaded MaterialX ${ver} (${res.filename})`, 'ok');
         } catch (err) {
           showToast(err.message, 'err');
         }
@@ -3913,22 +4353,39 @@
       showToast(`Downloaded ${stem}.texgraph.json`, 'ok');
     };
     $('btnRunExport').onclick = async () => {
+      const tplId = ($('exportTemplateSelect') && $('exportTemplateSelect').value) || 'full_pbr_v2';
+      if (tplId === 'ctm47' || tplId === 'wang16') {
+        await runCtmExport(tplId);
+        return;
+      }
       const stem = $('exportStemInput').value.trim() || 'asset';
       const outDir = $('exportDirInput').value.trim();
       const preset = $('exportPresetSelect').value;
+      const bleedPx = parseInt(($('exportBleedSelect') && $('exportBleedSelect').value) || '4', 10);
+      const shader = ($('exportMtlxShader') && $('exportMtlxShader').value) || 'open_pbr_surface';
+      const coat = $('coatSlider') ? parseFloat($('coatSlider').value) : 0.25;
       try {
-        const res = await apiPost('/api/export', { stem, preset, out_dir: outDir || null, embed_manifest: true });
+        const res = await apiPost('/api/export/preset', {
+          preset_id: tplId,
+          stem,
+          out_dir: outDir || null,
+          lighting_preset: preset,
+          bleed_px: bleedPx,
+          shader_model: shader,
+          coat_weight: coat,
+        });
         const pre = $('exportResultPre');
         pre.style.display = 'block';
+        const fnames = res.file_names || [];
         if (res.mode === 'disk') {
-          pre.textContent = `Exported ${Object.keys(res.files).length} files to:\n${res.out_dir}\n\n` + Object.keys(res.files).join(', ');
-          showToast(`Exported PBR v2.0 bundle to disk!`, 'ok');
+          pre.textContent = `Exported '${tplId}' (${fnames.length} files, ${res.bleed_px}px mip bleed) to:\n${res.out_dir}\n\n${fnames.join(', ')}`;
+          showToast(`Exported ${tplId} (${fnames.length} files) to disk`, 'ok');
         } else {
-          pre.textContent = `Prepared PBR v2.0 bundle (${res.file_keys.length} channels):\n${res.file_keys.join(', ')}\n\nDownloading ${stem}.synccraft.pbr.json...`;
-          if (res.downloads && res.downloads[`${stem}.synccraft.pbr.json`]) {
-            triggerDownload(`${stem}.synccraft.pbr.json`, res.downloads[`${stem}.synccraft.pbr.json`]);
+          pre.textContent = `Prepared '${tplId}' (${fnames.length} files, ${res.bleed_px}px mip bleed):\n${fnames.join(', ')}\n\nDownloading ${res.bundle_filename}...`;
+          if (res.bundle_filename && res.bundle_json) {
+            triggerDownload(res.bundle_filename, res.bundle_json);
           }
-          showToast(`Exported ${stem}.synccraft.pbr.json (all PBR channels embedded)`, 'ok');
+          showToast(`Exported ${res.bundle_filename} (${fnames.length} maps)`, 'ok');
         }
       } catch (err) {
         showToast(err.message, 'err');
@@ -3987,9 +4444,8 @@
       if (e.key === 'Escape') {
         hideContextMenu();
         closePalette();
-        if (state.pickMode) setPickMode(false);
-        if (state.brushMode) setBrushMode(false);
-        if (state.lightDragMode) setLightDragMode(false);
+        closeViewportPopovers();
+        if (state.pickMode || state.brushMode || state.decalMode || state.lightDragMode) setViewportTool('orbit');
         $('exportModal').classList.remove('open');
         $('meshModal').classList.remove('open');
         if ($('batchModal')) $('batchModal').classList.remove('open');

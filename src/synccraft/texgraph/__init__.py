@@ -261,6 +261,18 @@ from .math_utility_ops import (
     vector_math,
 )
 from .ai_copilot import BUILT_IN_STYLE_PRESETS, apply_surgical_patch, diagnose_asset, extract_style_dna
+from .v17_decal_atlas_ops import (
+    DECAL_STENCILS,
+    ENGINE_EXPORT_PRESETS,
+    bake_multi_asset_atlas,
+    decal_stamp_op,
+    export_engine_preset,
+    mip_safe_dilate_normal,
+    mip_safe_dilate_op,
+    mip_safe_dilate_rgba,
+    mip_safe_dilate_scalar,
+    render_decal_stencil,
+)
 from .syncproj import DEFAULT_CHRONO_VARIANTS, SyncProject, apply_variant_to_graph, generate_variant_pack
 from .studio_server import (
     STUDIO_SAMPLES,

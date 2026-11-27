@@ -280,6 +280,19 @@ def _eval_single_node_preview(
             bg[..., :3] = bg[..., :3] * (1.0 - m_gold[..., None]) + gold_c[None, None, :] * m_gold[..., None]
             bg[..., :3] = bg[..., :3] * (1.0 - m_cyan[..., None]) + cyan_c[None, None, :] * m_cyan[..., None]
             return _to_data_url(bg, sz)
+        if op == "decal_stamp":
+            from .v17_decal_atlas_ops import render_decal_stencil
+            st = render_decal_stencil("chrono_sigil", size=sz)
+            bg = np.zeros((sz, sz, 4), dtype=np.float32)
+            bg[..., :3] = np.array([0.15, 0.16, 0.20], dtype=np.float32)
+            bg[..., 3] = 1.0
+            a = st["albedo"][..., 3:4]
+            bg[..., :3] = bg[..., :3] * (1.0 - a) + st["albedo"][..., :3] * a
+            return _to_data_url(bg, sz)
+        if op == "mip_safe_dilate":
+            from .v17_decal_atlas_ops import mip_safe_dilate_rgba
+            dil = mip_safe_dilate_rgba(refs["sprite_rgba"], bleed_px=max(4, sz // 5), preserve_alpha=False)
+            return _to_data_url(dil, sz)
         if op == "paint_mask":
             u, v = refs["u"], refs["v"]
             d_curve = np.abs((v - 0.5) - 0.24 * np.sin((u - 0.15) * 5.2))

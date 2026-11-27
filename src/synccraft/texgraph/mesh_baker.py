@@ -124,6 +124,10 @@ class MeshBakeContext:
     content_fingerprint: str = ""
     bake_cache_hit: bool = False
     bake_ms: float = 0.0
+    # TexGraph v17: Stored OBB geometry for exact front-most Kay-Kajiya 3D decal occlusion!
+    obb_centers: np.ndarray = field(default_factory=lambda: np.zeros((0, 3), dtype=np.float32))
+    obb_RTs: np.ndarray = field(default_factory=lambda: np.zeros((0, 3, 3), dtype=np.float32))
+    obb_halfs: np.ndarray = field(default_factory=lambda: np.zeros((0, 3), dtype=np.float32))
 
     def match_elements_mask(self, pattern: str) -> np.ndarray:
         """Return a float32 (H, W) mask matching elements whose bone/name OR mirrored short-name matches ``pattern``."""
@@ -625,6 +629,9 @@ def _save_mesh_bake_disk(fp: str, ctx: MeshBakeContext) -> None:
             "island_inner_area": ctx.island_inner_area,
             "face_is_up": ctx.face_is_up,
             "face_is_side": ctx.face_is_side,
+            "obb_centers": ctx.obb_centers,
+            "obb_RTs": ctx.obb_RTs,
+            "obb_halfs": ctx.obb_halfs,
         }
         for z, arr in ctx.zone_masks.items():
             arrays[f"zone__{z}"] = arr
@@ -713,6 +720,9 @@ def _load_mesh_bake_disk(fp: str) -> MeshBakeContext | None:
                 island_inner_area=data["island_inner_area"].copy(),
                 face_is_up=data["face_is_up"].copy(),
                 face_is_side=data["face_is_side"].copy(),
+                obb_centers=data["obb_centers"].copy() if "obb_centers" in data else np.zeros((0, 3), dtype=np.float32),
+                obb_RTs=data["obb_RTs"].copy() if "obb_RTs" in data else np.zeros((0, 3, 3), dtype=np.float32),
+                obb_halfs=data["obb_halfs"].copy() if "obb_halfs" in data else np.zeros((0, 3), dtype=np.float32),
                 content_fingerprint=fp,
                 bake_cache_hit=True,
                 bake_ms=round((time.perf_counter() - t0) * 1000.0, 2),
@@ -1343,6 +1353,9 @@ def bake_bbmodel_maps(
         island_inner_area=island_inner_area,
         face_is_up=face_is_up,
         face_is_side=face_is_side,
+        obb_centers=all_centers,
+        obb_RTs=all_RTs,
+        obb_halfs=all_halfs,
         content_fingerprint=fp,
         bake_cache_hit=False,
         bake_ms=round((time.perf_counter() - t_bake_start) * 1000.0, 2),
