@@ -78,6 +78,13 @@ from .seam_and_pbr_ops import (
     triplanar_project,
     uv_seam_heal,
 )
+from .region_ops import (
+    region_base_fill,
+    region_bevel_and_ao,
+    region_composite,
+    region_restrained_noise,
+    uv_island_coords,
+)
 from .generators_gradients import (
     body_flow_gradient,
     cosine_gradient,
@@ -230,6 +237,9 @@ _BUS_INPUT_KEYS: dict[str, frozenset[str]] = {
     "uv_seam_heal": frozenset({"src"}),
     "block_edge_transition": frozenset({"base"}),
     "precompute_shadow_pbr": frozenset({"mat"}),
+    "region_restrained_noise": frozenset({"mat"}),
+    "region_bevel_and_ao": frozenset({"mat"}),
+    "region_composite": frozenset({"base", "layer"}),
 }
 
 
@@ -1797,6 +1807,16 @@ class TexGraph:
                 return mc.uv_seam_mask
             if ch == "wing_bay_mask":
                 return mc.wing_bay_mask
+            if ch == "island_edge_px":
+                return np.clip(mc.island_edge_px / 8.0, 0.0, 1.0).astype(np.float32)
+            if ch == "island_inner_area":
+                return mc.island_inner_area
+            if ch == "island_size_min":
+                return np.clip(mc.island_size_min / 32.0, 0.0, 1.0).astype(np.float32)
+            if ch == "face_is_up":
+                return mc.face_is_up
+            if ch == "face_is_side":
+                return mc.face_is_side
             raise ValueError(f"Unknown mesh_channel: {ch!r}")
 
         if op == "height_to_normal":
@@ -2766,6 +2786,27 @@ class TexGraph:
         if op == "precompute_shadow_pbr":
             kw = {k: v for k, v in p.items() if k != "seed"}
             return precompute_shadow_pbr(ins["mat"], self.mesh_context, **kw)
+
+        # --- TexGraph v11 Pixel Composer Per-UV / Per-Body-Part Region Nodes ---
+        if op == "uv_island_coords":
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return uv_island_coords(H, W, self.mesh_context, **kw)
+
+        if op == "region_base_fill":
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return region_base_fill(H, W, self.mesh_context, seed=seed, **kw)
+
+        if op == "region_restrained_noise":
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return region_restrained_noise(ins["mat"], self.mesh_context, seed=seed, **kw)
+
+        if op == "region_bevel_and_ao":
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return region_bevel_and_ao(ins["mat"], self.mesh_context, seed=seed, **kw)
+
+        if op == "region_composite":
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return region_composite(ins["base"], ins["layer"], self.mesh_context, mask=ins.get("mask"), **kw)
 
         raise ValueError(f"Unsupported TexGraph op: {op!r}")
 

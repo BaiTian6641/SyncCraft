@@ -42,6 +42,7 @@ from .pixel_art_ops import encode_png, rgba_float_to_u8
 from .presets import PRESET_REGISTRY
 from .production import PALETTE_BANK
 from .quality import evaluate_texture_quality
+from .region_ops import build_uv_region_overlay
 from .registry import NODE_CATALOG as NODE_REGISTRY, PORT_COMPATIBILITY, export_node_schema_json
 from .syncproj import DEFAULT_CHRONO_VARIANTS, SyncProject, apply_variant_to_graph, generate_variant_pack
 from .texdsl import TexDslError as TexDSLParseError, export_texdsl, parse_texdsl
@@ -1169,6 +1170,11 @@ class StudioSession:
                 diag[seam_m, 2] = 255
                 diag[~mc.island_mask, :3] = 20
                 channels["uv_seams"] = _u8_to_data_url(diag, max_dim=512)
+                # Per-UV Island & Body-Part Region Map + Pixel Composer Inner Area Map!
+                channels["uv_regions"] = _u8_to_data_url(build_uv_region_overlay(mc), max_dim=512)
+                ia_u8 = _scalar_to_heatmap_u8(mc.island_inner_area, warm=False)
+                ia_u8[~mc.island_mask, :3] = 16
+                channels["inner_area"] = _u8_to_data_url(ia_u8, max_dim=512)
 
             # Optional pinned node preview
             selected_preview = None

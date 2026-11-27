@@ -159,6 +159,19 @@ def apply_variant_to_graph(
             elif sp.op == "forged_battle_metal" and ("brass" in nid or "gold" in nid):
                 if "stops" in sp.params:
                     sp.params["stops"] = list(st["metal_stops"])
+            elif sp.op == "region_base_fill":
+                if any(k in nid for k in ("scale", "skin", "body")):
+                    sp.params["stops"] = list(st["stops"])
+                elif any(k in nid for k in ("brass", "gold")):
+                    sp.params["stops"] = list(st["metal_stops"])
+                elif any(k in nid for k in ("amethyst", "gem", "crystal")):
+                    sp.params["stops"] = list(st["accent_stops"])
+            elif sp.op == "region_composite" and sp.params.get("palette_snap_stops"):
+                layer_ref = str(sp.inputs.get("layer", ""))
+                if any(k in layer_ref for k in ("brass", "gold")):
+                    sp.params["palette_snap_stops"] = list(st["metal_stops"])
+                elif any(k in layer_ref for k in ("amethyst", "gem", "crystal")):
+                    sp.params["palette_snap_stops"] = list(st["accent_stops"])
 
     # 2. Apply eye / rune emissive palette updates on landmark detail nodes
     for nid, sp in g_var.nodes.items():

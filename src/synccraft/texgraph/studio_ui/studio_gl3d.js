@@ -269,10 +269,10 @@
     constructor(canvas, hudEl) {
       this.canvas = canvas;
       this.hudEl = hudEl;
-      this.yaw = -0.62;
-      this.pitch = 0.40;
+      this.yaw = -0.38;
+      this.pitch = 0.24;
       this.dist = 3.55;
-      this.spin = true;
+      this.spin = false;
       this.wireframe = false;
       this.primitive = 'bbmodel';
       this.channel = 'pbr_lit';

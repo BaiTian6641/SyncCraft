@@ -15,7 +15,7 @@
       <div class="brand">
         <div class="brand-mark">SC</div>
         <span>SyncCraft Studio</span>
-        <span class="brand-sub" id="versionBadge">v10 · 144 nodes</span>
+        <span class="brand-sub" id="versionBadge">v11 · 149 nodes</span>
       </div>
 
       <select id="projectSelect" class="sel-input" title="Load Flagship Sample or Built-in Preset" style="width: 192px;"></select>
@@ -81,6 +81,8 @@
               <option value="bedrock_mer">Bedrock RTX MER</option>
               <option value="labpbr_s">LabPBR 1.3 (_s)</option>
               <option value="uv_seams">3D UV Seams + Thinness</option>
+              <option value="uv_regions">UV Islands &amp; Body Parts</option>
+              <option value="inner_area">Pixel Composer Inner Area</option>
               <option value="selected">Selected Node Output</option>
             </select>
           </div>
@@ -95,7 +97,7 @@
               <option value="pillar">Bevel Pillar</option>
               <option value="sphere">Lookdev Sphere</option>
             </select>
-            <button class="btn sm active" id="btnSpin3d" title="Auto-Turntable">Spin</button>
+            <button class="btn sm" id="btnSpin3d" title="Auto-Turntable">Spin</button>
             <button class="btn sm" id="btnWire3d" title="Toggle Mesh Edges">Wire</button>
             <button class="btn sm" id="btnResetCam3d" title="Reset Orbit Camera">Reset</button>
           </div>
@@ -134,11 +136,11 @@
       <!-- PANE 2: NODE LIBRARY & SUBGRAPHS -->
       <div class="pane pane-library" id="paneLibrary" data-pane="library">
         <div class="pane-header">
-          <span class="pane-title">Node Library (<span id="libCount">144</span>)</span>
+          <span class="pane-title">Node Library (<span id="libCount">149</span>)</span>
           <button class="btn sm" id="btnOpenPaletteLib" title="Fuzzy Command Palette (Tab)">⌘K / Tab</button>
         </div>
         <div class="lib-search-row">
-          <input type="text" id="libSearch" class="txt-input" placeholder="Filter 144 nodes (e.g. triplanar, seam, shadow, dither)..." />
+          <input type="text" id="libSearch" class="txt-input" placeholder="Filter 149 nodes (e.g. region, inner_area, triplanar, dither)..." />
         </div>
         <div class="lib-body" id="libBody"></div>
       </div>

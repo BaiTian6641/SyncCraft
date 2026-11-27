@@ -71,6 +71,15 @@ from .seam_and_pbr_ops import (
     triplanar_project,
     uv_seam_heal,
 )
+from .region_ops import (
+    build_uv_region_overlay,
+    region_base_fill,
+    region_bevel_and_ao,
+    region_composite,
+    region_restrained_noise,
+    resolve_part_mask,
+    uv_island_coords,
+)
 from .texdsl import TexDslError, export_texdsl, load_texdsl, parse_texdsl
 from .production import PALETTE_BANK, BatchJobResult, BatchTextureJob, pack_sprite_atlas, run_batch
 from .quality import QualityReport, evaluate_texture_quality

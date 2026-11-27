@@ -56,11 +56,11 @@ def _rgb_to_hsv_deg(rgb: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray
 BUILT_IN_STYLE_PRESETS: dict[str, dict[str, Any]] = {
     "chronos_amethyst": {
         "name": "chronos_amethyst",
-        "title": "Chrono-Amethyst (D&D Time × Amethyst × Gemini 4)",
-        "stops": ["#18152C", "#2D254F", "#4F3B82", "#7C5CB8", "#B28DE3", "#E2CEFF"],
-        "accent_stops": ["#0E4B68", "#18A8C8", "#4FF8FF", "#E879F9"],
+        "title": "Chrono-Amethyst (Silvery-White Time Dragon × Amethyst × Gemini 4)",
+        "stops": ["#363452", "#65638A", "#9CA0C4", "#CBD0E8", "#EAEFF9", "#FAFBFF"],
+        "accent_stops": ["#0E4B68", "#18A8C8", "#4FF8FF", "#B45EFF"],
         "metal_stops": ["#462614", "#8B5320", "#C88E34", "#EAC25E", "#FFF0AE"],
-        "mood": "Celestial Chronal Gem & Brass",
+        "mood": "Silvery-White Chronal Dragon & Royal Amethyst",
     },
     "solar_aeon": {
         "name": "solar_aeon",

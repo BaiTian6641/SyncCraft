@@ -107,6 +107,13 @@ class MeshBakeContext:
     uv_seam_src_yx: np.ndarray = field(default_factory=lambda: np.zeros((0, 2), dtype=np.int32))
     uv_seam_dst_yx: np.ndarray = field(default_factory=lambda: np.zeros((0, 2), dtype=np.int32))
     uv_seam_weight: np.ndarray = field(default_factory=lambda: np.zeros((0,), dtype=np.float32))
+    # TexGraph v11 (Pixel Composer Per-UV / Per-Body-Part Restraint Channels):
+    island_edge_px: np.ndarray = field(default_factory=lambda: np.zeros((1, 1), dtype=np.float32))
+    island_size_min: np.ndarray = field(default_factory=lambda: np.full((1, 1), 16.0, dtype=np.float32))
+    island_size_wh: np.ndarray = field(default_factory=lambda: np.full((1, 1, 2), 16.0, dtype=np.float32))
+    island_inner_area: np.ndarray = field(default_factory=lambda: np.ones((1, 1), dtype=np.float32))
+    face_is_up: np.ndarray = field(default_factory=lambda: np.zeros((1, 1), dtype=np.float32))
+    face_is_side: np.ndarray = field(default_factory=lambda: np.ones((1, 1), dtype=np.float32))
 
     def match_elements_mask(self, pattern: str) -> np.ndarray:
         """Return a float32 (H, W) mask matching elements whose bone/name OR mirrored short-name matches ``pattern``."""
@@ -442,6 +449,12 @@ def bake_bbmodel_maps(
     wing_span_u = np.zeros((H, W), dtype=np.float32)
     wing_trail_v = np.zeros((H, W), dtype=np.float32)
     face_is_down = np.zeros((H, W), dtype=np.float32)
+    face_is_up = np.zeros((H, W), dtype=np.float32)
+    face_is_side = np.zeros((H, W), dtype=np.float32)
+    island_edge_px = np.zeros((H, W), dtype=np.float32)
+    island_size_min = np.zeros((H, W), dtype=np.float32)
+    island_size_wh = np.zeros((H, W, 2), dtype=np.float32)
+    island_inner_area = np.zeros((H, W), dtype=np.float32)
     zone_masks: dict[str, np.ndarray] = {z: np.zeros((H, W), dtype=np.float32) for z in ANATOMICAL_ZONES}
 
     # Normalize directional key light & build 3-ray soft penumbra cone for 3D ray-traced shadows!
@@ -674,6 +687,18 @@ def bake_bbmodel_maps(
             wing_span_u[y0:y1, x0:x1] = u_tip.astype(np.float32)
             wing_trail_v[y0:y1, x0:x1] = v_trail.astype(np.float32)
             face_is_down[y0:y1, x0:x1] = 1.0 if face == "down" else 0.0
+            face_is_up[y0:y1, x0:x1] = 1.0 if face == "up" else 0.0
+            face_is_side[y0:y1, x0:x1] = 1.0 if face in ("north", "south", "east", "west") else 0.0
+            min_wh = float(min(w_px, h_px))
+            island_edge_px[y0:y1, x0:x1] = d_border.astype(np.float32)
+            island_size_min[y0:y1, x0:x1] = min_wh
+            island_size_wh[y0:y1, x0:x1, 0] = float(w_px)
+            island_size_wh[y0:y1, x0:x1, 1] = float(h_px)
+            # Pixel Composer `PB FX Bevel -> Inner Area`: 1.0 strictly interior (>=1px from border on islands >=4px)
+            if min_wh >= 4.0:
+                island_inner_area[y0:y1, x0:x1] = np.clip(d_border, 0.0, 1.0).astype(np.float32)
+            else:
+                island_inner_area[y0:y1, x0:x1] = 0.0
             elem_id_map[y0:y1, x0:x1] = idx
             face_id_map[y0:y1, x0:x1] = FACES.index(face)
             elem_center_x_map[y0:y1, x0:x1] = float(center[0])
@@ -934,4 +959,10 @@ def bake_bbmodel_maps(
         uv_seam_src_yx=uv_seam_src_yx,
         uv_seam_dst_yx=uv_seam_dst_yx,
         uv_seam_weight=uv_seam_weight,
+        island_edge_px=island_edge_px,
+        island_size_min=island_size_min,
+        island_size_wh=island_size_wh,
+        island_inner_area=island_inner_area,
+        face_is_up=face_is_up,
+        face_is_side=face_is_side,
     )

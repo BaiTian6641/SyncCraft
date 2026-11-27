@@ -308,6 +308,12 @@ _POSITIONAL_PARAMS: dict[str, tuple[str, ...]] = {
     "uv_seam_heal": ("strength", "radius_px"),
     "block_edge_transition": ("neighbors", "style"),
     "precompute_shadow_pbr": ("preset", "bake_into_albedo"),
+    # TexGraph v11 Per-UV / Per-Body-Part Pixel Composer ops
+    "uv_island_coords": ("channel", "part_pattern"),
+    "region_base_fill": ("part_pattern", "stops"),
+    "region_restrained_noise": ("pattern", "amplitude"),
+    "region_bevel_and_ao": ("highlight_strength", "shadow_strength"),
+    "region_composite": ("part_pattern", "opacity"),
 }
 
 # Canonical mesh_channel short aliases
@@ -318,6 +324,8 @@ _MESH_CHANNEL_ALIASES: dict[str, str] = {
     "cavity": "joint_cavity",
     "seam": "uv_seam",
     "mask": "island_mask",
+    "inner_area": "island_inner_area",
+    "edge_px": "island_edge_px",
 }
 
 
