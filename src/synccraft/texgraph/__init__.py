@@ -40,6 +40,15 @@ from .generators_bio_materials import (
     layered_plumage,
     organic_fur_pelt,
 )
+from .generators_character_materials import (
+    forged_battle_metal,
+    keratin_horn_bone,
+    orc_flesh_skin,
+    paint_entity_eyes_and_parts,
+    stitched_leather,
+    woven_battle_cloth,
+)
+from .texdsl import TexDslError, export_texdsl, load_texdsl, parse_texdsl
 from .production import PALETTE_BANK, BatchJobResult, BatchTextureJob, pack_sprite_atlas, run_batch
 from .quality import QualityReport, evaluate_texture_quality
 from .generators_gradients import (

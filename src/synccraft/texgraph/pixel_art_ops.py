@@ -501,13 +501,20 @@ def export_flipbook(
     out_png_path: Path | str | None = None,
     frametime: int = 2,
     interpolate: bool = False,
+    frames_schedule: list[int | dict[str, int]] | None = None,
     out_gif_path: Path | str | None = None,
     gif_scale: int = 4,
 ) -> dict[str, Any]:
-    """Export looping animation frames as a vertical Minecraft/Blockbench flipbook PNG + .mcmeta + GIF."""
+    """Export looping animation frames as a vertical Minecraft/Blockbench flipbook PNG + .mcmeta + GIF.
+
+    Supports industry-standard Minecraft `.png.mcmeta` custom `frames_schedule` arrays:
+    - Simple ping-pong: ``[0, 1, 2, 3, 2, 1]``
+    - Hold-frame eye blink / ore glint: ``[{"index": 0, "time": 40}, 1, 2, 3, 2, 1]``
+    """
     if not frames_rgba:
         raise ValueError("export_flipbook requires at least one frame")
     u8_frames = [rgba_float_to_u8(f) for f in frames_rgba]
+    n_fr = len(u8_frames)
     h, w = u8_frames[0].shape[:2]
     strip = np.concatenate(u8_frames, axis=0)
 
@@ -515,11 +522,25 @@ def export_flipbook(
     Image.fromarray(strip, mode="RGBA").save(png_buf, format="PNG", optimize=True)
     png_bytes = png_buf.getvalue()
 
+    ft = max(1, int(frametime))
+    sched: list[int | dict[str, int]]
+    if frames_schedule is not None and len(frames_schedule) > 0:
+        sched = []
+        for entry in frames_schedule:
+            if isinstance(entry, dict):
+                idx = int(entry.get("index", 0)) % n_fr
+                tm = max(1, int(entry.get("time", ft)))
+                sched.append({"index": idx, "time": tm})
+            else:
+                sched.append(int(entry) % n_fr)
+    else:
+        sched = list(range(n_fr))
+
     mcmeta = {
         "animation": {
-            "frametime": max(1, int(frametime)),
+            "frametime": ft,
             "interpolate": bool(interpolate),
-            "frames": list(range(len(u8_frames))),
+            "frames": sched,
         }
     }
 
@@ -532,18 +553,26 @@ def export_flipbook(
     gif_bytes = b""
     if out_gif_path is not None:
         sc = max(1, int(gif_scale))
-        pil_frames = [
+        scaled_cache = [
             Image.fromarray(fr, mode="RGBA").resize((w * sc, h * sc), resample=Image.Resampling.NEAREST)
             for fr in u8_frames
         ]
+        pil_frames: list[Image.Image] = []
+        durations_ms: list[int] = []
+        for entry in sched:
+            if isinstance(entry, dict):
+                pil_frames.append(scaled_cache[entry["index"]])
+                durations_ms.append(max(40, int(entry["time"]) * 50))
+            else:
+                pil_frames.append(scaled_cache[int(entry)])
+                durations_ms.append(max(40, ft * 50))
         gbuf = io.BytesIO()
-        duration_ms = max(40, int(frametime) * 50)
         pil_frames[0].save(
             gbuf,
             format="GIF",
             save_all=True,
             append_images=pil_frames[1:],
-            duration=duration_ms,
+            duration=durations_ms,
             loop=0,
             disposal=2,
         )
@@ -555,8 +584,8 @@ def export_flipbook(
     return {
         "frame_width": w,
         "frame_height": h,
-        "num_frames": len(u8_frames),
-        "strip_height": h * len(u8_frames),
+        "num_frames": n_fr,
+        "strip_height": h * n_fr,
         "mcmeta": mcmeta,
         "png_bytes": png_bytes,
         "gif_bytes": gif_bytes,

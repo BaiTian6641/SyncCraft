@@ -121,13 +121,13 @@ def main(argv=None):
         help="Parametric Pixel Composer (render recipes/presets, animate flipbooks, repack .bbmodel UVs, HTML inspector)",
     )
     tg_subs = tg.add_subparsers(dest="tg_cmd", required=True)
-    tg_render = tg_subs.add_parser("render", help="render a .texgraph.json recipe or built-in preset")
-    tg_render.add_argument("source", help="path to .texgraph.json recipe or preset:<name>")
+    tg_render = tg_subs.add_parser("render", help="render a .texdsl program, .texgraph.json recipe, or built-in preset")
+    tg_render.add_argument("source", help="path to .texdsl program, .texgraph.json recipe, or preset:<name>")
     tg_render.add_argument("-o", "--out", type=Path, required=True, help="output PNG path")
     tg_render.add_argument("--bbmodel", type=Path, help="optional .bbmodel to bake 3D maps from and embed texture into")
     tg_render.add_argument("--out-bbmodel", type=Path, help="optional path to write updated .bbmodel")
-    tg_render.add_argument("--frames", type=int, default=1, help="number of flipbook frames (>1 writes .mcmeta strip)")
-    tg_render.add_argument("--frametime", type=int, default=2)
+    tg_render.add_argument("--frames", type=int, default=None, help="number of flipbook frames (>1 writes .mcmeta strip; defaults to @texture frames)")
+    tg_render.add_argument("--frametime", type=int, default=None)
     tg_render.add_argument("--gif", type=Path, help="optional animated GIF preview path")
     tg_render.add_argument("--inspector", type=Path, help="optional interactive HTML node-graph inspector output")
     tg_render.add_argument("--size", type=int, default=32, help="canvas size for built-in block/item presets")
@@ -143,7 +143,7 @@ def main(argv=None):
     tg_repack.add_argument("--zone-map", type=Path, help="optional PNG path for visual UV Zone Diagnostic Map")
 
     tg_bake = tg_subs.add_parser("bake", help="export Baked Studio Albedo (_baked.png), .synccraft.pbr.json manifest & optional _baked.bbmodel")
-    tg_bake.add_argument("source", help="path to .texgraph.json recipe or preset:<name>")
+    tg_bake.add_argument("source", help="path to .texdsl program, .texgraph.json recipe, or preset:<name>")
     tg_bake.add_argument("-o", "--out-dir", type=Path, required=True, help="output directory for baked PBR package")
     tg_bake.add_argument("--stem", help="output file stem (defaults to graph name)")
     tg_bake.add_argument("--preset", default="studio_hero", choices=["studio_hero", "dramatic_rim", "high_noon", "moonlit_obsidian"])
@@ -154,13 +154,14 @@ def main(argv=None):
     tg_subs.add_parser("presets", help="list available built-in TexGraph presets")
     tg_subs.add_parser("schema", help="emit UI-ready typed JSON schema for all TexGraph nodes")
 
-    tg_val = tg_subs.add_parser("validate", help="statically validate a .texgraph.json recipe or preset DAG")
-    tg_val.add_argument("source", help="path to .texgraph.json recipe or preset:<name>")
+    tg_val = tg_subs.add_parser("validate", help="statically validate a .texdsl program, .texgraph.json recipe, or preset DAG")
+    tg_val.add_argument("source", help="path to .texdsl program, .texgraph.json recipe, or preset:<name>")
     tg_val.add_argument("--size", type=int, default=32)
 
     tg_qa = tg_subs.add_parser("qa", help="evaluate multi-domain texture quality (block/item/entity) & node profile")
-    tg_qa.add_argument("source", help="path to .texgraph.json recipe or preset:<name>")
-    tg_qa.add_argument("--domain", choices=["block", "item", "entity"], default="block")
+    tg_qa.add_argument("source", help="path to .texdsl program, .texgraph.json recipe, or preset:<name>")
+    tg_qa.add_argument("--domain", choices=["block", "item", "entity"], default=None)
+    tg_qa.add_argument("--bbmodel", type=Path, help="optional .bbmodel to bake 3D maps from for entity QA")
     tg_qa.add_argument("--size", type=int, default=32)
 
     args = parser.parse_args(argv)
@@ -204,19 +205,21 @@ def main(argv=None):
                 export_html_inspector,
             )
 
+            def _load_tg(src: str, *, size: int = 32, mesh_ctx=None):
+                if src.startswith("preset:"):
+                    pname = src.split(":", 1)[1]
+                    if pname not in PRESET_REGISTRY:
+                        raise ValueError(f"Unknown preset {pname!r}; choices: {sorted(PRESET_REGISTRY)}")
+                    return PRESET_REGISTRY[pname](size=size)
+                return TexGraph.load(src, mesh_context=mesh_ctx)
+
             if args.tg_cmd == "bake":
                 mesh_ctx = None
                 bb_doc = None
                 if args.bbmodel:
                     bb_doc = json.loads(args.bbmodel.read_text(encoding="utf-8"))
                     mesh_ctx = bake_bbmodel_maps(bb_doc)
-                if args.source.startswith("preset:"):
-                    pname = args.source.split(":", 1)[1]
-                    if pname not in PRESET_REGISTRY:
-                        raise ValueError(f"Unknown preset {pname!r}; choices: {sorted(PRESET_REGISTRY)}")
-                    graph = PRESET_REGISTRY[pname](size=args.size)
-                else:
-                    graph = TexGraph.from_recipe(args.source, mesh_context=mesh_ctx)
+                graph = _load_tg(args.source, size=args.size, mesh_ctx=mesh_ctx)
                 if mesh_ctx is not None:
                     graph.attach_mesh(mesh_ctx)
                 baked = graph.export_baked_pbr(
@@ -238,26 +241,25 @@ def main(argv=None):
                 print(_json(export_node_schema_json()))
                 return 0
             if args.tg_cmd == "validate":
-                if args.source.startswith("preset:"):
-                    pname = args.source.split(":", 1)[1]
-                    graph = PRESET_REGISTRY[pname](size=args.size)
-                else:
-                    graph = TexGraph.from_recipe(args.source)
+                graph = _load_tg(args.source, size=args.size)
                 rep = graph.validate_graph()
                 print(_json(rep.to_dict()))
                 return 0 if rep.ok else 2
             if args.tg_cmd == "qa":
                 from synccraft.texgraph.quality import evaluate_texture_quality
-                if args.source.startswith("preset:"):
-                    pname = args.source.split(":", 1)[1]
-                    graph = PRESET_REGISTRY[pname](size=args.size)
-                else:
-                    graph = TexGraph.from_recipe(args.source)
+                mesh_ctx = None
+                if args.bbmodel:
+                    bb_doc = json.loads(args.bbmodel.read_text(encoding="utf-8"))
+                    mesh_ctx = bake_bbmodel_maps(bb_doc)
+                graph = _load_tg(args.source, size=args.size, mesh_ctx=mesh_ctx)
+                if mesh_ctx is not None:
+                    graph.attach_mesh(mesh_ctx)
                 vrep = graph.validate_graph()
                 ev = graph.evaluate(build_pbr=True)
+                dom = args.domain or getattr(graph, "domain", None) or ("entity" if mesh_ctx is not None else "block")
                 qa = evaluate_texture_quality(
                     ev.output,
-                    domain=args.domain,
+                    domain=dom,
                     tileable=graph.tileable,
                     mesh_ctx=graph.mesh_context,
                     pbr_channels=ev.pbr_channels,
@@ -286,34 +288,37 @@ def main(argv=None):
                 if args.bbmodel:
                     bb_doc = json.loads(args.bbmodel.read_text(encoding="utf-8"))
                     mesh_ctx = bake_bbmodel_maps(bb_doc)
-                if args.source.startswith("preset:"):
-                    pname = args.source.split(":", 1)[1]
-                    if pname not in PRESET_REGISTRY:
-                        raise ValueError(f"Unknown preset {pname!r}; choices: {sorted(PRESET_REGISTRY)}")
-                    graph = PRESET_REGISTRY[pname](size=args.size)
-                else:
-                    graph = TexGraph.from_recipe(args.source, mesh_context=mesh_ctx)
+                graph = _load_tg(args.source, size=args.size, mesh_ctx=mesh_ctx)
                 if mesh_ctx is not None:
                     graph.attach_mesh(mesh_ctx)
+                anim_cfg = getattr(graph, "animation_config", {}) or {}
+                eff_frames = int(args.frames if args.frames is not None else anim_cfg.get("frames", 1))
+                eff_frametime = int(args.frametime if args.frametime is not None else anim_cfg.get("frametime", 2))
+                eff_interp = bool(anim_cfg.get("interpolate", False))
+                eff_sched = anim_cfg.get("frames_schedule")
                 frames_list = None
-                if args.frames > 1:
+                if eff_frames > 1:
                     if args.pbr:
                         fb = graph.render_pbr_flipbook(
-                            n_frames=args.frames,
+                            n_frames=eff_frames,
                             out_dir=args.out.parent,
                             stem=args.out.stem,
-                            frametime=args.frametime,
+                            frametime=eff_frametime,
+                            interpolate=eff_interp,
+                            frames_schedule=eff_sched,
                         )
                         frames_list = fb["pbr_lit_frames"]
                         summary = {"mode": "pbr_flipbook", "frames": fb["num_frames"], "out_dir": str(args.out.parent), "pbr_lit_gif": fb["pbr_lit_gif"]}
                     else:
                         fb = graph.render_flipbook(
-                            n_frames=args.frames,
-                            frametime=args.frametime,
+                            n_frames=eff_frames,
+                            frametime=eff_frametime,
+                            interpolate=eff_interp,
+                            frames_schedule=eff_sched,
                             out_png_path=args.out,
                             out_gif_path=args.gif,
                         )
-                        frames_list = [graph.evaluate(phase=k / float(args.frames)).output for k in range(args.frames)]
+                        frames_list = [graph.evaluate(phase=k / float(eff_frames)).output for k in range(eff_frames)]
                         summary = {"mode": "flipbook", "frames": fb["num_frames"], "out": str(args.out)}
                 else:
                     ev = graph.evaluate(phase=0.0, capture_intermediates=bool(args.inspector), build_pbr=bool(args.pbr or args.inspector))

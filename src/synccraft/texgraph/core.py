@@ -47,6 +47,14 @@ from .generators_bio_materials import (
     layered_plumage,
     organic_fur_pelt,
 )
+from .generators_character_materials import (
+    forged_battle_metal,
+    keratin_horn_bone,
+    orc_flesh_skin,
+    paint_entity_eyes_and_parts,
+    stitched_leather,
+    woven_battle_cloth,
+)
 from .generators_gradients import (
     body_flow_gradient,
     cosine_gradient,
@@ -193,6 +201,7 @@ _BUS_INPUT_KEYS: dict[str, frozenset[str]] = {
     "material_grade": frozenset({"mat"}),
     "material_set_alpha": frozenset({"mat"}),
     "material_pad_islands": frozenset({"mat"}),
+    "paint_entity_eyes_and_parts": frozenset({"base"}),
 }
 
 
@@ -312,6 +321,8 @@ class TexGraph:
         self.exposed_params: dict[str, dict[str, Any]] = {}
         self.param_drivers: list[dict[str, Any]] = []
         self.groups: list[dict[str, Any]] = []
+        self.domain: str = "block"
+        self.animation_config: dict[str, Any] = {"frames": 1, "frametime": 2, "interpolate": False, "frames_schedule": None}
         self._counter = 0
         self._static_cache: dict[str, Any] = {}
         self._content_cache: dict[str, tuple[str, Any]] = {}
@@ -1209,6 +1220,31 @@ class TexGraph:
     def elemental_golem_surface(self, *, id: str | None = None, **kw: Any) -> str:
         return self.add("elemental_golem_surface", id=id, **kw)
 
+    # --- TexGraph v8 Character/Orc Multi-Material Kit & Part-Aware Entity Compositor ---
+    def orc_flesh_skin(self, *, id: str | None = None, **kw: Any) -> str:
+        """Hue-shifted olive/emerald orc/goblin skin MaterialBus with scars, SSS blush & optional war paint."""
+        return self.add("orc_flesh_skin", id=id, **kw)
+
+    def stitched_leather(self, *, id: str | None = None, **kw: Any) -> str:
+        """Warm stitched leather MaterialBus with concentric rim bevels & perimeter stitch dots."""
+        return self.add("stitched_leather", id=id, **kw)
+
+    def forged_battle_metal(self, *, id: str | None = None, **kw: Any) -> str:
+        """Cool charcoal-indigo shadowed forged steel MaterialBus with 1 px bevels, scratches, rivets & rust."""
+        return self.add("forged_battle_metal", id=id, **kw)
+
+    def woven_battle_cloth(self, *, id: str | None = None, **kw: Any) -> str:
+        """Muted draped battle cloth / twisted rope MaterialBus with soft folds & optional hem trim."""
+        return self.add("woven_battle_cloth", id=id, **kw)
+
+    def keratin_horn_bone(self, *, id: str | None = None, **kw: Any) -> str:
+        """Dark-rooted keratin-to-ivory MaterialBus for tusks, horns, teeth, beaks, claws & hooves."""
+        return self.add("keratin_horn_bone", id=id, **kw)
+
+    def paint_entity_eyes_and_parts(self, base: str, *, id: str | None = None, **kw: Any) -> str:
+        """Part-aware semantic anatomical landmark compositor (protects eyes, noses, beaks, mouths, teeth, claws, fins, runes)."""
+        return self.add("paint_entity_eyes_and_parts", id=id, inputs={"base": base}, **kw)
+
     def sculpted_pinion_wing(
         self,
         span_u: str,
@@ -1381,6 +1417,38 @@ class TexGraph:
         if data.get("groups"):
             g.groups = copy.deepcopy(data["groups"])
         return g
+
+    def to_texdsl(self) -> str:
+        """Decompile this TexGraph DAG into clean declarative `.texdsl` source code."""
+        from .texdsl import export_texdsl
+        return export_texdsl(self)
+
+    def save_texdsl(self, path: Path | str) -> None:
+        p = Path(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(self.to_texdsl(), encoding="utf-8")
+
+    @classmethod
+    def from_texdsl(cls, source_or_path: Path | str, *, mesh_context: MeshBakeContext | None = None) -> "TexGraph":
+        """Compile a `.texdsl` source string or file path directly into a runnable TexGraph DAG."""
+        from .texdsl import load_texdsl, parse_texdsl
+
+        if isinstance(source_or_path, Path) or (
+            isinstance(source_or_path, str)
+            and "\n" not in source_or_path
+            and source_or_path.endswith(".texdsl")
+            and Path(source_or_path).exists()
+        ):
+            return load_texdsl(source_or_path, mesh_context=mesh_context)
+        return parse_texdsl(str(source_or_path), mesh_context=mesh_context)
+
+    @classmethod
+    def load(cls, path: Path | str, *, mesh_context: MeshBakeContext | None = None) -> "TexGraph":
+        """Load either a `.texdsl` texture program or a `.texgraph.json` recipe seamlessly."""
+        p = Path(path)
+        if p.suffix.lower() == ".texdsl":
+            return cls.from_texdsl(p, mesh_context=mesh_context)
+        return cls.from_recipe(p, mesh_context=mesh_context)
 
     # ------------------------------------------------------------------
     # DAG Evaluation Engine (Multi-Port + Drivers + Static Caching Across Frames)
@@ -2339,6 +2407,33 @@ class TexGraph:
                 **kw,
             )
 
+        # --- TexGraph v8 Character/Orc Materials & Part-Aware Entity Landmark Compositor ---
+        if op in ("orc_flesh_skin", "stitched_leather", "forged_battle_metal", "woven_battle_cloth", "keratin_horn_bone"):
+            mc = self.mesh_context
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            fn_map = {
+                "orc_flesh_skin": orc_flesh_skin,
+                "stitched_leather": stitched_leather,
+                "forged_battle_metal": forged_battle_metal,
+                "woven_battle_cloth": woven_battle_cloth,
+                "keratin_horn_bone": keratin_horn_bone,
+            }
+            return fn_map[op](
+                H, W,
+                world_pos_norm=mc.world_pos_norm if mc else None,
+                world_normal=mc.world_normal if mc else None,
+                baked_ao=mc.baked_ao if mc else None,
+                joint_cavity=mc.joint_cavity if mc else None,
+                edge_bevel=mc.edge_bevel if mc else None,
+                local_uv=mc.local_uv if mc else None,
+                seed=seed,
+                **kw,
+            )
+
+        if op == "paint_entity_eyes_and_parts":
+            kw = {k: v for k, v in p.items() if k != "seed"}
+            return paint_entity_eyes_and_parts(ins["base"], self.mesh_context, seed=seed, **kw)
+
         raise ValueError(f"Unsupported TexGraph op: {op!r}")
 
     def evaluate(
@@ -2603,15 +2698,19 @@ class TexGraph:
         stem: str | None = None,
         frametime: int = 2,
         interpolate: bool = False,
+        frames_schedule: list[int | dict[str, int]] | None = None,
         gif_scale: int = 4,
         rotate_light_in_preview: bool = False,
     ) -> dict[str, Any]:
-        """Render synchronized multi-channel animated PBR `.mcmeta` flipbooks (Albedo, LabPBR _n, _s, Bedrock _mer + PBR Lit GIF)."""
+        """Render synchronized multi-channel animated PBR `.mcmeta` flipbooks (Albedo, Emissive _e, LabPBR _n, _s, Bedrock _mer + PBR Lit GIF)."""
         d = Path(out_dir)
         d.mkdir(parents=True, exist_ok=True)
         st = stem or self.name
         n = max(1, int(n_frames))
+        sched = frames_schedule if frames_schedule is not None else self.animation_config.get("frames_schedule")
         alb_fr: list[np.ndarray] = []
+        em_fr: list[np.ndarray] = []
+        has_em = False
         n_fr: list[np.ndarray] = []
         s_fr: list[np.ndarray] = []
         mer_fr: list[np.ndarray] = []
@@ -2622,17 +2721,25 @@ class TexGraph:
             ev = self.evaluate(phase=ph, build_pbr=True, light_az_deg=az)
             assert ev.pbr_maps is not None and ev.pbr_preview is not None
             alb_fr.append(ev.pbr_maps["albedo"].astype(np.float32) / 255.0)
+            if ev.emissive is not None and float(np.max(ev.emissive[..., 3])) > 0.01:
+                has_em = True
+                em_fr.append(ev.emissive)
+            else:
+                em_fr.append(np.zeros((self.height, self.width, 4), dtype=np.float32))
             n_fr.append(ev.pbr_maps["labpbr_n"].astype(np.float32) / 255.0)
             s_fr.append(ev.pbr_maps["labpbr_s"].astype(np.float32) / 255.0)
             mer_fr.append(ev.pbr_maps["bedrock_mer"].astype(np.float32) / 255.0)
             lit_fr.append(ev.pbr_preview)
 
-        fb_alb = export_flipbook(alb_fr, out_png_path=d / f"{st}_flipbook.png", frametime=frametime, interpolate=interpolate, out_gif_path=d / f"{st}.gif", gif_scale=gif_scale)
-        fb_n = export_flipbook(n_fr, out_png_path=d / f"{st}_n_flipbook.png", frametime=frametime, interpolate=interpolate)
-        fb_s = export_flipbook(s_fr, out_png_path=d / f"{st}_s_flipbook.png", frametime=frametime, interpolate=interpolate)
-        fb_mer = export_flipbook(mer_fr, out_png_path=d / f"{st}_mer_flipbook.png", frametime=frametime, interpolate=interpolate)
-        fb_lit = export_flipbook(lit_fr, out_gif_path=d / f"{st}_pbr_lit.gif", frametime=frametime, gif_scale=gif_scale)
-        return {
+        fb_alb = export_flipbook(alb_fr, out_png_path=d / f"{st}_flipbook.png", frametime=frametime, interpolate=interpolate, frames_schedule=sched, out_gif_path=d / f"{st}.gif", gif_scale=gif_scale)
+        fb_n = export_flipbook(n_fr, out_png_path=d / f"{st}_n_flipbook.png", frametime=frametime, interpolate=interpolate, frames_schedule=sched)
+        fb_s = export_flipbook(s_fr, out_png_path=d / f"{st}_s_flipbook.png", frametime=frametime, interpolate=interpolate, frames_schedule=sched)
+        fb_mer = export_flipbook(mer_fr, out_png_path=d / f"{st}_mer_flipbook.png", frametime=frametime, interpolate=interpolate, frames_schedule=sched)
+        fb_lit = export_flipbook(lit_fr, out_gif_path=d / f"{st}_pbr_lit.gif", frametime=frametime, frames_schedule=sched, gif_scale=gif_scale)
+        fb_em = None
+        if has_em:
+            fb_em = export_flipbook(em_fr, out_png_path=d / f"{st}_e_flipbook.png", frametime=frametime, interpolate=interpolate, frames_schedule=sched)
+        res: dict[str, Any] = {
             "num_frames": n,
             "albedo": fb_alb,
             "labpbr_n": fb_n,
@@ -2642,6 +2749,10 @@ class TexGraph:
             "albedo_frames": alb_fr,
             "pbr_lit_frames": lit_fr,
         }
+        if fb_em is not None:
+            res["emissive"] = fb_em
+            res["emissive_frames"] = em_fr
+        return res
 
     def render_flipbook(
         self,
@@ -2649,6 +2760,7 @@ class TexGraph:
         *,
         frametime: int = 2,
         interpolate: bool = False,
+        frames_schedule: list[int | dict[str, int]] | None = None,
         out_png_path: Path | str | None = None,
         out_gif_path: Path | str | None = None,
         gif_scale: int = 4,
@@ -2656,6 +2768,7 @@ class TexGraph:
     ) -> dict[str, Any]:
         frames: list[np.ndarray] = []
         n = max(1, int(n_frames))
+        sched = frames_schedule if frames_schedule is not None else self.animation_config.get("frames_schedule")
         for k in range(n):
             ph = float(k) / float(n)
             ev = self.evaluate(phase=ph, target=target)
@@ -2665,6 +2778,7 @@ class TexGraph:
             out_png_path=out_png_path,
             frametime=frametime,
             interpolate=interpolate,
+            frames_schedule=sched,
             out_gif_path=out_gif_path,
             gif_scale=gif_scale,
         )

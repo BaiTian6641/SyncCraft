@@ -810,9 +810,9 @@ if (!actions[0].deleted) throw new Error("onunload did not clean up actions");
             tile_sampler,
         )
 
-        # 1. Schema v3.1 / Engine v7.0 exposes >=115 nodes & >=17 reusable PBR subgraphs
+        # 1. Schema v3.1 / Engine v8.0 exposes >=125 nodes & >=22 reusable PBR subgraphs
         schema = export_node_schema_json()
-        self.assertEqual(schema["engine_version"], "7.0")
+        self.assertGreaterEqual(float(schema["engine_version"]), 7.0)
         self.assertTrue(schema["supports_dag_validation"])
         self.assertTrue(schema["supports_incremental_cache"])
         self.assertGreaterEqual(schema["node_count"], 115)
@@ -915,6 +915,173 @@ if (!actions[0].deleted) throw new Error("onunload did not clean up actions");
             self.assertEqual(cli_main(["texgraph", "validate", "preset:runic_greatsword_item", "--size", "32"]), 0)
             self.assertEqual(cli_main(["texgraph", "qa", "preset:runic_greatsword_item", "--domain", "item", "--size", "32"]), 0)
             self.assertEqual(cli_main(["texgraph", "qa", "preset:husky_wolf_pelt", "--domain", "entity", "--size", "64"]), 0)
+
+    def test_v8_texdsl_part_aware_character_materials_and_animated_mcmeta(self) -> None:
+        from synccraft.texgraph import (
+            SUBGRAPH_REGISTRY,
+            TexDslError,
+            export_node_schema_json,
+            export_texdsl,
+            forged_battle_metal,
+            keratin_horn_bone,
+            orc_flesh_skin,
+            paint_entity_eyes_and_parts,
+            parse_texdsl,
+            stitched_leather,
+            woven_battle_cloth,
+        )
+
+        # 1. Engine v8.0 schema + 6 character/part-aware nodes + 5 character subgraphs + supports_texdsl
+        schema = export_node_schema_json()
+        self.assertEqual(schema["engine_version"], "8.0")
+        self.assertTrue(schema["supports_texdsl"])
+        self.assertGreaterEqual(schema["node_count"], 125)
+        self.assertGreaterEqual(len(SUBGRAPH_REGISTRY), 22)
+
+        # 2. Direct character material generators emit complete finite MaterialBuses with proper PBR roughness separation
+        skin = orc_flesh_skin(48, 48, scar_amount=0.4, warpaint_color="#A82424", warpaint_amount=0.4, seed=11)
+        leather = stitched_leather(48, 48, stitch_density=1.0, wear=0.35, seed=12)
+        metal = forged_battle_metal(48, 48, scratches=0.5, rivets=0.5, rust=0.2, seed=13)
+        cloth = woven_battle_cloth(48, 48, fold_contrast=0.45, trim_color="#CFA052", seed=14)
+        bone = keratin_horn_bone(48, 48, orientation="tip_up", seed=15)
+        for mat in (skin, leather, metal, cloth, bone):
+            self.assertEqual(mat["albedo"].shape, (48, 48, 4))
+            self.assertTrue(np.isfinite(mat["albedo"]).all())
+        # Specular separation law: steel metallic >> leather/cloth; cloth roughness > leather > forged steel
+        self.assertGreater(float(metal["metallic"].mean()), 0.70)
+        self.assertLess(float(leather["metallic"].mean()), 0.05)
+        self.assertGreater(float(cloth["roughness"].mean()), float(leather["roughness"].mean()))
+        self.assertGreater(float(leather["roughness"].mean()), float(metal["roughness"].mean()))
+
+        # 3. Part-aware 3D entity test: eyes, tusks, claws & runes MUST NOT be overwritten by body fur/skin!
+        mini_orc_dsl = """
+        @meta { archetype: entity, target_profile: bedrock_entity, texel_density: 32, size_step: 0.5, audit_profile: sculpted }
+        @palette {
+          skin: ramp(base_lch=[0.50, 0.11, 134], steps=5)
+          steel: ramp(base_lch=[0.42, 0.04, 265], steps=5)
+          tusk: ramp(base_lch=[0.84, 0.05, 86], steps=4)
+          eye: ramp(base_lch=[0.76, 0.20, 48], steps=4, emissive=true)
+        }
+        @rig {
+          root bone pelvis {
+            pivot_local: [0, 8, 0]
+            box torso_core { size: [10, 10, 6], material: skin }
+            box pauldron_l_plate place(base_box=torso_core, anchor=[-1, 0.6, 0], align=[0.4, 0, 0]) { size: [4, 4, 5], material: steel }
+            box claw_tip place(base_box=torso_core, anchor=[1, -0.5, 0], align=[-0.4, 0, 0]) { size: [2, 2, 2], material: tusk }
+            bone head attach(parent_box=torso_core, anchor=[0, 1, 0], align=[0, -0.7, 0]) {
+              box cranium_core { size: [7, 7, 7], material: skin }
+              box eye_l place(base_box=cranium_core, anchor=[-0.5, 0.2, 1], align=[0, 0, -0.4]) { size: [2, 1.5, 0.5], material: eye }
+              box eye_r place(base_box=cranium_core, anchor=[0.5, 0.2, 1], align=[0, 0, -0.4]) { size: [2, 1.5, 0.5], material: eye }
+              box tusk_l place(base_box=cranium_core, anchor=[-0.5, -0.6, 1], align=[0, 0, -0.4]) { size: [1.5, 2.5, 1.5], material: tusk }
+            }
+          }
+        }
+        """
+        prog = parse_program(mini_orc_dsl)
+        scene = compile_geometry(prog)
+        sem = pack_semantic_uv_atlas(prog, scene, padding=1, mirror_lr_uv="adaptive", canvas_mode="tight")
+        atlas = {"width": sem["width"], "height": sem["height"], "faces": sem["faces"], "rgba": np.full((sem["height"], sem["width"], 4), 180, dtype=np.uint8)}
+        bb = export_bbmodel(scene, name="mini_orc", atlas=atlas, program=prog)
+        ctx = bake_bbmodel_maps(bb, padding=1)
+
+        texdsl_src = """
+        @texture {
+          name: "mini_orc_v8"
+          size: [128, 128]
+          domain: "entity"
+          seed: 99
+          frames: 4
+          frametime: 3
+          interpolate: false
+          frames_schedule: [{index: 0, time: 20}, 1, 2, 3, 2, 1]
+        }
+        @palette {
+          orc_skin: ["#152723", "#234633", "#3D733C", "#6C9B47", "#A6C35A", "#D3DF86"]
+          steel:    ["#1A1624", "#303243", "#4F5568", "#8792A8", "#EEF5FC"]
+        }
+        @pass bake "Bake Masks" {
+          ao      = mesh_channel("ao")
+          m_metal = select(pattern="pauldron")
+        }
+        @pass shade "Materials & Protected Facial Landmarks" {
+          skin   = orc_flesh_skin(stops=@orc_skin, scar_amount=0.3)
+          metal  = forged_battle_metal(stops=@steel)
+          merged = material_height_blend(skin, metal, mask=m_metal, contrast=8.0)
+          det    = paint_entity_eyes_and_parts(
+            merged,
+            eye_facing="front",
+            eye_style="gradient",
+            eye_iris="#FF6B1A",
+            eye_glow=0.95,
+            eye_blink=0.0,
+            tusk_tip="#F1E6CC"
+          )
+          final  = material_pad_islands(material_grade(det, ao_bake=ao, ao_darken=0.3), pad=1)
+        }
+        @animate {
+          drive det.eye_glow  = sine(min_val=0.45, max_val=1.0, freq=1.0)
+          drive det.eye_blink = keyframes([[0.0, 0.0], [0.5, 0.0], [0.75, 0.96], [1.0, 0.0]])
+        }
+        @output material(final, normal_strength=2.4)
+        """
+        g = parse_texdsl(texdsl_src, mesh_context=ctx)
+        vrep = g.validate_graph()
+        self.assertTrue(vrep.ok, vrep.errors)
+
+        # Round-trip decompilation (.texdsl -> TexGraph -> export_texdsl -> parse_texdsl -> pixel-identical output!)
+        dsl_roundtrip = export_texdsl(g)
+        g_rt = parse_texdsl(dsl_roundtrip, mesh_context=ctx)
+        self.assertTrue(g_rt.validate_graph().ok)
+        ev0 = g.evaluate(phase=0.0, build_pbr=True)
+        ev0_rt = g_rt.evaluate(phase=0.0, build_pbr=True)
+        self.assertLess(float(np.abs(ev0.output - ev0_rt.output).max()), 1e-4)
+
+        # Prove eye region is glowing & glossy (NOT painted over with matte green orc skin!)
+        eye_mask = (ctx.match_elements_mask("eye_l") > 0.5) & (ctx.face_filter_mask("south") > 0.5)
+        skin_mask = ctx.match_elements_mask("torso_core") > 0.5
+        tusk_mask = ctx.match_elements_mask("tusk_l") > 0.5
+        self.assertTrue(np.any(eye_mask))
+        self.assertTrue(np.any(tusk_mask))
+        # Eye must have strong emissive alpha & glassy roughness < 0.25 (skin has roughness ~0.62 and 0 emissive!)
+        self.assertGreater(float(ev0.emissive[eye_mask, 3].max()), 0.5)
+        self.assertLess(float(ev0.emissive[skin_mask, 3].max()), 0.05)
+        self.assertLess(float(ev0.pbr_channels["roughness"][eye_mask].mean()), 0.25)
+        # Eye RGB must be warm fiery orange (R > G > B), distinct from green skin (G > R)!
+        eye_rgb = ev0.output[eye_mask, :3].mean(axis=0)
+        skin_rgb = ev0.output[skin_mask, :3].mean(axis=0)
+        self.assertGreater(eye_rgb[0], eye_rgb[2] + 0.15)
+        self.assertGreater(skin_rgb[1], skin_rgb[0])
+        # Tusk must be bright warm ivory (luminance >> dark green skin)
+        self.assertGreater(float(ev0.output[tusk_mask, :3].mean()), float(ev0.output[skin_mask, :3].mean()) + 0.12)
+
+        # Animated eye blink at phase=0.75 drops eye emissive near zero!
+        ev_blink = g.evaluate(phase=0.75, build_pbr=True)
+        self.assertLess(float(ev_blink.emissive[eye_mask, 3].mean()), float(ev0.emissive[eye_mask, 3].mean()) * 0.25)
+
+        # Invalid .texdsl raises clear TexDslError with line/col info
+        with self.assertRaises(TexDslError):
+            parse_texdsl("@unknown_directive { foo: 1 }")
+
+        # Animated PBR Flipbook with custom hold-frame .mcmeta schedule & synchronized _e emissive strip + CLI .texdsl!
+        with tempfile.TemporaryDirectory() as tmp:
+            td = Path(tmp)
+            fb = g.render_pbr_flipbook(n_frames=4, out_dir=td / "anim", stem="mini_orc", frametime=3)
+            self.assertEqual(fb["albedo"]["mcmeta"]["animation"]["frames"], [{"index": 0, "time": 20}, 1, 2, 3, 2, 1])
+            self.assertIn("emissive", fb)
+            self.assertTrue((td / "anim" / "mini_orc_e_flipbook.png").is_file())
+            self.assertTrue((td / "anim" / "mini_orc_e_flipbook.png.mcmeta").is_file())
+
+            dsl_file = td / "mini_orc.texdsl"
+            bb_file = td / "mini_orc.bbmodel"
+            dsl_file.write_text(texdsl_src, encoding="utf-8")
+            bb_file.write_text(json.dumps(bb), encoding="utf-8")
+            self.assertEqual(cli_main(["texgraph", "validate", str(dsl_file)]), 0)
+            self.assertEqual(cli_main(["texgraph", "qa", str(dsl_file), "--bbmodel", str(bb_file), "--domain", "entity"]), 0)
+            self.assertEqual(
+                cli_main(["texgraph", "render", str(dsl_file), "--bbmodel", str(bb_file), "--frames", "1", "-o", str(td / "out.png")]),
+                0,
+            )
+            self.assertTrue((td / "out.png").is_file())
 
 
 if __name__ == "__main__":

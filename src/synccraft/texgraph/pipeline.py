@@ -900,3 +900,28 @@ def _sg_aquatic_scales(g: Any, *, prefix: str, inputs: dict[str, str], seed: int
 @register_subgraph("elemental_golem_pbr", category="Creature Bio", description="Flood-Fill + Slope-Blur fractured stone/obsidian golem slabs with glowing fissures MaterialBus.", defaults={"slab_scale": 4.5, "glow_strength": 0.85})
 def _sg_elemental_golem(g: Any, *, prefix: str, inputs: dict[str, str], seed: int = 42, **kw: Any) -> str:
     return g.add("elemental_golem_surface", id=f"{prefix}_mat", seed=seed, **kw)
+
+
+@register_subgraph("orc_skin_pbr", category="Character & Gear", description="Hue-shifted olive/emerald orc/goblin skin with scars & subsurface blush MaterialBus.", defaults={"scar_amount": 0.28, "subsurface_strength": 0.24})
+def _sg_orc_skin(g: Any, *, prefix: str, inputs: dict[str, str], seed: int = 42, **kw: Any) -> str:
+    return g.add("orc_flesh_skin", id=f"{prefix}_mat", seed=seed, **kw)
+
+
+@register_subgraph("stitched_leather_pbr", category="Character & Gear", description="Warm stitched leather straps & pouches with concentric rim bevels MaterialBus.", defaults={"stitch_density": 1.0, "wear": 0.32})
+def _sg_stitched_leather(g: Any, *, prefix: str, inputs: dict[str, str], seed: int = 107, **kw: Any) -> str:
+    return g.add("stitched_leather", id=f"{prefix}_mat", seed=seed, **kw)
+
+
+@register_subgraph("forged_metal_pbr", category="Character & Gear", description="Forged battle steel armor plates with 1 px bevels, scratches, rivets & rust MaterialBus.", defaults={"scratches": 0.45, "rivets": 0.50, "rust": 0.18})
+def _sg_forged_metal(g: Any, *, prefix: str, inputs: dict[str, str], seed: int = 211, **kw: Any) -> str:
+    return g.add("forged_battle_metal", id=f"{prefix}_mat", seed=seed, **kw)
+
+
+@register_subgraph("woven_cloth_pbr", category="Character & Gear", description="Muted battle cloth with soft drape folds & embroidered trim (or rope twist) MaterialBus.", defaults={"style": "drape", "fold_contrast": 0.42})
+def _sg_woven_cloth(g: Any, *, prefix: str, inputs: dict[str, str], seed: int = 307, **kw: Any) -> str:
+    return g.add("woven_battle_cloth", id=f"{prefix}_mat", seed=seed, **kw)
+
+
+@register_subgraph("keratin_bone_pbr", category="Character & Gear", description="Dark-rooted keratin stepping to warm ivory distal tips for tusks, horns, teeth & claws MaterialBus.", defaults={"orientation": "tip_up", "ring_count": 5.0})
+def _sg_keratin_bone(g: Any, *, prefix: str, inputs: dict[str, str], seed: int = 409, **kw: Any) -> str:
+    return g.add("keratin_horn_bone", id=f"{prefix}_mat", seed=seed, **kw)

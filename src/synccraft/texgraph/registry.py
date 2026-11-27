@@ -543,6 +543,43 @@ NODE_CATALOG: dict[str, NodeMeta] = {
         (), "MATERIAL",
         outputs=(PortSchema("albedo", "RGBA"), PortSchema("height", "HEIGHT"), PortSchema("normal", "NORMAL"), PortSchema("roughness", "SCALAR"), PortSchema("metallic", "SCALAR"), PortSchema("ao", "SCALAR"), PortSchema("emissive", "RGBA"), PortSchema("fissure_mask", "MASK")),
     ),
+    # --- TexGraph v8 Character/Orc Materials & Part-Aware Entity Landmark Compositor ---
+    "orc_flesh_skin": NodeMeta(
+        "orc_flesh_skin", "Character & Gear (PBR)", "Orc & Monster Skin (MATERIAL)",
+        "Hue-shifted olive/emerald orc/goblin skin with warm subsurface blush, battle scars & optional tribal war paint MaterialBus.",
+        (), "MATERIAL",
+        outputs=(PortSchema("albedo", "RGBA"), PortSchema("height", "HEIGHT"), PortSchema("normal", "NORMAL"), PortSchema("roughness", "SCALAR"), PortSchema("ao", "SCALAR"), PortSchema("sss", "SCALAR"), PortSchema("scar_mask", "MASK"), PortSchema("subsurface_mask", "MASK")),
+    ),
+    "stitched_leather": NodeMeta(
+        "stitched_leather", "Character & Gear (PBR)", "Stitched Leather & Straps (MATERIAL)",
+        "Warm desaturated brown leather with concentric stepped rim shading, micro-stitch dots & worn fold creases MaterialBus.",
+        (), "MATERIAL",
+        outputs=(PortSchema("albedo", "RGBA"), PortSchema("height", "HEIGHT"), PortSchema("normal", "NORMAL"), PortSchema("roughness", "SCALAR"), PortSchema("ao", "SCALAR"), PortSchema("stitch_mask", "MASK")),
+    ),
+    "forged_battle_metal": NodeMeta(
+        "forged_battle_metal", "Character & Gear (PBR)", "Forged Battle Metal & Armor (MATERIAL)",
+        "Cool charcoal-indigo shadowed forged steel with 1 px bevel catchlights, battle scratches, rivets & cavity rust MaterialBus.",
+        (), "MATERIAL",
+        outputs=(PortSchema("albedo", "RGBA"), PortSchema("height", "HEIGHT"), PortSchema("normal", "NORMAL"), PortSchema("roughness", "SCALAR"), PortSchema("metallic", "SCALAR"), PortSchema("ao", "SCALAR"), PortSchema("rust_mask", "MASK"), PortSchema("scratch_mask", "MASK")),
+    ),
+    "woven_battle_cloth": NodeMeta(
+        "woven_battle_cloth", "Character & Gear (PBR)", "Woven Battle Cloth & Rope (MATERIAL)",
+        "Muted battle cloth with soft 2-3 px vertical drape folds, embroidered hem trim, or twisted diagonal rope bindings MaterialBus.",
+        (), "MATERIAL",
+        outputs=(PortSchema("albedo", "RGBA"), PortSchema("height", "HEIGHT"), PortSchema("normal", "NORMAL"), PortSchema("roughness", "SCALAR"), PortSchema("ao", "SCALAR")),
+    ),
+    "keratin_horn_bone": NodeMeta(
+        "keratin_horn_bone", "Character & Gear (PBR)", "Keratin, Horn, Ivory & Claws (MATERIAL)",
+        "Dark-rooted keratin stepping smoothly into striated warm ivory distal tips for tusks, horns, teeth, beaks, claws & hooves MaterialBus.",
+        (), "MATERIAL",
+        outputs=(PortSchema("albedo", "RGBA"), PortSchema("height", "HEIGHT"), PortSchema("normal", "NORMAL"), PortSchema("roughness", "SCALAR"), PortSchema("ao", "SCALAR"), PortSchema("sss", "SCALAR")),
+    ),
+    "paint_entity_eyes_and_parts": NodeMeta(
+        "paint_entity_eyes_and_parts", "Character & Gear (PBR)", "Part-Aware Eyes & Anatomical Landmarks (MATERIAL)",
+        "Protects and hand-shades 3D entity eyes (with animated blink & glow), orbital sockets, wet noses, beaks, dark plum mouths, tongues, ivory teeth/tusks, keratin claws/hooves/horns, inner ears, fins & glowing runes!",
+        (PortSchema("base", "MATERIAL"),), "MATERIAL",
+        outputs=(PortSchema("albedo", "RGBA"), PortSchema("height", "HEIGHT"), PortSchema("normal", "NORMAL"), PortSchema("roughness", "SCALAR"), PortSchema("metallic", "SCALAR"), PortSchema("ao", "SCALAR"), PortSchema("emissive", "RGBA"), PortSchema("sss", "SCALAR"), PortSchema("eye_mask", "MASK")),
+    ),
 }
 
 
@@ -564,7 +601,7 @@ def export_node_schema_json() -> dict[str, Any]:
     ]
     return {
         "schema_version": "3.1",
-        "engine_version": "7.0",
+        "engine_version": "8.0",
         "node_count": len(NODE_CATALOG),
         "subgraph_count": len(subgraphs),
         "supports_multi_port": True,
@@ -574,6 +611,7 @@ def export_node_schema_json() -> dict[str, Any]:
         "supports_param_drivers": True,
         "supports_dag_validation": True,
         "supports_incremental_cache": True,
+        "supports_texdsl": True,
         "categories": list(by_cat.keys()),
         "nodes_by_category": by_cat,
         "subgraphs": subgraphs,
