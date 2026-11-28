@@ -147,6 +147,18 @@ def main(argv=None):
     atlas_cmd.add_argument("--canvas", choices=["pot", "tight"], default="pot", help="Power-of-Two (UE5/Unity/glTF) vs Tight multiple-of-16 (Blockbench)")
     atlas_cmd.add_argument("--max-assets", type=int, default=16)
 
+    lod_cmd = subs.add_parser(
+        "lod-bake",
+        help="Auto-LOD Mesh Decimator — generate silhouette- & skeleton-preserving LOD0/LOD1/LOD2 .bbmodel + mip-dilated textures",
+    )
+    lod_cmd.add_argument("bbmodel", type=Path, help="input .bbmodel file to decimate into LOD0/LOD1/LOD2")
+    lod_cmd.add_argument("-o", "--out", type=Path, required=True, help="output directory for LOD .bbmodel files & lod_manifest.json")
+    lod_cmd.add_argument("--texdsl", type=Path, default=None, help="optional .texdsl graph to bake mip-dilated LOD textures (100%/50%/25%)")
+    lod_cmd.add_argument("--stem", default=None, help="output stem (defaults to input filename stem)")
+    lod_cmd.add_argument("--lod1", type=float, default=0.58, help="LOD1 retained box ratio (default 0.58)")
+    lod_cmd.add_argument("--lod2", type=float, default=0.35, help="LOD2 retained box ratio (default 0.35)")
+    lod_cmd.add_argument("--bleed", type=int, default=4, help="mip-safe Voronoi bleed radius in pixels (0..16)")
+
     # Parametric Pixel Composer & Semantic UV v2 CLI
     tg = subs.add_parser(
         "texgraph",
@@ -258,6 +270,28 @@ def main(argv=None):
                 bleed_px=int(args.bleed),
                 canvas_mode=args.canvas,
                 max_assets=int(args.max_assets),
+            )
+            print(_json(rep))
+            return 0 if rep.get("ok") else 2
+        elif args.command == "lod-bake":
+            from synccraft.texgraph.mesh_baker import bake_bbmodel_maps
+            from synccraft.texgraph.texdsl import parse_texdsl
+            from synccraft.texgraph.v18_lod_baker_ops import export_lod_bundle
+
+            bb_doc = json.loads(args.bbmodel.read_text(encoding="utf-8"))
+            g = None
+            if args.texdsl and args.texdsl.is_file():
+                mc = bake_bbmodel_maps(bb_doc)
+                g = parse_texdsl(args.texdsl.read_text(encoding="utf-8"), mesh_context=mc)
+                g.attach_mesh(mc)
+            rep = export_lod_bundle(
+                bb_doc,
+                args.out,
+                stem=args.stem or args.bbmodel.stem,
+                graph=g,
+                lod1_ratio=float(args.lod1),
+                lod2_ratio=float(args.lod2),
+                bleed_px=int(args.bleed),
             )
             print(_json(rep))
             return 0 if rep.get("ok") else 2

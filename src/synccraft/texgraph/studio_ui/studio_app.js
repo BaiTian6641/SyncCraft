@@ -30,7 +30,14 @@
       max_angle_deg: 72,
       opacity: 0.95,
       emissive_strength: 0.75,
+      custom_data_url: '',
+      custom_name: '',
     },
+    decalGizmo: { nx: 0.5, ny: 0.56 },
+    activeLod: 'lod0',
+    lodLevels: [],
+    activeTexSlot: -1,
+    poseSyncTimer: null,
     showBones: false,
     skelSpeedIdx: 1,
     exportTemplateId: 'full_pbr_v2',
@@ -224,7 +231,8 @@
       el.textContent = `BB5`;
       el.className = 'pill-badge';
     }
-    el.title = `Blockbench 5 Live Link SSE Bridge · rev ${bridge.rev || 0} · ${c} client(s)`;
+    const poseInfo = (bridge.pose && bridge.pose.clip) ? ` · Pose: ${bridge.pose.clip} @ ${Number(bridge.pose.time || 0).toFixed(2)}s` : '';
+    el.title = `Blockbench 5 Live Link SSE Bridge · rev ${bridge.rev || 0} · ${c} client(s)${poseInfo}`;
   }
 
   function renderBreadcrumbs() {
@@ -404,9 +412,13 @@
       if (meshResBadge) meshResBadge.style.display = 'none';
     }
 
-    // Sync 3D mesh geometry + live skeletal transport dock
+    // Sync 3D mesh geometry + live skeletal transport dock + Auto-LOD & multi-texture slots (`v18`)
+    state.activeLod = st.active_lod || 'lod0';
+    if (Array.isArray(st.lod_levels)) state.lodLevels = st.lod_levels;
+    state.activeTexSlot = (st.active_texture_slot != null) ? Number(st.active_texture_slot) : -1;
     if (gl3d) {
       gl3d.setBBModelMesh(st.mesh || null);
+      gl3d.activeTexSlot = state.activeTexSlot;
       if (opts.autoPrim) {
         const prim = st.has_mesh ? 'bbmodel' : 'cube';
         $('primSelect').value = prim;
@@ -414,6 +426,7 @@
       }
       syncSkelDockFromMesh(st.mesh || null);
     }
+    syncLodAndSlotsFromState(st);
 
     // Sync TexDSL editor (unless user is actively typing in it)
     const ed = $('texdslEditor');
@@ -578,8 +591,18 @@
     const ms = state.serverState && state.serverState.mesh_stats;
     const pickTag = state.pickMode ? ' · 🎯 PICK MODE' : '';
     if (state.vpMode === '3d') {
-      const seams = ms ? (ms.seam_pairs >= 1000 ? `${(ms.seam_pairs / 1000).toFixed(1)}k` : `${ms.seam_pairs}`) : '';
-      const mText = ms ? ` · ${ms.elements}b · ${seams} seams` : ` · ${$('primSelect').value}`;
+      let mText = ` · ${$('primSelect').value}`;
+      if (ms) {
+        const lodInfo = (state.activeLod && state.activeLod !== 'lod0')
+          ? (state.lodLevels || []).find((x) => x.level === state.activeLod)
+          : null;
+        if (lodInfo) {
+          mText = ` · ${state.activeLod.toUpperCase()} ${lodInfo.box_count}b (-${lodInfo.reduction_pct}%)`;
+        } else {
+          const seams = ms.seam_pairs >= 1000 ? `${(ms.seam_pairs / 1000).toFixed(1)}k` : `${ms.seam_pairs}`;
+          mText = ` · ${ms.elements}b · ${seams} seams`;
+        }
+      }
       hud.textContent = `3D PBR · ${state.channel} · ${res}${mText}${pickTag}${extraInfo ? ' · ' + extraInfo : ''}`;
     } else {
       hud.textContent = `2D Pixel · ${state.channel} · ${res}${state.tile3x3 ? ' · 3×3 Wrap' : ''}${pickTag}${extraInfo ? ' · ' + extraInfo : ''}`;
@@ -631,7 +654,8 @@
 
     if ($('brushToolbar')) $('brushToolbar').style.display = state.brushMode ? 'flex' : 'none';
     if ($('decalToolbar')) $('decalToolbar').style.display = (state.decalMode && state.vpMode === '3d') ? 'flex' : 'none';
-    if ($('decalReticle')) $('decalReticle').style.display = (state.decalMode && state.vpMode === '3d') ? 'block' : 'none';
+    if ($('decalGizmoLayer')) $('decalGizmoLayer').style.display = (state.decalMode && state.vpMode === '3d') ? 'block' : 'none';
+    if (state.decalMode && state.vpMode === '3d') updateDecalGizmoUI();
     if ($('viewportStage')) {
       $('viewportStage').classList.toggle('pick-active', state.pickMode || state.brushMode || state.decalMode);
     }
@@ -640,7 +664,7 @@
       orbit: null,
       pick: 'Pick Part Mode',
       paint: state.brushTargetMode === 'pbr' ? '3D PBR Layers' : 'Mask Paint',
-      decal: '3D Decal Stamp (Click model or press Stamp)',
+      decal: '3D Decal Gizmo (Drag / Scale / Roll · Enter or Stamp)',
       light: 'Drag Light & HDRI',
     };
     updateViewportHud(labelMap[m]);
@@ -710,6 +734,144 @@
       state.decal.emissive_strength = cur.emissive_strength != null ? cur.emissive_strength : 0.75;
       $('decalTintColor').value = state.decal.tint_color;
     }
+    updateDecalGizmoUI();
+  }
+
+  function updateDecalGizmoUI() {
+    const layer = $('decalGizmoLayer');
+    const box = $('decalGizmoBox');
+    const img = $('decalGizmoImg');
+    const readout = $('decalGizmoReadout');
+    const strip = $('decalCustomStrip');
+    const nameEl = $('decalCustomName');
+    const show = !!(state.decalMode && state.vpMode === '3d');
+    if (layer) layer.style.display = show ? 'block' : 'none';
+    if (strip) {
+      strip.style.display = state.decal.custom_data_url ? 'flex' : 'none';
+      if (nameEl) nameEl.textContent = state.decal.custom_name || 'Custom PNG Stencil';
+    }
+    if (!box) return;
+    const nx = Math.max(0.08, Math.min(0.92, state.decalGizmo.nx));
+    const ny = Math.max(0.10, Math.min(0.90, state.decalGizmo.ny));
+    const px = Math.max(46, Math.min(220, Math.round((state.decal.scale_u || 10) * 8.5)));
+    box.style.left = `${(nx * 100).toFixed(2)}%`;
+    box.style.top = `${(ny * 100).toFixed(2)}%`;
+    box.style.width = `${px}px`;
+    box.style.height = `${px}px`;
+    box.style.transform = `translate(-50%, -50%) rotate(${Number(state.decal.roll_deg || 0).toFixed(1)}deg)`;
+    if (img) {
+      const previews = (state.schemaPayload && state.schemaPayload.decal_stencil_previews) || {};
+      const src = state.decal.custom_data_url || previews[state.decal.stencil] || '';
+      if (src && img.getAttribute('src') !== src) img.src = src;
+      img.style.opacity = String(Math.max(0.28, Math.min(0.92, (state.decal.opacity || 0.95) * 0.85)));
+    }
+    if (readout) {
+      const sTxt = Number(state.decal.scale_u || 10).toFixed(1).replace(/\.0$/, '');
+      const rTxt = Math.round(Number(state.decal.roll_deg || 0));
+      readout.textContent = `${sTxt}u · ${rTxt}°`;
+    }
+  }
+
+  function syncLodAndSlotsFromState(st) {
+    const hasMesh = !!(st && st.has_mesh);
+    const lodSec = $('vpLodSection');
+    const slotSec = $('vpTexSlotSection');
+    if (lodSec) lodSec.style.opacity = hasMesh ? '1' : '0.5';
+    if (slotSec) slotSec.style.opacity = hasMesh ? '1' : '0.5';
+
+    ['lod0', 'lod1', 'lod2'].forEach((lvl, i) => {
+      const btn = $(`btnLod${i}`);
+      if (!btn) return;
+      btn.classList.toggle('active', state.activeLod === lvl);
+      btn.disabled = !hasMesh;
+    });
+
+    const statsEl = $('vpLodStats');
+    if (statsEl) {
+      if (!hasMesh) {
+        statsEl.textContent = 'No mesh';
+      } else {
+        const info = (state.lodLevels || []).find((x) => x.level === state.activeLod);
+        if (info) {
+          const red = info.reduction_pct > 0 ? ` · -${info.reduction_pct}%` : ' · 100%';
+          statsEl.textContent = `${state.activeLod.toUpperCase()} · ${info.box_count}b${red}`;
+        } else if (st && st.mesh_stats) {
+          statsEl.textContent = `${state.activeLod.toUpperCase()} · ${st.mesh_stats.elements}b · 100%`;
+        } else {
+          statsEl.textContent = `${state.activeLod.toUpperCase()} · 100%`;
+        }
+      }
+    }
+
+    const slots = (st && Array.isArray(st.texture_slots)) ? st.texture_slots : [];
+    const sel = $('texSlotSelect');
+    if (sel) {
+      sel.innerHTML = '';
+      const optAll = document.createElement('option');
+      optAll.value = '-1';
+      optAll.textContent = slots.length > 1 ? `All Texture Slots (${slots.length})` : 'All Texture Slots';
+      sel.appendChild(optAll);
+      slots.forEach((s) => {
+        const o = document.createElement('option');
+        o.value = String(s.index);
+        o.textContent = `[${s.index}] ${s.name || 'texture'} (${s.width}×${s.height} · ${s.face_count}f)`;
+        sel.appendChild(o);
+      });
+      sel.value = String(state.activeTexSlot >= 0 && state.activeTexSlot < slots.length ? state.activeTexSlot : -1);
+      sel.disabled = !hasMesh;
+    }
+    if ($('vpTexSlotCount')) {
+      $('vpTexSlotCount').textContent = hasMesh ? `${slots.length} slot${slots.length === 1 ? '' : 's'}` : '—';
+    }
+    if ($('lodStemInput') && document.activeElement !== $('lodStemInput') && st && st.recipe && st.recipe.name) {
+      $('lodStemInput').value = st.recipe.name;
+    }
+  }
+
+  async function switchLodLevel(lvl) {
+    if (!state.serverState || !state.serverState.has_mesh) {
+      showToast('Attach a 3D .bbmodel mesh first to preview Auto-LODs', 'err');
+      return;
+    }
+    try {
+      const res = await apiPost('/api/lod/preview', { level: lvl });
+      state.activeLod = res.active_lod || lvl;
+      if (Array.isArray(res.levels)) state.lodLevels = res.levels;
+      if (gl3d && res.mesh) {
+        gl3d.setBBModelMesh(res.mesh);
+        gl3d.activeTexSlot = state.activeTexSlot;
+      }
+      syncLodAndSlotsFromState(state.serverState);
+      const info = (state.lodLevels || []).find((x) => x.level === state.activeLod);
+      const hudExtra = info
+        ? `${state.activeLod.toUpperCase()} (${info.box_count}b, ${info.tri_count}t${info.reduction_pct > 0 ? `, -${info.reduction_pct}%` : ''})`
+        : state.activeLod.toUpperCase();
+      updateViewportHud();
+      showToast(`Live 3D Preview -> ${hudExtra}`, 'ok');
+    } catch (err) {
+      showToast(`Auto-LOD error: ${err.message}`, 'err');
+    }
+  }
+
+  function scheduleBridgePoseSync() {
+    if (state.poseSyncTimer) clearTimeout(state.poseSyncTimer);
+    state.poseSyncTimer = setTimeout(async () => {
+      state.poseSyncTimer = null;
+      if (!gl3d) return;
+      const anims = (state.serverState && state.serverState.mesh && Array.isArray(state.serverState.mesh.animations))
+        ? state.serverState.mesh.animations
+        : [];
+      const clipObj = (gl3d.skelClipIdx >= 0 && gl3d.skelClipIdx < anims.length) ? anims[gl3d.skelClipIdx] : null;
+      try {
+        const res = await apiPost('/api/bridge/pose', {
+          clip: clipObj ? clipObj.name : null,
+          time: Number(gl3d.skelTime || 0),
+          playing: !!gl3d.skelPlaying,
+          speed: Number(gl3d.skelSpeed || 1.0),
+        });
+        updateBridgeBadge(res);
+      } catch (_) {}
+    }, 110);
   }
 
   function findActiveDecalNode() {
@@ -760,6 +922,10 @@
         occlusion_test: true,
         emissive_strength: meta.emissive_strength != null ? meta.emissive_strength : state.decal.emissive_strength,
       }, proj || {});
+      if (state.decal.custom_data_url) {
+        payload.stamp.custom_data_url = state.decal.custom_data_url;
+        payload.stamp.custom_name = state.decal.custom_name || 'custom_stencil.png';
+      }
     }
     try {
       const st = await apiPost('/api/decal_stamp/apply', payload);
@@ -767,7 +933,9 @@
       applyServerState(st, { autoPrim: false });
       await runEvaluate({ includeThumbsMode: 'all', includeQa: false });
       if (act === 'add') {
-        const sTitle = ((state.schemaPayload && state.schemaPayload.decal_stencils && state.schemaPayload.decal_stencils[state.decal.stencil]) || {}).title || state.decal.stencil;
+        const sTitle = state.decal.custom_data_url
+          ? (state.decal.custom_name || 'Custom PNG')
+          : (((state.schemaPayload && state.schemaPayload.decal_stencils && state.schemaPayload.decal_stencils[state.decal.stencil]) || {}).title || state.decal.stencil);
         showToast(`Stamped 3D decal '${sTitle}' (stack: ${st.stamp_count || 1})`, 'ok');
       } else if (act === 'undo_last') {
         showToast(`Removed last 3D decal (${st.stamp_count || 0} remaining)`, 'ok');
@@ -1120,7 +1288,8 @@
     $('viewportStage').classList.toggle('checker', mode === '2d');
     closeViewportPopovers();
     if ($('decalToolbar')) $('decalToolbar').style.display = (state.decalMode && mode === '3d') ? 'flex' : 'none';
-    if ($('decalReticle')) $('decalReticle').style.display = (state.decalMode && mode === '3d') ? 'block' : 'none';
+    if ($('decalGizmoLayer')) $('decalGizmoLayer').style.display = (state.decalMode && mode === '3d') ? 'block' : 'none';
+    if (state.decalMode && mode === '3d') updateDecalGizmoUI();
     syncSkelDockFromMesh((state.serverState && state.serverState.mesh) || null);
     if (mode === '2d') render2DCanvas();
     updateViewportHud();
@@ -3217,12 +3386,12 @@
       for (const n of nodes) state.opMap[n.op] = Object.assign({ category: cat }, n);
     }
     graphCanvas.setSchema(schemaPayload.schema);
-    $('versionBadge').textContent = `v17 · ${schemaPayload.schema.node_count}`;
+    $('versionBadge').textContent = `v18 · ${schemaPayload.schema.node_count}`;
     state.syncpacks = (schemaPayload && schemaPayload.syncpacks) || [];
     populateDecalStencils();
     populateExportTemplates();
 
-    // Kick off non-blocking background fetch for 230 procedural swatches, anim sheet, .syncmat & .syncpack presets
+    // Kick off non-blocking background fetch for 234 procedural swatches, anim sheet, .syncmat & .syncpack presets
     const bgAssetsPromise = Promise.all([
       apiGet('/api/schema/previews?size=40').catch(() => ({ previews: {} })),
       apiGet('/api/schema/preview_anim_sheet?size=36&frames=6').catch(() => ({ sheet: {} })),
@@ -3243,7 +3412,7 @@
     // Populate Project / Preset Dropdown
     const pSel = $('projectSelect');
     const ogSamples = document.createElement('optgroup');
-    ogSamples.label = 'Flagship 3D Studio Projects (v17)';
+    ogSamples.label = 'Flagship 3D Studio Projects (v18)';
     for (const s of schemaPayload.samples) {
       const o = document.createElement('option');
       o.value = `sample:${s.id}`;
@@ -3429,12 +3598,13 @@
     if ($('btnBones3d')) $('btnBones3d').onclick = () => setShowBones(!state.showBones);
     if ($('btnSkelBonesQuick')) $('btnSkelBonesQuick').onclick = () => setShowBones(!state.showBones);
 
-    // Live 3D Skeletal Animation Transport Dock controls
+    // Live 3D Skeletal Animation Transport Dock + BB5 Live Pose Sync (`v18`)
     if ($('skelClipSelect')) {
       $('skelClipSelect').onchange = (e) => {
         const idx = parseInt(e.target.value, 10);
         if (gl3d) gl3d.setSkeletonClip(Number.isFinite(idx) ? idx : -1, idx >= 0);
         syncSkelDockFromMesh((state.serverState && state.serverState.mesh) || null);
+        scheduleBridgePoseSync();
       };
     }
     if ($('btnSkelPlay')) {
@@ -3442,6 +3612,7 @@
         if (!gl3d) return;
         gl3d.setSkeletonPlaying(!gl3d.skelPlaying);
         syncSkelDockFromMesh((state.serverState && state.serverState.mesh) || null);
+        scheduleBridgePoseSync();
       };
     }
     if ($('skelTimeSlider')) {
@@ -3454,6 +3625,7 @@
           $('btnSkelPlay').textContent = '▶';
           $('btnSkelPlay').classList.remove('amber');
         }
+        scheduleBridgePoseSync();
       };
       $('skelTimeSlider').addEventListener('pointerdown', () => {
         if (gl3d && gl3d.skelPlaying) {
@@ -3474,20 +3646,78 @@
         const spd = skelSpeeds[state.skelSpeedIdx];
         if (gl3d) gl3d.skelSpeed = spd;
         $('btnSkelSpeed').textContent = `${spd.toFixed(1)}×`;
+        scheduleBridgePoseSync();
       };
     }
 
-    // Floating 3D Decal Stamp Toolbar Controls
+    // View Popover: Auto-LOD Switcher & Multi-Texture `.bbmodel` Slot Selector (`v18`)
+    if ($('btnLod0')) $('btnLod0').onclick = () => switchLodLevel('lod0');
+    if ($('btnLod1')) $('btnLod1').onclick = () => switchLodLevel('lod1');
+    if ($('btnLod2')) $('btnLod2').onclick = () => switchLodLevel('lod2');
+    if ($('texSlotSelect')) {
+      $('texSlotSelect').onchange = async (e) => {
+        const slot = parseInt(e.target.value, 10);
+        try {
+          const st = await apiPost('/api/mesh/texture_slot', { slot: Number.isFinite(slot) ? slot : -1 });
+          applyServerState(st, { autoPrim: false });
+          showToast(slot >= 0 ? `Isolated .bbmodel texture slot [${slot}]` : 'Showing all .bbmodel texture slots', 'ok');
+        } catch (err) {
+          showToast(`Texture slot error: ${err.message}`, 'err');
+        }
+      };
+    }
+
+    // Floating 3D Decal Stamp Toolbar + Interactive 3D Transform Gizmo + Custom PNG Upload (`v18`)
     if ($('decalStencilSelect')) {
       $('decalStencilSelect').onchange = (e) => {
         const sid = e.target.value;
         state.decal.stencil = sid;
+        state.decal.custom_data_url = '';
+        state.decal.custom_name = '';
         const meta = (state.schemaPayload && state.schemaPayload.decal_stencils && state.schemaPayload.decal_stencils[sid]) || null;
         if (meta) {
           state.decal.tint_color = meta.color || state.decal.tint_color;
           state.decal.emissive_strength = meta.emissive_strength != null ? meta.emissive_strength : 0.5;
           if ($('decalTintColor')) $('decalTintColor').value = state.decal.tint_color;
         }
+        updateDecalGizmoUI();
+      };
+    }
+    if ($('btnDecalUploadPng') && $('decalPngFileInput')) {
+      $('btnDecalUploadPng').onclick = () => $('decalPngFileInput').click();
+      $('decalPngFileInput').onchange = (e) => {
+        const f = e.target.files && e.target.files[0];
+        if (!f) return;
+        const reader = new FileReader();
+        reader.onload = () => {
+          state.decal.custom_data_url = String(reader.result || '');
+          state.decal.custom_name = f.name || 'custom_stencil.png';
+          updateDecalGizmoUI();
+          showToast(`Loaded custom PNG stencil: ${state.decal.custom_name}`, 'ok');
+        };
+        reader.readAsDataURL(f);
+        e.target.value = '';
+      };
+    }
+    if ($('btnDecalResetGizmo')) {
+      $('btnDecalResetGizmo').onclick = () => {
+        state.decalGizmo.nx = 0.5;
+        state.decalGizmo.ny = 0.56;
+        state.decal.scale_u = 10.0;
+        state.decal.roll_deg = 0;
+        if ($('decalScaleSlider')) $('decalScaleSlider').value = '10';
+        if ($('decalScaleVal')) $('decalScaleVal').textContent = '10';
+        if ($('decalRollSlider')) $('decalRollSlider').value = '0';
+        if ($('decalRollVal')) $('decalRollVal').textContent = '0°';
+        updateDecalGizmoUI();
+      };
+    }
+    if ($('btnDecalClearCustom')) {
+      $('btnDecalClearCustom').onclick = () => {
+        state.decal.custom_data_url = '';
+        state.decal.custom_name = '';
+        updateDecalGizmoUI();
+        showToast('Restored built-in procedural stencil', 'ok');
       };
     }
     if ($('decalTintColor')) $('decalTintColor').oninput = (e) => { state.decal.tint_color = e.target.value; };
@@ -3495,12 +3725,14 @@
       $('decalScaleSlider').oninput = (e) => {
         state.decal.scale_u = parseFloat(e.target.value) || 10;
         if ($('decalScaleVal')) $('decalScaleVal').textContent = String(state.decal.scale_u);
+        updateDecalGizmoUI();
       };
     }
     if ($('decalRollSlider')) {
       $('decalRollSlider').oninput = (e) => {
         state.decal.roll_deg = parseFloat(e.target.value) || 0;
         if ($('decalRollVal')) $('decalRollVal').textContent = `${state.decal.roll_deg}°`;
+        updateDecalGizmoUI();
       };
     }
     if ($('decalAngleSlider')) {
@@ -3513,12 +3745,78 @@
       $('decalOpacitySlider').oninput = (e) => {
         state.decal.opacity = parseFloat(e.target.value) || 0.95;
         if ($('decalOpacityVal')) $('decalOpacityVal').textContent = `${Math.round(state.decal.opacity * 100)}%`;
+        updateDecalGizmoUI();
       };
+    }
+    // Interactive 3D Decal Transform Gizmo Pointer Manipulators (Move / Scale / Roll)
+    if ($('decalGizmoBox')) {
+      const gizmoBox = $('decalGizmoBox');
+      const stageEl = $('viewportStage');
+      let gizmoDrag = null;
+      const onGizmoMove = (e) => {
+        if (!gizmoDrag || !stageEl) return;
+        const rect = stageEl.getBoundingClientRect();
+        if (gizmoDrag.kind === 'move') {
+          const nx = (e.clientX - rect.left - gizmoDrag.offX) / Math.max(1, rect.width);
+          const ny = (e.clientY - rect.top - gizmoDrag.offY) / Math.max(1, rect.height);
+          state.decalGizmo.nx = Math.max(0.08, Math.min(0.92, nx));
+          state.decalGizmo.ny = Math.max(0.10, Math.min(0.90, ny));
+        } else if (gizmoDrag.kind === 'scale') {
+          const cx = rect.left + state.decalGizmo.nx * rect.width;
+          const cy = rect.top + state.decalGizmo.ny * rect.height;
+          const dist = Math.hypot(e.clientX - cx, e.clientY - cy);
+          const nextScale = Math.max(3, Math.min(24, Math.round((dist / 6.0) * 2) / 2));
+          state.decal.scale_u = nextScale;
+          if ($('decalScaleSlider')) $('decalScaleSlider').value = String(nextScale);
+          if ($('decalScaleVal')) $('decalScaleVal').textContent = String(nextScale);
+        } else if (gizmoDrag.kind === 'roll') {
+          const cx = rect.left + state.decalGizmo.nx * rect.width;
+          const cy = rect.top + state.decalGizmo.ny * rect.height;
+          let deg = (Math.atan2(e.clientY - cy, e.clientX - cx) * 180 / Math.PI) + 90;
+          if (deg > 180) deg -= 360;
+          if (deg < -180) deg += 360;
+          if (e.shiftKey) deg = Math.round(deg / 15) * 15;
+          else deg = Math.round(deg);
+          state.decal.roll_deg = Math.max(-180, Math.min(180, deg));
+          if ($('decalRollSlider')) $('decalRollSlider').value = String(state.decal.roll_deg);
+          if ($('decalRollVal')) $('decalRollVal').textContent = `${state.decal.roll_deg}°`;
+        }
+        updateDecalGizmoUI();
+      };
+      const onGizmoUp = () => {
+        if (!gizmoDrag) return;
+        gizmoDrag = null;
+        gizmoBox.classList.remove('dragging');
+        window.removeEventListener('pointermove', onGizmoMove);
+        window.removeEventListener('pointerup', onGizmoUp);
+      };
+      const startGizmoDrag = (kind, e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!stageEl) return;
+        const rect = stageEl.getBoundingClientRect();
+        const cx = rect.left + state.decalGizmo.nx * rect.width;
+        const cy = rect.top + state.decalGizmo.ny * rect.height;
+        gizmoDrag = { kind, offX: e.clientX - cx, offY: e.clientY - cy };
+        gizmoBox.classList.add('dragging');
+        window.addEventListener('pointermove', onGizmoMove);
+        window.addEventListener('pointerup', onGizmoUp);
+      };
+      gizmoBox.addEventListener('pointerdown', (e) => {
+        if (e.target && e.target.closest && (e.target.closest('#decalGizmoScaleHandle') || e.target.closest('#decalGizmoRotHandle'))) return;
+        startGizmoDrag('move', e);
+      });
+      if ($('decalGizmoScaleHandle')) {
+        $('decalGizmoScaleHandle').addEventListener('pointerdown', (e) => startGizmoDrag('scale', e));
+      }
+      if ($('decalGizmoRotHandle')) {
+        $('decalGizmoRotHandle').addEventListener('pointerdown', (e) => startGizmoDrag('roll', e));
+      }
     }
     if ($('btnDecalStampCenter')) {
       $('btnDecalStampCenter').onclick = () => {
         if (!gl3d) return;
-        applyDecalStampFromProjector(gl3d.getCenterCameraProjector(), 'add');
+        applyDecalStampFromProjector(gl3d.getCameraProjectorAtNorm(state.decalGizmo.nx, state.decalGizmo.ny), 'add');
       };
     }
     if ($('btnDecalUndo')) $('btnDecalUndo').onclick = () => applyDecalStampFromProjector(null, 'undo_last');
@@ -4138,25 +4436,38 @@
       };
     }
 
-    // Milestone v17: Batch Bakery & Multi-Asset Shared Atlas Mode Switcher
+    // Milestone v18: Batch Bakery, Multi-Asset Shared Atlas & Auto-LOD Exporter Mode Switcher
     const setBatchModalMode = (mode) => {
-      state.batchModalMode = mode === 'atlas' ? 'atlas' : 'pbr';
+      state.batchModalMode = (mode === 'atlas' || mode === 'lod') ? mode : 'pbr';
+      const isPbr = state.batchModalMode === 'pbr';
       const isAtlas = state.batchModalMode === 'atlas';
-      if ($('btnBatchModePbr')) $('btnBatchModePbr').classList.toggle('active', !isAtlas);
+      const isLod = state.batchModalMode === 'lod';
+      if ($('btnBatchModePbr')) $('btnBatchModePbr').classList.toggle('active', isPbr);
       if ($('btnBatchModeAtlas')) $('btnBatchModeAtlas').classList.toggle('active', isAtlas);
-      if ($('batchPbrOptions')) $('batchPbrOptions').style.display = isAtlas ? 'none' : 'grid';
+      if ($('btnBatchModeLod')) $('btnBatchModeLod').classList.toggle('active', isLod);
+      const inputDirRow = $('batchInputDir') && $('batchInputDir').closest('.param-row');
+      if (inputDirRow) inputDirRow.style.display = isLod ? 'none' : '';
+      if ($('batchPbrOptions')) $('batchPbrOptions').style.display = isPbr ? 'grid' : 'none';
       if ($('atlasBakeOptions')) $('atlasBakeOptions').style.display = isAtlas ? 'grid' : 'none';
-      if ($('btnBatchRun')) $('btnBatchRun').style.display = isAtlas ? 'none' : '';
+      if ($('lodBakeOptions')) $('lodBakeOptions').style.display = isLod ? 'grid' : 'none';
+      if ($('btnBatchScan')) $('btnBatchScan').style.display = isLod ? 'none' : '';
+      if ($('btnBatchRun')) $('btnBatchRun').style.display = isPbr ? '' : 'none';
       if ($('btnAtlasRun')) $('btnAtlasRun').style.display = isAtlas ? '' : 'none';
+      if ($('btnLodExportRun')) $('btnLodExportRun').style.display = isLod ? '' : 'none';
       if ($('atlasResultCard') && !isAtlas) $('atlasResultCard').style.display = 'none';
       if ($('batchModeDesc')) {
-        $('batchModeDesc').innerHTML = isAtlas
-          ? 'Pack multiple <code>.bbmodel</code> / <code>.texdsl</code> assets into one shared Power-of-Two or tight PBR atlas with mip-safe Voronoi edge bleed and remapped <code>*_atlas.bbmodel</code> UVs.'
-          : 'Scan any folder of <code>.bbmodel</code> / <code>.texdsl</code> assets, auto-pair graphs, bake 3D ray-traced maps with SHA-256 caching, run QA audits, and export full <code>PBR v2.0 + MaterialX</code> bundles.';
+        if (isLod) {
+          $('batchModeDesc').innerHTML = 'Generate silhouette- &amp; skeleton-preserving cuboid <code>LOD0 / LOD1 / LOD2</code> <code>.bbmodel</code> tiers with mip-safe dilated <code>100% / 50% / 25%</code> PBR textures and <code>lod_manifest.json</code>.';
+        } else if (isAtlas) {
+          $('batchModeDesc').innerHTML = 'Pack multiple <code>.bbmodel</code> / <code>.texdsl</code> assets into one shared Power-of-Two or tight PBR atlas with mip-safe Voronoi edge bleed and remapped <code>*_atlas.bbmodel</code> UVs.';
+        } else {
+          $('batchModeDesc').innerHTML = 'Scan any folder of <code>.bbmodel</code> / <code>.texdsl</code> assets, auto-pair graphs, bake 3D ray-traced maps with SHA-256 caching, run QA audits, and export full <code>PBR v2.0 + MaterialX</code> bundles.';
+        }
       }
     };
     if ($('btnBatchModePbr')) $('btnBatchModePbr').onclick = () => setBatchModalMode('pbr');
     if ($('btnBatchModeAtlas')) $('btnBatchModeAtlas').onclick = () => setBatchModalMode('atlas');
+    if ($('btnBatchModeLod')) $('btnBatchModeLod').onclick = () => setBatchModalMode('lod');
     if ($('btnAtlasRun')) {
       $('btnAtlasRun').onclick = async () => {
         const btn = $('btnAtlasRun');
@@ -4196,6 +4507,44 @@
         } finally {
           btn.disabled = false;
           btn.textContent = 'Pack Shared Atlas';
+        }
+      };
+    }
+    if ($('btnLodExportRun')) {
+      $('btnLodExportRun').onclick = async () => {
+        const btn = $('btnLodExportRun');
+        btn.disabled = true;
+        btn.textContent = 'Exporting LODs...';
+        try {
+          const res = await apiPost('/api/lod/export', {
+            stem: ($('lodStemInput') && $('lodStemInput').value.trim()) || 'synccraft_lod',
+            out_dir: ($('batchOutDir') && $('batchOutDir').value.trim()) || '',
+            lod1_ratio: parseFloat(($('lod1RatioInput') && $('lod1RatioInput').value) || '0.58'),
+            lod2_ratio: parseFloat(($('lod2RatioInput') && $('lod2RatioInput').value) || '0.35'),
+            bleed_px: parseInt(($('lodBleedSelect') && $('lodBleedSelect').value) || '4', 10),
+          });
+          const lvlsRaw = Array.isArray(res.levels)
+            ? res.levels
+            : ['lod0', 'lod1', 'lod2'].filter((k) => res.levels && res.levels[k]).map((k) => Object.assign({ level: k }, res.levels[k]));
+          const rows = lvlsRaw.map((info) => {
+            const k = String(info.level || 'lod').toUpperCase();
+            const texSz = info.texture_size ? ` · ${info.texture_size[0]}×${info.texture_size[1]}` : '';
+            const red = info.reduction_pct > 0 ? ` (-${info.reduction_pct}%)` : ' (100%)';
+            return {
+              stem: `${k} · ${info.box_count} boxes · ${info.tri_count} tris${red}`,
+              kind: `${info.bone_count} bones${texSz}`,
+              status: 'done',
+            };
+          });
+          const cleanDir = String(res.out_dir || '').replace(/^\/Users\/[^/]+\//, '~/').replace(/^\/home\/[^/]+\//, '~/');
+          const sum = `Exported LOD0/LOD1/LOD2 bundle '${res.stem}' (bleed ${res.bleed_px}px) -> ${cleanDir}`;
+          renderBatchQueue(rows, sum);
+          showToast(`Exported Auto-LOD bundle '${res.stem}' (LOD0–LOD2)`, 'ok');
+        } catch (err) {
+          showToast(`Auto-LOD export error: ${err.message}`, 'err');
+        } finally {
+          btn.disabled = false;
+          btn.textContent = 'Export LOD0–LOD2 Bundle';
         }
       };
     }
@@ -4452,6 +4801,11 @@
         return;
       }
       if (inField) return;
+      if (e.key === 'Enter' && state.decalMode && state.vpMode === '3d' && gl3d) {
+        e.preventDefault();
+        applyDecalStampFromProjector(gl3d.getCameraProjectorAtNorm(state.decalGizmo.nx, state.decalGizmo.ny), 'add');
+        return;
+      }
       if (e.key === 'Tab' || (e.shiftKey && e.key.toLowerCase() === 'a')) { e.preventDefault(); openPalette(); }
       else if (e.key === ' ' && !e.repeat) { e.preventDefault(); togglePlayAnim(); }
       else if (e.key.toLowerCase() === 'c' && !e.metaKey && !e.ctrlKey) { e.preventDefault(); createFrameFromSelection(); }

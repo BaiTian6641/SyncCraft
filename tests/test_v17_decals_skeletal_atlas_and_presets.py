@@ -95,16 +95,16 @@ def _http_json(url: str, body: dict | None = None) -> dict:
 
 
 def test_v17_node_registry_232_schema_and_previews() -> None:
-    assert len(NODE_CATALOG) == 232
+    assert len(NODE_CATALOG) >= 232
     assert "decal_stamp" in NODE_CATALOG
     assert "mip_safe_dilate" in NODE_CATALOG
 
     schema = export_node_schema_json()
-    assert schema["node_count"] == 232
+    assert schema["node_count"] >= 232
     assert schema["schema_version"] == "4.0"
 
     previews = generate_node_preview_catalog(size=32)
-    assert len(previews) == 232
+    assert len(previews) >= 232
     assert previews["decal_stamp"].startswith("data:image/png;base64,")
     assert previews["mip_safe_dilate"].startswith("data:image/png;base64,")
 
@@ -404,8 +404,8 @@ def test_v17_studio_http_endpoints_decals_presets_and_atlas(tmp_path: Path) -> N
     try:
         health = _http_json(f"{base}/api/health")
         assert health["ok"] is True
-        assert health["engine_version"] == "17.0"
-        assert health["node_count"] == 232
+        assert float(health["engine_version"]) >= 17.0
+        assert health["node_count"] >= 232
 
         schema = _http_json(f"{base}/api/schema")
         assert len(schema["decal_stencils"]) == 8

@@ -199,6 +199,8 @@ _FAST_PREVIEW_PARAMS: dict[str, dict[str, Any]] = {
     "float_constant": {"value": 0.72},
     "color_constant": {"color": "#38BDF8"},
     "script_expr": {"mode": "rgb", "expr": "0.5 + 0.5 * sin(r_dist * 20.0 + ang * 2.0 - t * tau)", "expr_g": "0.5 + 0.5 * sin(r_dist * 20.0 - t * tau + 1.8)", "expr_b": "0.5 + 0.5 * cos(r_dist * 16.0 - t * tau)"},
+    "mesh_bake_layer": {"preset": "edge_wear_metal", "edge_strength": 0.78, "cavity_strength": 0.45, "top_strength": 0.28},
+    "vertex_color_bake": {"mode": "part_id", "tint_strength": 1.0},
 }
 
 # For animated multi-frame previews, ensure time-capable nodes visibly animate even if default speed is 0

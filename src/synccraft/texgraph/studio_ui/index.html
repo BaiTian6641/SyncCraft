@@ -15,10 +15,10 @@
       <div class="brand">
         <div class="brand-mark">SC</div>
         <span>SyncCraft Studio</span>
-        <span class="brand-sub" id="versionBadge">v17 · 232</span>
+        <span class="brand-sub" id="versionBadge">v18 · 234</span>
       </div>
 
-      <select id="projectSelect" class="sel-input" title="Load Flagship Sample or Built-in Preset" style="width: 132px;"></select>
+      <select id="projectSelect" class="sel-input" title="Load Flagship Sample or Built-in Preset" style="width: 174px;"></select>
       <button class="btn" id="btnOpenProject" title="Open 1-to-1 Project File (.syncproj, .texdsl, .texgraph.json, .bbmodel)">Open</button>
       <input type="file" id="projectFileInput" accept=".syncproj,.texdsl,.json,.bbmodel" style="display:none" />
       <button class="btn" id="btnLoadMesh" title="Load or attach a 3D Blockbench .bbmodel for live UV-seam &amp; ray-traced PBR baking">Mesh ▾</button>
@@ -171,15 +171,22 @@
             </div>
           </div>
 
-          <!-- Floating 3D Camera-Projected Decal Stamp Overlay (zero vertical canvas reflow!) -->
+          <!-- Floating 3D Camera-Projected Decal Stamp Overlay + Custom PNG Upload (zero vertical canvas reflow!) -->
           <div class="vp-floating-bar decal-subbar" id="decalToolbar" style="display:none;">
             <div class="brush-row">
-              <select id="decalStencilSelect" class="sel-input" style="height:21px;font-size:10px;max-width:136px;padding:0 4px;" title="3D Projected PBR Stencil Preset"></select>
-              <input type="color" id="decalTintColor" value="#F0C85A" style="width:22px;height:21px;border:1px solid var(--border-subtle);background:none;padding:0;cursor:pointer;" title="Decal Tint Color" />
-              <button class="btn sm primary" id="btnDecalStampCenter" title="Project decal from current camera center onto model">Stamp</button>
+              <select id="decalStencilSelect" class="sel-input" style="height:21px;font-size:10px;flex:1 1 88px;min-width:72px;max-width:118px;padding:0 4px;" title="3D Projected PBR Stencil Preset"></select>
+              <button class="btn sm" id="btnDecalUploadPng" title="Upload Custom PNG Alpha Stencil from disk">PNG...</button>
+              <input type="file" id="decalPngFileInput" accept="image/png,image/webp,image/jpeg" style="display:none;" />
+              <input type="color" id="decalTintColor" value="#F0C85A" style="width:20px;height:21px;border:1px solid var(--border-subtle);background:none;padding:0;cursor:pointer;" title="Decal Tint Color" />
+              <button class="btn sm primary" id="btnDecalStampCenter" title="Commit live 3D gizmo projection onto model (Enter)">Stamp</button>
               <button class="btn sm" id="btnDecalUndo" title="Remove last projected decal">Undo</button>
               <button class="btn sm danger-hover" id="btnDecalClear" title="Clear all projected decals">Clear</button>
               <span class="vp-val" id="decalStackCount" style="margin-left:auto;">0</span>
+            </div>
+            <div class="decal-custom-strip" id="decalCustomStrip" style="display:none;">
+              <span id="decalCustomName">Custom PNG Stencil</span>
+              <button class="btn sm" id="btnDecalResetGizmo" title="Recenter 3D Decal Transform Gizmo">Center</button>
+              <button class="btn sm danger-hover" id="btnDecalClearCustom" title="Switch back to built-in stencil">✕</button>
             </div>
             <div class="decal-sliders-grid">
               <span class="vp-lbl">Size</span><input type="range" id="decalScaleSlider" min="3" max="24" step="0.5" value="10" /><span class="vp-val" id="decalScaleVal">10</span>
@@ -189,8 +196,17 @@
             </div>
           </div>
 
-          <!-- Center Decal Targeting Reticle (shown in Decal mode) -->
-          <div class="decal-reticle" id="decalReticle" style="display:none;" aria-hidden="true"></div>
+          <!-- Interactive 3D Decal Transform Gizmo (Drag to Reposition, Corner to Scale, Top Handle to Roll!) -->
+          <div class="decal-gizmo-layer" id="decalGizmoLayer" style="display:none;">
+            <div class="decal-gizmo-box" id="decalGizmoBox" title="Drag to reposition decal over 3D model · Press Enter or Stamp to commit">
+              <img id="decalGizmoImg" alt="Live 3D Decal Stencil Preview" draggable="false" />
+              <div class="decal-gizmo-cross" aria-hidden="true"></div>
+              <div class="decal-gizmo-rot-stem" aria-hidden="true"></div>
+              <button type="button" class="decal-gizmo-rot-handle" id="decalGizmoRotHandle" title="Drag to roll / rotate decal (Shift snaps 15°)">↻</button>
+              <button type="button" class="decal-gizmo-scale-handle" id="decalGizmoScaleHandle" title="Drag outward/inward to scale decal size">⤡</button>
+              <span class="decal-gizmo-readout" id="decalGizmoReadout">10u · 0°</span>
+            </div>
+          </div>
 
           <!-- Translucent Lighting Popover (collapsed out of default viewport chrome!) -->
           <div class="vp-popover" id="lightingPopover" style="display:none;">
@@ -215,9 +231,9 @@
             </div>
           </div>
 
-          <!-- Translucent View Options Popover -->
+          <!-- Translucent View Options, Auto-LOD & Multi-Texture Slot Popover -->
           <div class="vp-popover vp-popover-view" id="viewPopover" style="display:none;">
-            <div class="vp-pop-head"><span>Viewport display</span></div>
+            <div class="vp-pop-head"><span>Viewport display &amp; mesh</span></div>
             <div class="vp-view-grid">
               <button class="btn sm active" id="btnEnvBg3d" title="Toggle Procedural HDRI Environment Backdrop">Env Sky</button>
               <button class="btn sm" id="btnWire3d" title="Toggle Mesh Edges">Wireframe</button>
@@ -226,6 +242,24 @@
               <button class="btn sm" id="btnSplitWipe" title="Toggle Split Before/After Channel Comparison Wipe">Split Wipe</button>
               <button class="btn sm" id="btnRecordGif" title="Record 360° 3D Turntable Animated GIF">360° GIF</button>
               <button class="btn sm" id="btnResetCam3d" style="grid-column:1 / -1;" title="Reset Orbit Camera">Reset Camera</button>
+            </div>
+            <div class="vp-pop-section" id="vpLodSection">
+              <div class="vp-pop-subhead">
+                <span>Auto-LOD Mesh</span>
+                <span class="vp-val" id="vpLodStats">LOD0 · 100%</span>
+              </div>
+              <div class="seg-group" style="width:100%;" title="Preview real silhouette- & skeleton-preserving cuboid LOD0/LOD1/LOD2">
+                <button class="seg-btn active" id="btnLod0" data-lod="lod0" style="flex:1;justify-content:center;">LOD0</button>
+                <button class="seg-btn" id="btnLod1" data-lod="lod1" style="flex:1;justify-content:center;">LOD1</button>
+                <button class="seg-btn" id="btnLod2" data-lod="lod2" style="flex:1;justify-content:center;">LOD2</button>
+              </div>
+            </div>
+            <div class="vp-pop-section" id="vpTexSlotSection">
+              <div class="vp-pop-subhead">
+                <span>.bbmodel Texture Slot</span>
+                <span class="vp-val" id="vpTexSlotCount">1 slot</span>
+              </div>
+              <select id="texSlotSelect" class="sel-input" style="width:100%;height:22px;font-size:10.5px;" title="Isolate or target a specific .bbmodel textures[] slot"></select>
             </div>
           </div>
 
@@ -261,7 +295,7 @@
       <div class="pane pane-library" id="paneLibrary" data-pane="library">
         <div class="pane-header">
           <div class="pane-tabs">
-            <button class="pane-tab active" data-lib-tab="nodes" id="tabLibNodes">Nodes (<span id="libCount">232</span>)</button>
+            <button class="pane-tab active" data-lib-tab="nodes" id="tabLibNodes">Nodes (<span id="libCount">234</span>)</button>
             <button class="pane-tab" data-lib-tab="syncmat" id="tabLibSyncmat">.syncmat</button>
             <button class="pane-tab" data-lib-tab="syncpack" id="tabLibSyncpack">Packs (<span id="syncpackCount">4</span>)</button>
           </div>
@@ -275,7 +309,7 @@
           </div>
         </div>
         <div class="lib-search-row" id="libNodesSearchRow">
-          <input type="text" id="libSearch" class="txt-input" placeholder="Filter 232 nodes (decal_stamp, mip_safe_dilate, script_expr, paint_layer_stack, noise)..." />
+          <input type="text" id="libSearch" class="txt-input" placeholder="Filter 234 nodes (mesh_bake_layer, vertex_color_bake, decal_stamp, mip_safe_dilate)..." />
         </div>
         <div class="lib-body" id="libBody"></div>
         <div class="lib-body" id="syncmatBody" style="display:none;">
@@ -472,7 +506,7 @@
       <div class="palette-topbar">
         <div class="palette-search-wrap">
           <span class="palette-search-ico">⌕</span>
-          <input type="text" id="paletteInput" class="palette-search" placeholder="Search 232 TexGraph nodes by name, decal, mip, script, paint, math, noise, brass..." autocomplete="off" />
+          <input type="text" id="paletteInput" class="palette-search" placeholder="Search 234 TexGraph nodes by name, baker, vertex, decal, mip, script, paint, noise..." autocomplete="off" />
           <span class="palette-compat-badge" id="paletteCompatBadge" style="display:none;"></span>
         </div>
         <div class="palette-controls">
@@ -502,7 +536,7 @@
         </aside>
       </div>
       <div class="palette-footer">
-        <span id="paletteCountLabel">232 nodes</span>
+        <span id="paletteCountLabel">234 nodes</span>
         <span>↑↓←→ Navigate · Enter Add · Esc Close</span>
       </div>
     </div>
@@ -610,10 +644,11 @@
     <div class="modal-card" style="width:640px;max-width:94vw;">
       <div class="modal-head">
         <div style="display:flex;align-items:center;gap:10px;">
-          <span>Batch &amp; Atlas Baker</span>
-          <div class="seg-group" title="Switch between Per-Asset Batch PBR Bakery and Multi-Asset Shared Atlas Packer">
+          <span>Batch, Atlas &amp; Auto-LOD Baker</span>
+          <div class="seg-group" title="Switch between Batch PBR Bakery, Shared Atlas Packer, and Auto-LOD Mesh Decimator">
             <button class="seg-btn active" id="btnBatchModePbr">Batch PBR</button>
             <button class="seg-btn" id="btnBatchModeAtlas">Shared Atlas</button>
+            <button class="seg-btn" id="btnBatchModeLod">Auto-LODs</button>
           </div>
         </div>
         <button class="btn sm" id="btnCloseBatch">✕</button>
@@ -663,7 +698,29 @@
             </select>
           </div>
         </div>
-        <div id="batchSummaryLine" style="font-size:11px;color:#93c5fd;font-variant-numeric:tabular-nums;">Ready to scan folder, run batch bakery, or pack a shared mip-safe PBR atlas.</div>
+        <div id="lodBakeOptions" style="display:none;grid-template-columns:1fr 90px 90px 84px;gap:8px;">
+          <div class="param-row">
+            <div class="param-label-row"><span>LOD Stem</span></div>
+            <input type="text" id="lodStemInput" class="txt-input" value="kaelith_chrono_dragonborn" />
+          </div>
+          <div class="param-row">
+            <div class="param-label-row"><span>LOD1 Ratio</span></div>
+            <input type="number" id="lod1RatioInput" class="num-input" value="0.58" min="0.25" max="0.90" step="0.02" style="width:100%;" />
+          </div>
+          <div class="param-row">
+            <div class="param-label-row"><span>LOD2 Ratio</span></div>
+            <input type="number" id="lod2RatioInput" class="num-input" value="0.35" min="0.15" max="0.75" step="0.02" style="width:100%;" />
+          </div>
+          <div class="param-row">
+            <div class="param-label-row"><span>Mip Bleed</span></div>
+            <select id="lodBleedSelect" class="sel-input">
+              <option value="0">0px</option>
+              <option value="4" selected>4px</option>
+              <option value="8">8px</option>
+            </select>
+          </div>
+        </div>
+        <div id="batchSummaryLine" style="font-size:11px;color:#93c5fd;font-variant-numeric:tabular-nums;">Ready to scan folder, run batch bakery, pack a shared atlas, or export LOD0–LOD2.</div>
         <div class="atlas-result-card" id="atlasResultCard" style="display:none;">
           <div class="atlas-preview-thumb"><img id="atlasPreviewImg" alt="Packed shared PBR atlas preview" /></div>
           <div class="atlas-result-meta" id="atlasResultMeta"></div>
@@ -674,6 +731,7 @@
         <button class="btn" id="btnBatchScan">Scan Folder</button>
         <button class="btn primary" id="btnBatchRun">Run Batch Bakery</button>
         <button class="btn primary" id="btnAtlasRun" style="display:none;">Pack Shared Atlas</button>
+        <button class="btn primary" id="btnLodExportRun" style="display:none;">Export LOD0–LOD2 Bundle</button>
       </div>
     </div>
   </div>

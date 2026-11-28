@@ -1492,6 +1492,25 @@ NODE_CATALOG: dict[str, NodeMeta] = {
         ParamSchema("preserve_alpha", "checkbox", True, group="Dilation", tooltip="Straight-alpha bleed: dilate RGB outward while preserving transparent alpha"),
         ParamSchema("mip_preview_level", "int", 0, 0, 4, 1, group="Inspection", tooltip="Preview texture downsampled at GPU mipmap level 0..4"),
     )),
+    # --- TexGraph v18 Commercial Pro Nodes (`mesh_bake_layer` & `vertex_color_bake` -> 234 Typed Nodes!) ---
+    "mesh_bake_layer": NodeMeta("mesh_bake_layer", "Material Bus (PBR)", "Smart Curvature / AO / Dust Baker", "Substance/Marmoset smart baker layer compositing 3D Convex Edge Wear, Concave Cavity Grime, Multi-Box Contact AO & World-Normal Top-Down Dust onto a MATERIAL bus!", (PortSchema("base", "ANY", True), PortSchema("mask", "MASK", True)), "MATERIAL", outputs=(PortSchema("mat", "MATERIAL"), PortSchema("albedo", "RGBA"), PortSchema("roughness", "SCALAR"), PortSchema("metallic", "SCALAR"), PortSchema("height", "HEIGHT"), PortSchema("normal", "NORMAL"), PortSchema("ao", "SCALAR")), params=(
+        ParamSchema("preset", "select", "edge_wear_metal", choices=("edge_wear_metal", "crevice_grime", "alpine_snow_dust", "moss_overgrowth", "painted_chipped", "studio_ao_curvature"), group="Smart Baker"),
+        ParamSchema("edge_strength", "slider", 0.65, 0.0, 1.0, 0.02, group="Curvature Edge Wear"),
+        ParamSchema("edge_color", "color", "#E6ECF5", group="Curvature Edge Wear"),
+        ParamSchema("cavity_strength", "slider", 0.42, 0.0, 1.0, 0.02, group="Cavity & Contact AO"),
+        ParamSchema("cavity_color", "color", "#1E1916", group="Cavity & Contact AO"),
+        ParamSchema("ao_multiply", "slider", 0.35, 0.0, 1.0, 0.02, group="Cavity & Contact AO"),
+        ParamSchema("top_strength", "slider", 0.0, 0.0, 1.0, 0.02, group="World-Normal Dust / Snow"),
+        ParamSchema("top_color", "color", "#EEF5FF", group="World-Normal Dust / Snow"),
+        ParamSchema("breakup", "slider", 0.35, 0.0, 1.0, 0.02, group="Refine"),
+        ParamSchema("contrast", "slider", 1.4, 0.3, 4.0, 0.05, group="Refine"),
+        ParamSchema("seed", "int", 42, 0, 99999, 1, group="Randomness"),
+    )),
+    "vertex_color_bake": NodeMeta("vertex_color_bake", "3D Model & UV Masks", "Vertex-Color / Part-ID Baker", "Bakes Marmoset/Substance Per-Part, Per-Bone, Per-Zone Color-ID maps, Diverging Curvature, World-Space Normal, World-Pos, or packed AO/Curv/Cavity RGB masks!", (PortSchema("base", "ANY", True),), "RGBA", params=(
+        ParamSchema("mode", "select", "part_id", choices=("part_id", "bone_id", "zone_id", "curvature_diverging", "world_normal_rgb", "world_pos_rgb", "ao_cavity_rgb"), group="Baker Channel"),
+        ParamSchema("tint_strength", "slider", 1.0, 0.0, 1.0, 0.02, group="Blending", tooltip="1.0 outputs pure baked Color-ID/Channel map; <1.0 softly tints connected base input"),
+        ParamSchema("seed", "int", 42, 0, 99999, 1, group="Randomness"),
+    )),
 }
 
 

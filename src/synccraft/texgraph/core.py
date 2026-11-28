@@ -300,6 +300,7 @@ from .math_utility_ops import (
 )
 from .v16_pro_ops import ScriptSecurityError, paint_layer_stack_op, script_expr_op
 from .v17_decal_atlas_ops import decal_stamp_op, mip_safe_dilate_op
+from .v18_lod_baker_ops import mesh_bake_layer_op, vertex_color_bake_op
 
 # Nodes whose output depends on animation `phase` (re-evaluated per flipbook frame; others cached!)
 _TIME_AWARE_OPS: frozenset[str] = frozenset(
@@ -336,6 +337,8 @@ _BUS_INPUT_KEYS: dict[str, frozenset[str]] = {
     "paint_layer_stack": frozenset({"base"}),
     "decal_stamp": frozenset({"base"}),
     "mip_safe_dilate": frozenset({"src"}),
+    "mesh_bake_layer": frozenset({"base"}),
+    "vertex_color_bake": frozenset({"base"}),
     "paint_entity_eyes_and_parts": frozenset({"base"}),
     "bake_emissive_bounce": frozenset({"mat"}),
     "triplanar_project": frozenset({"src"}),
@@ -3228,6 +3231,39 @@ class TexGraph:
                 alpha_cutoff=float(p.get("alpha_cutoff", 0.02)),
                 preserve_alpha=bool(p.get("preserve_alpha", True)),
                 mip_preview_level=int(p.get("mip_preview_level", 0)),
+            )
+
+        # --- TexGraph v18 Smart Mesh Baker & Vertex-Color / Color-ID Nodes ---
+        if op == "mesh_bake_layer":
+            return mesh_bake_layer_op(
+                H,
+                W,
+                base=ins.get("base"),
+                mask=ins.get("mask"),
+                mesh_context=self.mesh_context,
+                preset=str(p.get("preset", "edge_wear_metal")),
+                edge_strength=float(p.get("edge_strength", 0.65)),
+                cavity_strength=float(p.get("cavity_strength", 0.42)),
+                ao_multiply=float(p.get("ao_multiply", 0.35)),
+                top_strength=float(p.get("top_strength", 0.0)),
+                edge_color=str(p.get("edge_color", "")),
+                cavity_color=str(p.get("cavity_color", "")),
+                top_color=str(p.get("top_color", "")),
+                breakup=float(p.get("breakup", 0.35)),
+                contrast=float(p.get("contrast", 1.4)),
+                seed=seed,
+                tileable=tile,
+            )
+
+        if op == "vertex_color_bake":
+            return vertex_color_bake_op(
+                H,
+                W,
+                base=ins.get("base"),
+                mesh_context=self.mesh_context,
+                mode=str(p.get("mode", "part_id")),
+                tint_strength=float(p.get("tint_strength", 1.0)),
+                seed=seed,
             )
 
         # --- TexGraph v15 Nested Compound Subgraph Group (`group_input` / `subgraph_group`) ---

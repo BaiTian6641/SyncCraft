@@ -416,6 +416,7 @@
     attribute vec3 aTangent;
     attribute vec2 aUv;
     attribute float aPickId;
+    attribute float aTexSlot;
     uniform mat4 uMvp;
     uniform mat4 uModel;
     varying vec3 vWorldPos;
@@ -423,6 +424,7 @@
     varying vec3 vTangent;
     varying vec2 vUv;
     varying float vPickId;
+    varying float vTexSlot;
     void main() {
       vec4 wp = uModel * vec4(aPos, 1.0);
       vWorldPos = wp.xyz;
@@ -430,6 +432,7 @@
       vTangent = normalize(mat3(uModel) * aTangent);
       vUv = aUv;
       vPickId = aPickId;
+      vTexSlot = aTexSlot;
       gl_Position = uMvp * vec4(aPos, 1.0);
     }
   `;
@@ -441,6 +444,7 @@
     varying vec3 vTangent;
     varying vec2 vUv;
     varying float vPickId;
+    varying float vTexSlot;
 
     uniform sampler2D uAlbedo;
     uniform sampler2D uNormal;
@@ -462,6 +466,7 @@
     uniform float uClearcoat;
     uniform float uSssStrength;
     uniform float uHighlightPickId;
+    uniform float uActiveTexSlot;
     uniform float uEnvRot;
     uniform float uLightIntensity;
     uniform int uSplitWipe;
@@ -599,6 +604,11 @@
       // ACES Filmic tonemap + sRGB encode
       col = (col * (2.51 * col + 0.03)) / (col * (2.43 * col + 0.59) + 0.14);
       col = pow(clamp(col, 0.0, 1.0), vec3(1.0 / 2.2));
+      // Multi-Texture Slot Isolation Highlight (dims non-active slots when user isolates a specific slot!)
+      if (uActiveTexSlot >= -0.5 && abs(vTexSlot - uActiveTexSlot) > 0.4) {
+        float lumSlot = dot(col, vec3(0.299, 0.587, 0.114));
+        col = vec3(lumSlot * 0.28);
+      }
       float outAlpha = mix(1.0, clamp(baseSample.a * (gl_FrontFacing ? 0.92 : 0.72) + fresnelRim * 0.22, 0.20, 0.94), isTranslucent);
       gl_FragColor = vec4(col, outAlpha);
     }
@@ -764,6 +774,7 @@
       this.splitRightChannel = 'normal';
       this.hasTransparency = false;
       this.highlightPickId = 0;
+      this.activeTexSlot = -1;
 
       this.onPickPart = null;
       this.onHoverPart = null;
@@ -886,12 +897,14 @@
         return b;
       };
       const picks = g.pick_ids && g.pick_ids.length === g.count ? g.pick_ids : new Float32Array(g.count);
+      const tslots = g.tex_slot_ids && g.tex_slot_ids.length === g.count ? g.tex_slot_ids : new Float32Array(g.count);
       return {
         pos: mk(g.positions),
         nrm: mk(g.normals),
         tan: mk(g.tangents),
         uv: mk(g.uvs),
         pick: mk(picks),
+        tslot: mk(tslots),
         count: g.count,
       };
     }
@@ -1046,12 +1059,14 @@
         return buf;
       };
       const picks = mesh.pick_ids && mesh.pick_ids.length === mesh.vertex_count ? mesh.pick_ids : new Float32Array(mesh.vertex_count);
+      const tslots = mesh.tex_slot_ids && mesh.tex_slot_ids.length === mesh.vertex_count ? mesh.tex_slot_ids : new Float32Array(mesh.vertex_count);
       this.geoms.bbmodel = {
         pos: mkDyn(pos),
         nrm: mkDyn(mesh.normals),
         tan: mkDyn(mesh.tangents),
         uv: mkStat(mesh.uvs),
         pick: mkStat(picks),
+        tslot: mkStat(tslots),
         count: mesh.vertex_count,
       };
       const minY = (b.min[1] - cy) * sc - 0.02;
@@ -1252,11 +1267,11 @@
       gl.bufferSubData(gl.ARRAY_BUFFER, 0, outT);
     }
 
-    /** Compute exact `.bbmodel`-space 3D decal projector basis through a viewport click (or viewport center). */
-    getCameraProjectorAt(clientX, clientY) {
+    /** Compute exact `.bbmodel`-space 3D decal projector basis through normalized `[0..1]` viewport coords `(nx, ny)`. */
+    getCameraProjectorAtNorm(nxIn, nyIn) {
       const rect = this.canvas.getBoundingClientRect();
-      const nx = (clientX != null) ? (clientX - rect.left) / Math.max(1, rect.width) : 0.5;
-      const ny = (clientY != null) ? (clientY - rect.top) / Math.max(1, rect.height) : 0.5;
+      const nx = (nxIn != null && Number.isFinite(nxIn)) ? nxIn : 0.5;
+      const ny = (nyIn != null && Number.isFinite(nyIn)) ? nyIn : 0.5;
       const ndcX = nx * 2.0 - 1.0;
       const ndcY = 1.0 - ny * 2.0;
 
@@ -1312,8 +1327,15 @@
       };
     }
 
+    getCameraProjectorAt(clientX, clientY) {
+      const rect = this.canvas.getBoundingClientRect();
+      const nx = (clientX != null) ? (clientX - rect.left) / Math.max(1, rect.width) : 0.5;
+      const ny = (clientY != null) ? (clientY - rect.top) / Math.max(1, rect.height) : 0.5;
+      return this.getCameraProjectorAtNorm(nx, ny);
+    }
+
     getCenterCameraProjector() {
-      return this.getCameraProjectorAt(null, null);
+      return this.getCameraProjectorAtNorm(0.5, 0.5);
     }
 
     _uploadImgToTex(tex, img, wrapRepeat) {
@@ -1633,14 +1655,8 @@
         if (this.decalMode || this.brushMode) e.preventDefault();
       });
       this.canvas.addEventListener('pointerdown', (e) => {
-        // 0. 3D Camera-Projected Decal Stamping (left-click stamps through exact cursor ray; right-drag still orbits!)
-        if (this.decalMode && e.button === 0 && !e.shiftKey && !e.altKey) {
-          if (this.onDecalStamp) {
-            const proj = this.getCameraProjectorAt(e.clientX, e.clientY);
-            this.onDecalStamp(proj);
-          }
-          return;
-        }
+        // 0. In Decal mode, dragging canvas orbits freely around model so user can align the 3D Decal Transform Gizmo!
+        //    (Direct clicks on the interactive Gizmo overlay drag/scale/rotate, and `Stamp` / `Enter` commits!)
         // 1. Direct 3D Brush Mask Painting
         if (this.brushMode && e.button === 0) {
           const hit = this.pickUvAt(e.clientX, e.clientY);
@@ -1844,6 +1860,7 @@
       gl.uniform1f(gl.getUniformLocation(this.progPbr, 'uClearcoat'), this.clearcoat);
       gl.uniform1f(gl.getUniformLocation(this.progPbr, 'uSssStrength'), this.sssStrength);
       gl.uniform1f(gl.getUniformLocation(this.progPbr, 'uHighlightPickId'), this.highlightPickId);
+      gl.uniform1f(gl.getUniformLocation(this.progPbr, 'uActiveTexSlot'), this.activeTexSlot != null ? this.activeTexSlot : -1.0);
       gl.uniform1f(gl.getUniformLocation(this.progPbr, 'uEnvRot'), envRotRad);
       gl.uniform1f(gl.getUniformLocation(this.progPbr, 'uLightIntensity'), this.lightIntensity);
       gl.uniform1i(gl.getUniformLocation(this.progPbr, 'uSplitWipe'), this.splitWipe ? 1 : 0);
@@ -1878,6 +1895,7 @@
       bindAttr('aTangent', geom.tan, 3);
       bindAttr('aUv', geom.uv, 2);
       bindAttr('aPickId', geom.pick, 1);
+      if (geom.tslot) bindAttr('aTexSlot', geom.tslot, 1);
 
       const locBackPass = gl.getUniformLocation(this.progPbr, 'uBackPass');
       if (this.hasTransparency) {

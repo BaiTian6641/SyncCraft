@@ -273,6 +273,17 @@ from .v17_decal_atlas_ops import (
     mip_safe_dilate_scalar,
     render_decal_stencil,
 )
+from .v18_lod_baker_ops import (
+    SMART_BAKER_PRESETS,
+    build_slot_uv_mask,
+    decimate_bbmodel_lod,
+    export_lod_bundle,
+    extract_bbmodel_texture_slots,
+    generate_bbmodel_lod_chain,
+    mesh_bake_layer_op,
+    resolve_face_texture_slot,
+    vertex_color_bake_op,
+)
 from .syncproj import DEFAULT_CHRONO_VARIANTS, SyncProject, apply_variant_to_graph, generate_variant_pack
 from .studio_server import (
     STUDIO_SAMPLES,

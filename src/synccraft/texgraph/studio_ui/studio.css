@@ -490,15 +490,14 @@ html, body {
   left: 8px;
   bottom: 6px;
   max-width: calc(100% - 16px);
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
+  display: block;
   padding: 2px 7px;
   background: rgba(17, 19, 24, 0.84);
   border: 1px solid var(--border-subtle);
   border-radius: 4px;
   font-family: var(--font-mono);
   font-size: 9.5px;
+  line-height: 1.45;
   color: var(--text-secondary);
   white-space: nowrap;
   overflow: hidden;
@@ -2619,7 +2618,165 @@ input[type="range"]::-webkit-slider-thumb:hover {
   gap: 8px;
 }
 .vp-popover-view {
-  width: 214px;
+  width: 210px;
+  padding: 7px 8px;
+  gap: 6px;
+}
+.vp-pop-section {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding-top: 7px;
+  border-top: 1px solid var(--border-subtle);
+}
+.vp-pop-subhead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+/* Interactive 3D Decal Transform Gizmo (Drag / Scale / Roll + Live Translucent Stencil Preview!) */
+.decal-subbar .brush-row {
+  flex-wrap: nowrap;
+  gap: 3px;
+}
+.decal-custom-strip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 5px;
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  border-radius: 4px;
+  font-size: 10px;
+  color: #fde68a;
+}
+.decal-custom-strip span {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.decal-gizmo-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 8;
+}
+.decal-gizmo-box {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 96px;
+  height: 96px;
+  transform: translate(-50%, -50%) rotate(0deg);
+  border: 1.5px dashed rgba(245, 158, 11, 0.92);
+  border-radius: 4px;
+  background: rgba(245, 158, 11, 0.06);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45);
+  pointer-events: auto;
+  cursor: move;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  touch-action: none;
+}
+.decal-gizmo-box img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  image-rendering: pixelated;
+  opacity: 0.78;
+  pointer-events: none;
+  filter: drop-shadow(0 0 4px rgba(0, 0, 0, 0.65));
+}
+.decal-gizmo-cross {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 12px;
+  height: 12px;
+  margin-left: -6px;
+  margin-top: -6px;
+  pointer-events: none;
+}
+.decal-gizmo-cross::before,
+.decal-gizmo-cross::after {
+  content: '';
+  position: absolute;
+  background: rgba(245, 158, 11, 0.9);
+}
+.decal-gizmo-cross::before { left: 50%; top: 0; bottom: 0; width: 1px; margin-left: -0.5px; }
+.decal-gizmo-cross::after { top: 50%; left: 0; right: 0; height: 1px; margin-top: -0.5px; }
+.decal-gizmo-rot-stem {
+  position: absolute;
+  left: 50%;
+  top: -18px;
+  width: 1.5px;
+  height: 18px;
+  margin-left: -0.75px;
+  background: rgba(245, 158, 11, 0.85);
+  pointer-events: none;
+}
+.decal-gizmo-rot-handle {
+  position: absolute;
+  left: 50%;
+  top: -32px;
+  width: 20px;
+  height: 20px;
+  margin-left: -10px;
+  border-radius: 50%;
+  border: 1.5px solid #fbbf24;
+  background: rgba(20, 22, 27, 0.92);
+  color: #fde68a;
+  font-size: 11px;
+  line-height: 1;
+  display: grid;
+  place-items: center;
+  cursor: grab;
+  padding: 0;
+  pointer-events: auto;
+  touch-action: none;
+  z-index: 4;
+}
+.decal-gizmo-rot-handle:active { cursor: grabbing; }
+.decal-gizmo-scale-handle {
+  position: absolute;
+  right: -10px;
+  bottom: -10px;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  border: 1.5px solid #38bdf8;
+  background: rgba(20, 22, 27, 0.94);
+  color: #bae6fd;
+  touch-action: none;
+  z-index: 4;
+  font-size: 11px;
+  line-height: 1;
+  display: grid;
+  place-items: center;
+  cursor: nwse-resize;
+  padding: 0;
+  pointer-events: auto;
+}
+.decal-gizmo-readout {
+  position: absolute;
+  left: 50%;
+  bottom: -22px;
+  transform: translateX(-50%);
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: rgba(18, 20, 24, 0.90);
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  color: #fde68a;
+  font-size: 9.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  pointer-events: none;
 }
 .vp-pop-head {
   display: flex;

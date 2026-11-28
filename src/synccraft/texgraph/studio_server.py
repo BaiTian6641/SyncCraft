@@ -76,6 +76,15 @@ from .v17_decal_atlas_ops import (
     ENGINE_EXPORT_PRESETS,
     bake_multi_asset_atlas,
     export_engine_preset,
+    render_decal_stencil,
+)
+from .v18_lod_baker_ops import (
+    SMART_BAKER_PRESETS,
+    build_slot_uv_mask,
+    export_lod_bundle,
+    extract_bbmodel_texture_slots,
+    generate_bbmodel_lod_chain,
+    resolve_face_texture_slot,
 )
 
 _STUDIO_UI_DIR = Path(__file__).resolve().parent / "studio_ui"
@@ -314,6 +323,8 @@ def extract_bbmodel_webgl_mesh(bb_doc: dict[str, Any]) -> dict[str, Any]:
     res = bb_doc.get("resolution") or {}
     tw = max(1.0, float(res.get("width", 64)))
     th = max(1.0, float(res.get("height", 64)))
+    raw_textures = [t for t in (bb_doc.get("textures") or []) if isinstance(t, dict)]
+    texture_slots = extract_bbmodel_texture_slots(bb_doc)
     bones, elem_bone_idx, bone_chains, animations = _extract_skeleton_and_animations(bb_doc)
 
     positions: list[float] = []
@@ -325,6 +336,7 @@ def extract_bbmodel_webgl_mesh(bb_doc: dict[str, Any]) -> dict[str, Any]:
     bone_ids: list[int] = []
     uvs: list[float] = []
     pick_ids: list[float] = []
+    tex_slot_ids: list[float] = []
     elem_meta: list[dict[str, str]] = []
     uv_rects: list[list[float]] = []
 
@@ -388,10 +400,19 @@ def extract_bbmodel_webgl_mesh(bb_doc: dict[str, Any]) -> dict[str, Any]:
             finfo = faces.get(fname)
             if not isinstance(finfo, dict):
                 continue
+            if "texture" in finfo and finfo["texture"] is None:
+                continue
             uv_rect = finfo.get("uv")
             if not uv_rect or len(uv_rect) < 4:
                 continue
-            u0, v0, u1, v1 = (float(uv_rect[0]) / tw, float(uv_rect[1]) / th, float(uv_rect[2]) / tw, float(uv_rect[3]) / th)
+            slot_idx = resolve_face_texture_slot(finfo.get("texture", 0), raw_textures)
+            if slot_idx is None:
+                continue
+            f_tw, f_th = tw, th
+            if 0 <= slot_idx < len(texture_slots):
+                f_tw = max(1.0, float(texture_slots[slot_idx].get("uv_width") or tw))
+                f_th = max(1.0, float(texture_slots[slot_idx].get("uv_height") or th))
+            u0, v0, u1, v1 = (float(uv_rect[0]) / f_tw, float(uv_rect[1]) / f_th, float(uv_rect[2]) / f_tw, float(uv_rect[3]) / f_th)
             if abs(u1 - u0) < 1e-6 or abs(v1 - v0) < 1e-6:
                 continue
             uv_rects.append([round(min(u0, u1), 5), round(min(v0, v1), 5), round(max(u0, u1), 5), round(max(v0, v1), 5)])
@@ -444,6 +465,7 @@ def extract_bbmodel_webgl_mesh(bb_doc: dict[str, Any]) -> dict[str, Any]:
                 bone_ids.append(b_idx)
                 uvs.extend((round(float(uv_pt[0]), 5), round(float(uv_pt[1]), 5)))
                 pick_ids.append(pick_id)
+                tex_slot_ids.append(float(slot_idx))
 
     if not positions:
         pmin = np.array([-8.0, 0.0, -8.0])
@@ -474,6 +496,8 @@ def extract_bbmodel_webgl_mesh(bb_doc: dict[str, Any]) -> dict[str, Any]:
         "animations": animations,
         "uvs": uvs,
         "pick_ids": pick_ids,
+        "tex_slot_ids": tex_slot_ids,
+        "texture_slots": [{k: v for k, v in s.items() if k != "source"} for s in texture_slots],
         "elem_meta": elem_meta,
         "uv_rects": uv_rects,
     }
@@ -808,6 +832,12 @@ class StudioSession:
         self._bridge_payload: dict[str, Any] = {}
         self._bridge_clients: int = 0
         self._bridge_cond = threading.Condition()
+        self._bridge_pose: dict[str, Any] = {"clip": None, "time": 0.0, "playing": False, "speed": 1.0, "bone_overrides": {}}
+        self.active_texture_slot: int = -1
+        self.active_lod: str = "lod0"
+        self._lod_chain: dict[str, dict[str, Any]] = {}
+        self._lod_webgl: dict[str, dict[str, Any]] = {}
+        self._decal_stencil_previews: dict[str, str] | None = None
         self._batch_lock = threading.Lock()
         self._batch_state: dict[str, Any] = {
             "running": False,
@@ -856,11 +886,19 @@ class StudioSession:
             bake_ms = float(getattr(self.mesh_ctx, "bake_ms", 0.0))
             self.graph.attach_mesh(self.mesh_ctx)
             self.webgl_mesh = extract_bbmodel_webgl_mesh(bb_doc)
+            self.active_texture_slot = -1
+            self.active_lod = "lod0"
+            self._lod_chain = {}
+            self._lod_webgl = {}
         else:
             self.bbmodel_doc = None
             self.mesh_ctx = None
             self.webgl_mesh = None
             self.graph.mesh_context = None
+            self.active_texture_slot = -1
+            self.active_lod = "lod0"
+            self._lod_chain = {}
+            self._lod_webgl = {}
         self._ensure_positions()
         if clear_history:
             self._undo_stack.clear()
@@ -942,8 +980,20 @@ class StudioSession:
             "brush_presets": PBR_BRUSH_PRESETS,
             "syncpacks": list_all_syncpacks(),
             "decal_stencils": DECAL_STENCILS,
+            "decal_stencil_previews": self._get_decal_stencil_previews(),
             "export_presets": ENGINE_EXPORT_PRESETS,
+            "smart_baker_presets": SMART_BAKER_PRESETS,
         }
+
+    def _get_decal_stencil_previews(self) -> dict[str, str]:
+        if self._decal_stencil_previews is not None:
+            return self._decal_stencil_previews
+        out: dict[str, str] = {}
+        for sid, meta in DECAL_STENCILS.items():
+            maps = render_decal_stencil(sid, size=64, tint_color=str(meta.get("color") or "#F0C85A"))
+            out[sid] = _u8_to_data_url(rgba_float_to_u8(maps["albedo"]))
+        self._decal_stencil_previews = out
+        return out
 
     def get_state_payload(self) -> dict[str, Any]:
         with self._lock:
@@ -965,7 +1015,25 @@ class StudioSession:
                 "active_variant": self.active_variant,
                 "has_mesh": self.mesh_ctx is not None,
                 "mesh_fingerprint": getattr(self.mesh_ctx, "content_fingerprint", None) if self.mesh_ctx is not None else None,
-                "mesh": self.webgl_mesh,
+                "mesh": self._lod_webgl.get(self.active_lod, self.webgl_mesh) if self.active_lod != "lod0" else self.webgl_mesh,
+                "texture_slots": (self.webgl_mesh.get("texture_slots") or []) if isinstance(self.webgl_mesh, dict) else [],
+                "active_texture_slot": self.active_texture_slot,
+                "active_lod": self.active_lod,
+                "lod_levels": (
+                    [
+                        {
+                            "level": lvl,
+                            "box_count": info["box_count"],
+                            "face_count": info["face_count"],
+                            "tri_count": info["tri_count"],
+                            "bone_count": info["bone_count"],
+                            "reduction_pct": info["reduction_pct"],
+                        }
+                        for lvl, info in self._lod_chain.items()
+                    ]
+                    if self._lod_chain
+                    else []
+                ),
                 "mesh_parts": (
                     {
                         "zones": sorted({z for z in self.mesh_ctx.elem_zones if z}),
@@ -998,7 +1066,11 @@ class StudioSession:
                     else [{"level": 0, "title": self.graph.name}]
                 ),
                 "in_subgraph": bool(self._group_stack),
-                "bridge": {"rev": self._bridge_rev, "clients": self._bridge_clients},
+                "bridge": {
+                    "rev": self._bridge_rev,
+                    "clients": self._bridge_clients,
+                    "pose": copy.deepcopy(self._bridge_pose),
+                },
             }
 
     @staticmethod
@@ -1177,6 +1249,10 @@ class StudioSession:
                 self.bbmodel_doc = None
                 self.mesh_ctx = None
                 self.webgl_mesh = None
+                self.active_texture_slot = -1
+                self.active_lod = "lod0"
+                self._lod_chain = {}
+                self._lod_webgl = {}
                 self.graph.mesh_context = None
                 self.graph._content_cache.clear()
                 self.graph._static_cache.clear()
@@ -1193,6 +1269,10 @@ class StudioSession:
             self.bbmodel_doc = bb_doc
             self.mesh_ctx = mc
             self.webgl_mesh = extract_bbmodel_webgl_mesh(bb_doc)
+            self.active_texture_slot = -1
+            self.active_lod = "lod0"
+            self._lod_chain = {}
+            self._lod_webgl = {}
             self.graph.attach_mesh(mc)
             self.graph._content_cache.clear()
             self.graph._static_cache.clear()
@@ -1996,7 +2076,7 @@ class StudioSession:
                 qa=round(qa_dict["score"], 1) if isinstance(qa_dict, dict) and isinstance(qa_dict.get("score"), (int, float)) else None,
             )
 
-            # Broadcast live evaluated textures to any connected Blockbench 5 Live Link clients!
+            # Broadcast live evaluated textures + active texture slot + skeletal pose to connected Blockbench 5 clients!
             with self._bridge_cond:
                 self._bridge_rev += 1
                 self._bridge_payload = {
@@ -2007,6 +2087,8 @@ class StudioSession:
                     "width": int(out_u8.shape[1]),
                     "height": int(out_u8.shape[0]),
                     "phase": round(phase, 4),
+                    "texture_slot": self.active_texture_slot,
+                    "pose": copy.deepcopy(self._bridge_pose),
                     "channels": {
                         k: channels[k]
                         for k in ("baked", "albedo", "pbr_lit", "normal", "labpbr_n", "labpbr_s", "bedrock_mer", "emissive")
@@ -2964,6 +3046,133 @@ class StudioSession:
         )
         return mf
 
+    # -----------------------------------------------------------------------
+    # Milestone v18: Multi-Texture Slots, Auto-LOD Decimation & BB5 Pose Sync
+    # -----------------------------------------------------------------------
+
+    def set_texture_slot(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Select active `.bbmodel` texture slot (`-1` = All Slots, `0..N-1` = isolate slot) & sync over BB5 bridge."""
+        with self._lock:
+            slot = int(payload.get("slot", -1))
+            slots = (self.webgl_mesh.get("texture_slots") or []) if isinstance(self.webgl_mesh, dict) else []
+            if slot < -1 or (slots and slot >= len(slots)):
+                slot = -1
+            self.active_texture_slot = slot
+            if self.bbmodel_doc is not None and slot >= 0 and self.mesh_ctx is not None:
+                _ = build_slot_uv_mask(self.bbmodel_doc, slot, self.mesh_ctx.width, self.mesh_ctx.height)
+            with self._bridge_cond:
+                if self._bridge_payload:
+                    self._bridge_rev += 1
+                    self._bridge_payload = dict(self._bridge_payload, rev=self._bridge_rev, texture_slot=slot)
+                    self._bridge_cond.notify_all()
+            self._log("info", f"Switched active .bbmodel texture slot -> {slot if slot >= 0 else 'ALL'}")
+            return self.get_state_payload()
+
+    def lod_preview(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Compute (and cache) LOD0/LOD1/LOD2 cuboid decimation chain and switch live 3D viewport mesh to requested LOD."""
+        with self._lock:
+            if self.bbmodel_doc is None:
+                raise ValueError("Attach a 3D .bbmodel mesh before generating LODs")
+            level = str(payload.get("level") or "lod0").strip().lower()
+            if level not in ("lod0", "lod1", "lod2"):
+                raise ValueError(f"Unsupported LOD level: {level!r} (expected lod0, lod1, lod2)")
+            lod1_r = float(np.clip(payload.get("lod1_ratio", 0.58), 0.25, 0.90))
+            lod2_r = float(np.clip(payload.get("lod2_ratio", 0.35), 0.15, lod1_r - 0.05))
+            rebuild = bool(payload.get("rebuild", False))
+            if rebuild or not self._lod_chain:
+                self._lod_chain = generate_bbmodel_lod_chain(self.bbmodel_doc, lod1_ratio=lod1_r, lod2_ratio=lod2_r)
+                self._lod_webgl = {}
+            if level != "lod0" and level not in self._lod_webgl:
+                self._lod_webgl[level] = extract_bbmodel_webgl_mesh(self._lod_chain[level]["bbmodel"])
+            self.active_lod = level
+            mesh_out = self.webgl_mesh if level == "lod0" else self._lod_webgl[level]
+            levels_summary = [
+                {
+                    "level": lvl,
+                    "box_count": info["box_count"],
+                    "face_count": info["face_count"],
+                    "tri_count": info["tri_count"],
+                    "bone_count": info["bone_count"],
+                    "reduction_pct": info["reduction_pct"],
+                }
+                for lvl, info in self._lod_chain.items()
+            ]
+            self._log(
+                "info",
+                f"Switched live 3D preview -> {level.upper()} ({self._lod_chain[level]['box_count']} boxes, {self._lod_chain[level]['tri_count']} tris, -{self._lod_chain[level]['reduction_pct']}%)",
+            )
+            return {
+                "ok": True,
+                "active_lod": level,
+                "levels": levels_summary,
+                "mesh": mesh_out,
+            }
+
+    def lod_export(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Export full LOD0/LOD1/LOD2 `.bbmodel` bundle + mip-dilated downscaled textures + `lod_manifest.json`."""
+        with self._lock:
+            if self.bbmodel_doc is None:
+                raise ValueError("Attach a 3D .bbmodel mesh before exporting LOD bundle")
+            stem = str(payload.get("stem") or self.graph.name or self.bbmodel_doc.get("name") or "synccraft_lod").strip()
+            out_dir = str(payload.get("out_dir") or (Path.home() / ".synccraft" / "lod_exports" / f"{stem}_{int(time.time())}")).strip()
+            lod1_r = float(np.clip(payload.get("lod1_ratio", 0.58), 0.25, 0.90))
+            lod2_r = float(np.clip(payload.get("lod2_ratio", 0.35), 0.15, lod1_r - 0.05))
+            bleed_px = max(0, min(16, int(payload.get("bleed_px", 4))))
+            mf = export_lod_bundle(
+                self.bbmodel_doc,
+                out_dir,
+                stem=stem,
+                graph=self.graph,
+                lod1_ratio=lod1_r,
+                lod2_ratio=lod2_r,
+                bleed_px=bleed_px,
+            )
+            self._log(
+                "info",
+                f"Exported Auto-LOD bundle '{stem}' (LOD0/LOD1/LOD2, bleed={bleed_px}px) -> {mf['out_dir']}",
+            )
+            return mf
+
+    def bridge_sync_pose(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Broadcast live skeletal clip, playhead time, and bone overrides bi-directionally over the BB5 SSE bridge."""
+        clip = payload.get("clip")
+        clip_name = str(clip).strip() if (clip is not None and str(clip).strip()) else None
+        t_val = max(0.0, float(payload.get("time", 0.0) or 0.0))
+        playing = bool(payload.get("playing", False))
+        speed = float(np.clip(payload.get("speed", 1.0) or 1.0, 0.1, 4.0))
+        overrides = payload.get("bone_overrides")
+        if not isinstance(overrides, dict):
+            overrides = {}
+        pose_obj = {
+            "clip": clip_name,
+            "time": round(t_val, 4),
+            "playing": playing,
+            "speed": round(speed, 2),
+            "bone_overrides": copy.deepcopy(overrides),
+        }
+        with self._bridge_cond:
+            self._bridge_pose = pose_obj
+            self._bridge_rev += 1
+            pkt = dict(self._bridge_payload or {})
+            pkt.update(
+                {
+                    "ok": True,
+                    "rev": self._bridge_rev,
+                    "workspace_epoch": self._workspace_epoch,
+                    "graph_name": self.graph.name,
+                    "texture_slot": self.active_texture_slot,
+                    "pose": copy.deepcopy(pose_obj),
+                }
+            )
+            self._bridge_payload = pkt
+            self._bridge_cond.notify_all()
+            return {
+                "ok": True,
+                "rev": self._bridge_rev,
+                "clients": self._bridge_clients,
+                "pose": copy.deepcopy(pose_obj),
+            }
+
     def get_bridge_latest(self, since_rev: int = -1) -> dict[str, Any]:
         with self._bridge_cond:
             if not self._bridge_payload or self._bridge_rev <= since_rev:
@@ -3051,7 +3260,7 @@ def create_studio_server(
                         "ok": True,
                         "app": "SyncCraft Studio",
                         "synccraft_version": __version__,
-                        "engine_version": "17.0",
+                        "engine_version": "18.0",
                         "schema_version": "4.0",
                         "node_count": len(NODE_REGISTRY),
                         "active_graph": sess.graph.name,
@@ -3304,6 +3513,18 @@ def create_studio_server(
                 if path == "/api/atlas/bake":
                     self._send_json(sess.atlas_bake(body))
                     return
+                if path == "/api/mesh/texture_slot":
+                    self._send_json(sess.set_texture_slot(body))
+                    return
+                if path == "/api/lod/preview":
+                    self._send_json(sess.lod_preview(body))
+                    return
+                if path == "/api/lod/export":
+                    self._send_json(sess.lod_export(body))
+                    return
+                if path == "/api/bridge/pose":
+                    self._send_json(sess.bridge_sync_pose(body), cors=True)
+                    return
                 self._send_json({"error": f"Unknown API endpoint: {path}"}, status=404)
             except (ValueError, KeyError, TypeError, FileNotFoundError, ScriptSecurityError, TexDSLParseError, GraphCycleError) as exc:
                 _write_studio_file_log("error", f"POST {path} -> 400", error=type(exc).__name__, detail=str(exc))
@@ -3328,7 +3549,7 @@ def serve_studio(
     server, _ = create_studio_server(host=host, port=port, initial_sample=initial_sample, size=size)
     actual_port = server.server_address[1]
     url = f"http://{host}:{actual_port}/"
-    print(f"SyncCraft Studio v{__version__} (TexGraph v17 / Schema v4.0 · {len(NODE_REGISTRY)} nodes)")
+    print(f"SyncCraft Studio v{__version__} (TexGraph v18 / Schema v4.0 · {len(NODE_REGISTRY)} nodes)")
     print(f"  Listening on {url}  (Press Ctrl+C to stop)")
     if open_browser:
         threading.Timer(0.4, lambda: webbrowser.open(url)).start()
