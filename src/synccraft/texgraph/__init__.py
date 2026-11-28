@@ -284,6 +284,14 @@ from .v18_lod_baker_ops import (
     resolve_face_texture_slot,
     vertex_color_bake_op,
 )
+from .v19_gltf_exporter import (
+    euler_zyx_deg_to_quat,
+    eval_molang_expr,
+    export_bbmodel_to_glb,
+    export_lod_glb_bundle,
+    quat_to_mat3,
+    validate_glb_bytes,
+)
 from .syncproj import DEFAULT_CHRONO_VARIANTS, SyncProject, apply_variant_to_graph, generate_variant_pack
 from .studio_server import (
     STUDIO_SAMPLES,

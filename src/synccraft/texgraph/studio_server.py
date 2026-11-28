@@ -86,6 +86,10 @@ from .v18_lod_baker_ops import (
     generate_bbmodel_lod_chain,
     resolve_face_texture_slot,
 )
+from .v19_gltf_exporter import (
+    export_bbmodel_to_glb,
+    export_lod_glb_bundle,
+)
 
 _STUDIO_UI_DIR = Path(__file__).resolve().parent / "studio_ui"
 _STUDIO_LOG_LOCK = threading.Lock()
@@ -3133,6 +3137,77 @@ class StudioSession:
             )
             return mf
 
+    def export_glb(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Export active `.bbmodel` (+ live TexGraph PBR) as a Khronos glTF 2.0 `.glb` binary or LOD0–LOD2 `.glb` bundle."""
+        with self._lock:
+            if self.bbmodel_doc is None:
+                raise ValueError("Attach a 3D .bbmodel mesh before exporting glTF 2.0 (.glb)")
+            stem = str(payload.get("stem") or self.graph.name or self.bbmodel_doc.get("name") or "synccraft_asset").strip()
+            out_dir = str(payload.get("out_dir") or "").strip()
+            meter_scale = float(payload.get("meter_scale", 1.0 / 16.0) or (1.0 / 16.0))
+            bleed_px = max(0, min(16, int(payload.get("bleed_px", 4))))
+            fps = max(10, min(60, int(payload.get("fps", 24))))
+            include_anims = bool(payload.get("include_animations", True))
+            use_baked = bool(payload.get("use_baked_albedo", False))
+            preset = str(payload.get("lighting_preset") or "studio_hero")
+            coat_w = float(np.clip(payload.get("coat_weight", 0.0) or 0.0, 0.0, 1.0))
+            export_lods = bool(payload.get("export_lods", False))
+
+            if export_lods:
+                lod1_r = float(np.clip(payload.get("lod1_ratio", 0.58), 0.25, 0.90))
+                lod2_r = float(np.clip(payload.get("lod2_ratio", 0.35), 0.15, lod1_r - 0.05))
+                target_dir = out_dir or str(Path.home() / ".synccraft" / "glb_lod_exports" / f"{stem}_{int(time.time())}")
+                mf = export_lod_glb_bundle(
+                    self.bbmodel_doc,
+                    target_dir,
+                    stem=stem,
+                    graph=self.graph,
+                    lod1_ratio=lod1_r,
+                    lod2_ratio=lod2_r,
+                    meter_scale=meter_scale,
+                    bleed_px=bleed_px,
+                    include_animations=include_anims,
+                    fps=fps,
+                    use_baked_albedo=use_baked,
+                    lighting_preset=preset,
+                    coat_weight=coat_w,
+                )
+                self._log(
+                    "info",
+                    f"Exported rigged glTF 2.0 LOD0/LOD1/LOD2 (.glb) bundle '{stem}' -> {mf['out_dir']}",
+                )
+                return mf
+
+            out_fp = (Path(out_dir) / f"{stem}.glb") if out_dir else None
+            glb_bytes, report = export_bbmodel_to_glb(
+                self.bbmodel_doc,
+                graph=self.graph,
+                out_path=out_fp,
+                meter_scale=meter_scale,
+                bleed_px=bleed_px,
+                include_animations=include_anims,
+                fps=fps,
+                use_baked_albedo=use_baked,
+                lighting_preset=preset,
+                coat_weight=coat_w,
+            )
+            self._log(
+                "info",
+                f"Exported Khronos glTF 2.0 '{stem}.glb' ({report['kb']} KB, {report['triangle_count']} tris, {report['joint_count']} joints, {report['animation_count']} clips, valid={report['validation']['valid']})",
+            )
+            out: dict[str, Any] = {
+                "ok": bool(report["ok"]),
+                "mode": "disk" if out_fp is not None else "download",
+                "filename": f"{stem}.glb",
+                "report": report,
+            }
+            if out_fp is not None:
+                out["out_path"] = str(out_fp)
+                out["out_dir"] = str(out_fp.parent)
+            else:
+                out["glb_data_url"] = "data:model/gltf-binary;base64," + base64.b64encode(glb_bytes).decode("ascii")
+            return out
+
     def bridge_sync_pose(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Broadcast live skeletal clip, playhead time, and bone overrides bi-directionally over the BB5 SSE bridge."""
         clip = payload.get("clip")
@@ -3260,7 +3335,7 @@ def create_studio_server(
                         "ok": True,
                         "app": "SyncCraft Studio",
                         "synccraft_version": __version__,
-                        "engine_version": "18.0",
+                        "engine_version": "19.0",
                         "schema_version": "4.0",
                         "node_count": len(NODE_REGISTRY),
                         "active_graph": sess.graph.name,
@@ -3522,6 +3597,9 @@ def create_studio_server(
                 if path == "/api/lod/export":
                     self._send_json(sess.lod_export(body))
                     return
+                if path == "/api/export/glb":
+                    self._send_json(sess.export_glb(body))
+                    return
                 if path == "/api/bridge/pose":
                     self._send_json(sess.bridge_sync_pose(body), cors=True)
                     return
@@ -3549,7 +3627,7 @@ def serve_studio(
     server, _ = create_studio_server(host=host, port=port, initial_sample=initial_sample, size=size)
     actual_port = server.server_address[1]
     url = f"http://{host}:{actual_port}/"
-    print(f"SyncCraft Studio v{__version__} (TexGraph v18 / Schema v4.0 · {len(NODE_REGISTRY)} nodes)")
+    print(f"SyncCraft Studio v{__version__} (TexGraph v19 / Schema v4.0 · {len(NODE_REGISTRY)} nodes)")
     print(f"  Listening on {url}  (Press Ctrl+C to stop)")
     if open_browser:
         threading.Timer(0.4, lambda: webbrowser.open(url)).start()

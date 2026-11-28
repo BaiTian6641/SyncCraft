@@ -159,6 +159,25 @@ def main(argv=None):
     lod_cmd.add_argument("--lod2", type=float, default=0.35, help="LOD2 retained box ratio (default 0.35)")
     lod_cmd.add_argument("--bleed", type=int, default=4, help="mip-safe Voronoi bleed radius in pixels (0..16)")
 
+    glb_cmd = subs.add_parser(
+        "glb-export",
+        help="Khronos glTF 2.0 (.glb) Skinned Mesh, Skeletal Animation & Embedded PBR Exporter (UE5 / Unity / Godot / Blender / Three.js)",
+    )
+    glb_cmd.add_argument("bbmodel", type=Path, help="input .bbmodel file to export to rigged .glb")
+    glb_cmd.add_argument("-o", "--out", type=Path, required=True, help="output .glb file path (or directory when --lods is passed)")
+    glb_cmd.add_argument("--texdsl", type=Path, default=None, help="optional .texdsl graph to bake full embedded PBR textures (Albedo, ORM, Normal, Emissive)")
+    glb_cmd.add_argument("--stem", default=None, help="output stem for --lods bundle (defaults to input filename stem)")
+    glb_cmd.add_argument("--scale", type=float, default=0.0625, help="meters per Blockbench unit (default 1/16 = 0.0625)")
+    glb_cmd.add_argument("--bleed", type=int, default=4, help="mip-safe Voronoi dilation bleed radius in pixels (0..16)")
+    glb_cmd.add_argument("--fps", type=int, default=24, help="animation bake sample rate in FPS (10..60, default 24)")
+    glb_cmd.add_argument("--no-anims", action="store_true", help="skip baking skeletal animation clips")
+    glb_cmd.add_argument("--baked", action="store_true", help="bake stylized studio PBR lighting into baseColorTexture")
+    glb_cmd.add_argument("--preset", default="studio_hero", choices=["studio_hero", "dramatic_rim", "high_noon", "moonlit_obsidian"])
+    glb_cmd.add_argument("--coat", type=float, default=0.0, help="KHR_materials_clearcoat factor (0..1)")
+    glb_cmd.add_argument("--lods", action="store_true", help="export full LOD0/LOD1/LOD2 rigged .glb bundle + manifest into --out directory")
+    glb_cmd.add_argument("--lod1", type=float, default=0.58, help="LOD1 retained box ratio (default 0.58)")
+    glb_cmd.add_argument("--lod2", type=float, default=0.35, help="LOD2 retained box ratio (default 0.35)")
+
     # Parametric Pixel Composer & Semantic UV v2 CLI
     tg = subs.add_parser(
         "texgraph",
@@ -292,6 +311,49 @@ def main(argv=None):
                 lod1_ratio=float(args.lod1),
                 lod2_ratio=float(args.lod2),
                 bleed_px=int(args.bleed),
+            )
+            print(_json(rep))
+            return 0 if rep.get("ok") else 2
+        elif args.command == "glb-export":
+            from synccraft.texgraph.mesh_baker import bake_bbmodel_maps
+            from synccraft.texgraph.texdsl import parse_texdsl
+            from synccraft.texgraph.v19_gltf_exporter import export_bbmodel_to_glb, export_lod_glb_bundle
+
+            bb_doc = json.loads(args.bbmodel.read_text(encoding="utf-8"))
+            g = None
+            if args.texdsl and args.texdsl.is_file():
+                mc = bake_bbmodel_maps(bb_doc)
+                g = parse_texdsl(args.texdsl.read_text(encoding="utf-8"), mesh_context=mc)
+                g.attach_mesh(mc)
+            if args.lods:
+                rep = export_lod_glb_bundle(
+                    bb_doc,
+                    args.out,
+                    stem=args.stem or args.bbmodel.stem,
+                    graph=g,
+                    lod1_ratio=float(args.lod1),
+                    lod2_ratio=float(args.lod2),
+                    meter_scale=float(args.scale),
+                    bleed_px=int(args.bleed),
+                    include_animations=not bool(args.no_anims),
+                    fps=int(args.fps),
+                    use_baked_albedo=bool(args.baked),
+                    lighting_preset=args.preset,
+                    coat_weight=float(args.coat),
+                )
+                print(_json(rep))
+                return 0 if rep.get("ok") else 2
+            _, rep = export_bbmodel_to_glb(
+                bb_doc,
+                graph=g,
+                out_path=args.out,
+                meter_scale=float(args.scale),
+                bleed_px=int(args.bleed),
+                include_animations=not bool(args.no_anims),
+                fps=int(args.fps),
+                use_baked_albedo=bool(args.baked),
+                lighting_preset=args.preset,
+                coat_weight=float(args.coat),
             )
             print(_json(rep))
             return 0 if rep.get("ok") else 2

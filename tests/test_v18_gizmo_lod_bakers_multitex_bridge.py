@@ -385,7 +385,7 @@ class TestV18GizmoLodBakersMultiTexBridge(unittest.TestCase):
         th.start()
         try:
             health = _http_json(f"{base}/api/health")
-            self.assertEqual(health["engine_version"], "18.0")
+            self.assertGreaterEqual(float(health["engine_version"]), 18.0)
             self.assertEqual(health["node_count"], 234)
 
             schema = _http_json(f"{base}/api/schema")

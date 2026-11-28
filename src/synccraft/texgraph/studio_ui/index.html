@@ -15,7 +15,7 @@
       <div class="brand">
         <div class="brand-mark">SC</div>
         <span>SyncCraft Studio</span>
-        <span class="brand-sub" id="versionBadge">v18 · 234</span>
+        <span class="brand-sub" id="versionBadge">v19 · 234</span>
       </div>
 
       <select id="projectSelect" class="sel-input" title="Load Flagship Sample or Built-in Preset" style="width: 174px;"></select>
@@ -601,10 +601,11 @@
             <input type="text" id="exportDirInput" class="txt-input" placeholder="Blank = browser download" />
           </div>
         </div>
-        <pre id="exportResultPre" style="display:none;max-height:132px;overflow:auto;background:var(--bg-input);border:1px solid var(--border-subtle);border-radius:4px;padding:8px;font-family:var(--font-mono);font-size:10.5px;color:#86efac;margin:0;"></pre>
+        <pre id="exportResultPre" style="display:none;max-height:144px;overflow-y:auto;overflow-x:hidden;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--bg-input);border:1px solid var(--border-subtle);border-radius:4px;padding:8px;font-family:var(--font-mono);font-size:10.5px;line-height:1.45;color:#86efac;margin:0;"></pre>
       </div>
       <div class="modal-foot" style="justify-content:space-between;align-items:center;">
         <div style="display:flex;gap:5px;align-items:center;">
+          <button class="btn sm" id="btnDownloadGlb" title="Download rigged Khronos glTF 2.0 (.glb) with embedded PBR &amp; skeletal animations">.glb</button>
           <button class="btn sm" id="btnDownloadMtlx" title="Download standalone MaterialX 1.39 (.mtlx)">.mtlx</button>
           <button class="btn sm" id="btnDownloadTexdsl" title="Download live TexDSL source">.texdsl</button>
           <button class="btn sm" id="btnDownloadRecipe" title="Download TexGraph recipe JSON">.json</button>
@@ -731,7 +732,8 @@
         <button class="btn" id="btnBatchScan">Scan Folder</button>
         <button class="btn primary" id="btnBatchRun">Run Batch Bakery</button>
         <button class="btn primary" id="btnAtlasRun" style="display:none;">Pack Shared Atlas</button>
-        <button class="btn primary" id="btnLodExportRun" style="display:none;">Export LOD0–LOD2 Bundle</button>
+        <button class="btn" id="btnLodGlbExportRun" style="display:none;" title="Export Khronos glTF 2.0 (.glb) rigged LOD0–LOD2 bundle with embedded PBR &amp; animations">Export LOD0–LOD2 .glb</button>
+        <button class="btn primary" id="btnLodExportRun" style="display:none;">Export LOD0–LOD2 .bbmodel</button>
       </div>
     </div>
   </div>

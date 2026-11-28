@@ -949,6 +949,16 @@
 
   const EXTRA_EXPORT_TEMPLATES = [
     {
+      id: 'glb_skinned',
+      title: 'glTF 2.0 (.glb) Skinned Mesh + Animations + Embedded PBR',
+      engine: 'glTF 2.0 (UE5 / Unity / Godot / Blender / Three.js)',
+      normal_convention: 'OpenGL (+Y Up) · Khronos Verified',
+      description: 'Single binary .glb packing meter-scaled (1/16) indexed mesh, Armature skin + IBMs, baked Molang skeletal animations, and embedded PNG PBR maps (Albedo, shared Linear ORM, OpenGL Normal, Emissive + KHR extensions).',
+      channels: [
+        { file: '<stem>.glb', slots: ['Skinned Rig + IBMs', 'Baked Skeletal Clips', 'sRGB Albedo', 'Linear ORM (R=AO G=R B=M)', 'OpenGL +Y Normal', 'Emissive'] },
+      ],
+    },
+    {
       id: 'ctm47',
       title: 'Connected Block CTM 47-Tile (OptiFine / Continuity)',
       engine: 'Minecraft Connected Textures (CTM)',
@@ -1024,7 +1034,7 @@
       <div class="exp-channel-list">${rowsHtml}</div>
     `;
     if ($('btnRunExport')) {
-      const shortName = String(tpl.engine || 'Template').split('/')[0].trim();
+      const shortName = String(tpl.engine || 'Template').split(/[/(·]/)[0].trim();
       $('btnRunExport').textContent = `Export ${shortName}`;
     }
   }
@@ -3386,7 +3396,7 @@
       for (const n of nodes) state.opMap[n.op] = Object.assign({ category: cat }, n);
     }
     graphCanvas.setSchema(schemaPayload.schema);
-    $('versionBadge').textContent = `v18 · ${schemaPayload.schema.node_count}`;
+    $('versionBadge').textContent = `v19 · ${schemaPayload.schema.node_count}`;
     state.syncpacks = (schemaPayload && schemaPayload.syncpacks) || [];
     populateDecalStencils();
     populateExportTemplates();
@@ -3412,7 +3422,7 @@
     // Populate Project / Preset Dropdown
     const pSel = $('projectSelect');
     const ogSamples = document.createElement('optgroup');
-    ogSamples.label = 'Flagship 3D Studio Projects (v18)';
+    ogSamples.label = 'Flagship 3D Studio Projects (v19)';
     for (const s of schemaPayload.samples) {
       const o = document.createElement('option');
       o.value = `sample:${s.id}`;
@@ -4453,11 +4463,12 @@
       if ($('btnBatchScan')) $('btnBatchScan').style.display = isLod ? 'none' : '';
       if ($('btnBatchRun')) $('btnBatchRun').style.display = isPbr ? '' : 'none';
       if ($('btnAtlasRun')) $('btnAtlasRun').style.display = isAtlas ? '' : 'none';
+      if ($('btnLodGlbExportRun')) $('btnLodGlbExportRun').style.display = isLod ? '' : 'none';
       if ($('btnLodExportRun')) $('btnLodExportRun').style.display = isLod ? '' : 'none';
       if ($('atlasResultCard') && !isAtlas) $('atlasResultCard').style.display = 'none';
       if ($('batchModeDesc')) {
         if (isLod) {
-          $('batchModeDesc').innerHTML = 'Generate silhouette- &amp; skeleton-preserving cuboid <code>LOD0 / LOD1 / LOD2</code> <code>.bbmodel</code> tiers with mip-safe dilated <code>100% / 50% / 25%</code> PBR textures and <code>lod_manifest.json</code>.';
+          $('batchModeDesc').innerHTML = 'Generate silhouette- &amp; skeleton-preserving cuboid <code>LOD0 / LOD1 / LOD2</code> tiers as <code>.bbmodel</code> (+ mip-dilated textures) OR rigged Khronos <code>glTF 2.0 (.glb)</code> ready for UE5, Unity, Godot &amp; Three.js.';
         } else if (isAtlas) {
           $('batchModeDesc').innerHTML = 'Pack multiple <code>.bbmodel</code> / <code>.texdsl</code> assets into one shared Power-of-Two or tight PBR atlas with mip-safe Voronoi edge bleed and remapped <code>*_atlas.bbmodel</code> UVs.';
         } else {
@@ -4544,7 +4555,44 @@
           showToast(`Auto-LOD export error: ${err.message}`, 'err');
         } finally {
           btn.disabled = false;
-          btn.textContent = 'Export LOD0–LOD2 Bundle';
+          btn.textContent = 'Export LOD0–LOD2 .bbmodel';
+        }
+      };
+    }
+    if ($('btnLodGlbExportRun')) {
+      $('btnLodGlbExportRun').onclick = async () => {
+        const btn = $('btnLodGlbExportRun');
+        btn.disabled = true;
+        btn.textContent = 'Exporting .glb...';
+        try {
+          const coat = $('coatSlider') ? parseFloat($('coatSlider').value) : 0.25;
+          const res = await apiPost('/api/export/glb', {
+            export_lods: true,
+            stem: ($('lodStemInput') && $('lodStemInput').value.trim()) || 'synccraft_lod',
+            out_dir: ($('batchOutDir') && $('batchOutDir').value.trim()) || '',
+            lod1_ratio: parseFloat(($('lod1RatioInput') && $('lod1RatioInput').value) || '0.58'),
+            lod2_ratio: parseFloat(($('lod2RatioInput') && $('lod2RatioInput').value) || '0.35'),
+            bleed_px: parseInt(($('lodBleedSelect') && $('lodBleedSelect').value) || '4', 10),
+            coat_weight: coat,
+          });
+          const rows = (res.levels || []).map((info) => {
+            const k = String(info.level || 'lod').toUpperCase();
+            const red = info.reduction_pct > 0 ? ` (-${info.reduction_pct}%)` : ' (100%)';
+            return {
+              stem: `${k}.glb · ${info.tri_count} tris · ${info.kb} KB${red}`,
+              kind: `${info.joint_count} joints · ${info.animation_count} clips · glTF 2.0 VALID`,
+              status: info.valid_gltf ? 'done' : 'err',
+            };
+          });
+          const cleanDir = String(res.out_dir || '').replace(/^\/Users\/[^/]+\//, '~/').replace(/^\/home\/[^/]+\//, '~/');
+          const sum = `Exported rigged glTF 2.0 LOD0–LOD2 (.glb) bundle '${res.stem}' (${Math.round(res.elapsed_ms || 0)}ms) -> ${cleanDir}`;
+          renderBatchQueue(rows, sum);
+          showToast(`Exported rigged glTF 2.0 LOD0–LOD2 (.glb) bundle '${res.stem}'`, 'ok');
+        } catch (err) {
+          showToast(`glTF LOD export error: ${err.message}`, 'err');
+        } finally {
+          btn.disabled = false;
+          btn.textContent = 'Export LOD0–LOD2 .glb';
         }
       };
     }
@@ -4671,6 +4719,44 @@
         showToast(err.message, 'err');
       }
     };
+    const runGlbExport = async () => {
+      const stem = $('exportStemInput').value.trim() || 'synccraft_asset';
+      const outDir = $('exportDirInput').value.trim();
+      const preset = $('exportPresetSelect').value;
+      const bleedPx = parseInt(($('exportBleedSelect') && $('exportBleedSelect').value) || '4', 10);
+      const coat = $('coatSlider') ? parseFloat($('coatSlider').value) : 0.25;
+      try {
+        const res = await apiPost('/api/export/glb', {
+          stem,
+          out_dir: outDir || null,
+          lighting_preset: preset,
+          bleed_px: bleedPx,
+          coat_weight: coat,
+          include_animations: true,
+        });
+        const rep = res.report || {};
+        const pre = $('exportResultPre');
+        const valTag = (rep.validation && rep.validation.valid) ? 'Khronos glTF 2.0 VALID (0 errors)' : 'Validation warnings';
+        const exts = (rep.extensions_used || []).length ? `\nExtensions: ${rep.extensions_used.join(', ')}` : '';
+        const clips = (rep.animation_names || []).length ? `\nClips (${rep.animation_count}): ${rep.animation_names.join(', ')}` : '';
+        const cleanDest = res.mode === 'disk'
+          ? String(res.out_path || '').replace(/^\/Users\/[^/]+\//, '~/').replace(/^\/home\/[^/]+\//, '~/')
+          : `Downloading ${res.filename}...`;
+        if (pre) {
+          pre.style.display = 'block';
+          pre.textContent = `${valTag} · ${res.filename} (${rep.kb} KB)\nGeometry: ${rep.triangle_count} tris · ${rep.vertex_count} verts · ${rep.joint_count} joints · ${rep.image_count} embedded PNGs${clips}${exts}\n${cleanDest}`;
+        }
+        if (res.mode !== 'disk' && res.glb_data_url) {
+          triggerDataUrlDownload(res.filename || `${stem}.glb`, res.glb_data_url);
+        }
+        showToast(`Exported ${res.filename} (${rep.kb} KB, ${rep.joint_count} joints, ${rep.animation_count} clips)`, 'ok');
+      } catch (err) {
+        showToast(`glTF export error: ${err.message}`, 'err');
+      }
+    };
+    if ($('btnDownloadGlb')) {
+      $('btnDownloadGlb').onclick = () => runGlbExport();
+    }
     if ($('btnDownloadMtlx')) {
       $('btnDownloadMtlx').onclick = async () => {
         const stem = $('exportStemInput').value.trim() || 'asset';
@@ -4703,6 +4789,10 @@
     };
     $('btnRunExport').onclick = async () => {
       const tplId = ($('exportTemplateSelect') && $('exportTemplateSelect').value) || 'full_pbr_v2';
+      if (tplId === 'glb_skinned') {
+        await runGlbExport();
+        return;
+      }
       if (tplId === 'ctm47' || tplId === 'wang16') {
         await runCtmExport(tplId);
         return;
