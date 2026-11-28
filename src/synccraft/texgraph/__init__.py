@@ -284,6 +284,12 @@ from .v18_lod_baker_ops import (
     resolve_face_texture_slot,
     vertex_color_bake_op,
 )
+from .v16_pro_ops import (
+    LAYER_MASK_GENERATORS,
+    apply_mask_strokes_to_layer,
+    compute_layer_smart_mask,
+    make_fill_paint_layer,
+)
 from .v19_gltf_exporter import (
     euler_zyx_deg_to_quat,
     eval_molang_expr,

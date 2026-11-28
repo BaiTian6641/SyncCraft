@@ -2250,6 +2250,23 @@ input[type="range"]::-webkit-slider-thumb:hover {
   margin: 0;
   accent-color: #38bdf8;
 }
+.pbr-mask-row {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-wrap: nowrap;
+  padding-top: 3px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  min-width: 0;
+}
+.pbr-mask-part-row {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
 .pbr-layer-pills {
   grid-column: 1 / -1;
   display: flex;
@@ -2258,6 +2275,23 @@ input[type="range"]::-webkit-slider-thumb:hover {
   flex-wrap: wrap;
   padding-top: 2px;
   min-width: 0;
+}
+.pbr-layer-tag {
+  font-size: 8.5px;
+  font-weight: 700;
+  padding: 0 3px;
+  border-radius: 3px;
+  background: rgba(56, 189, 248, 0.16);
+  color: #7dd3fc;
+  letter-spacing: 0.02em;
+}
+.pbr-layer-tag.fill {
+  background: rgba(245, 158, 11, 0.20);
+  color: #fcd34d;
+}
+.pbr-layer-tag.slot {
+  background: rgba(167, 139, 250, 0.22);
+  color: #ddd6fe;
 }
 .pbr-layer-pill {
   display: inline-flex;

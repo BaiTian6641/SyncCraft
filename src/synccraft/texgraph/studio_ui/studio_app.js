@@ -64,6 +64,8 @@
     },
     pbrLayers: [],
     activePbrLayerId: 'layer_1',
+    pbrEditTarget: 'paint',
+    fillUpdateTimer: null,
     syncpacks: [],
     curveDriverIdx: 0,
     curveDragIdx: -1,
@@ -823,6 +825,19 @@
     if ($('vpTexSlotCount')) {
       $('vpTexSlotCount').textContent = hasMesh ? `${slots.length} slot${slots.length === 1 ? '' : 's'}` : '—';
     }
+    const layerSlotSel = $('pbrLayerSlotSelect');
+    if (layerSlotSel) {
+      const prevV = layerSlotSel.value || '-1';
+      layerSlotSel.innerHTML = '<option value="-1">All</option>';
+      slots.forEach((s) => {
+        const o = document.createElement('option');
+        o.value = String(s.index);
+        o.textContent = `S${s.index}`;
+        o.title = `[${s.index}] ${s.name || 'texture'} (${s.face_count}f)`;
+        layerSlotSel.appendChild(o);
+      });
+      layerSlotSel.value = [...layerSlotSel.options].some((o) => o.value === prevV) ? prevV : '-1';
+    }
     if ($('lodStemInput') && document.activeElement !== $('lodStemInput') && st && st.recipe && st.recipe.name) {
       $('lodStemInput').value = st.recipe.name;
     }
@@ -1094,12 +1109,53 @@
     return null;
   }
 
+  function getActivePbrLayerObj() {
+    const layers = state.pbrLayers || [];
+    return layers.find((l) => l.id === state.activePbrLayerId) || layers[0] || null;
+  }
+
+  function syncPbrMaskControlsFromActiveLayer() {
+    const lyr = getActivePbrLayerObj();
+    if (!lyr) return;
+    if ($('pbrMaskModeSelect')) $('pbrMaskModeSelect').value = lyr.mask_mode || 'none';
+    if ($('pbrMaskBalance')) $('pbrMaskBalance').value = String(lyr.mask_balance != null ? lyr.mask_balance : 0.50);
+    if ($('btnPbrMaskInvert')) $('btnPbrMaskInvert').classList.toggle('active', !!lyr.mask_invert);
+    if ($('pbrLayerSlotSelect')) {
+      const sv = String(lyr.target_slot != null ? lyr.target_slot : -1);
+      if ([...$('pbrLayerSlotSelect').options].some((o) => o.value === sv)) {
+        $('pbrLayerSlotSelect').value = sv;
+      }
+    }
+    const isPart = (lyr.mask_mode === 'color_id_part');
+    if ($('pbrMaskPartRow')) $('pbrMaskPartRow').style.display = isPart ? 'flex' : 'none';
+    if ($('pbrMaskPartInput') && document.activeElement !== $('pbrMaskPartInput')) {
+      $('pbrMaskPartInput').value = lyr.mask_part_pattern || '';
+    }
+    if ($('btnPbrTargetPaint')) $('btnPbrTargetPaint').classList.toggle('active', state.pbrEditTarget !== 'mask');
+    if ($('btnPbrTargetMask')) $('btnPbrTargetMask').classList.toggle('active', state.pbrEditTarget === 'mask');
+  }
+
   function syncPbrLayersFromGraph() {
     const node = findActivePaintStackNode();
     if (!node) {
-      state.pbrLayers = [{ id: 'layer_1', name: 'Hero Detail Paint', visible: true, opacity: 1.0, blend_mode: 'normal' }];
+      state.pbrLayers = [{
+        id: 'layer_1',
+        name: 'Hero Detail Paint',
+        layer_type: 'paint',
+        visible: true,
+        opacity: 1.0,
+        blend_mode: 'normal',
+        target_slot: -1,
+        mask_mode: 'none',
+        mask_balance: 0.5,
+        mask_contrast: 0.45,
+        mask_invert: false,
+        mask_part_pattern: '',
+        has_mask_paint: false,
+      }];
       state.activePbrLayerId = 'layer_1';
       renderPbrLayerPills();
+      syncPbrMaskControlsFromActiveLayer();
       return;
     }
     try {
@@ -1109,14 +1165,24 @@
         state.pbrLayers = parsed.map((l) => ({
           id: l.id || 'layer_1',
           name: l.name || l.id || 'Layer',
+          layer_type: l.layer_type || 'paint',
           visible: l.visible !== false,
           opacity: l.opacity != null ? l.opacity : 1.0,
           blend_mode: l.blend_mode || 'normal',
+          target_slot: l.target_slot != null ? Number(l.target_slot) : -1,
+          mask_mode: l.mask_mode || 'none',
+          mask_balance: l.mask_balance != null ? Number(l.mask_balance) : 0.5,
+          mask_contrast: l.mask_contrast != null ? Number(l.mask_contrast) : 0.45,
+          mask_invert: !!l.mask_invert,
+          mask_part_pattern: l.mask_part_pattern || '',
+          has_mask_paint: !!l.mask_url,
+          fill_material: l.fill_material || null,
         }));
       }
       state.activePbrLayerId = (node.params && node.params.active_layer_id) || state.pbrLayers[0].id;
     } catch (_) {}
     renderPbrLayerPills();
+    syncPbrMaskControlsFromActiveLayer();
   }
 
   async function runPbrLayerAction(layerAction, extra) {
@@ -1137,15 +1203,44 @@
     }
   }
 
+  function scheduleFillMaterialUpdate() {
+    const lyr = getActivePbrLayerObj();
+    if (!lyr || lyr.layer_type !== 'fill' || !findActivePaintStackNode()) return;
+    if (state.fillUpdateTimer) clearTimeout(state.fillUpdateTimer);
+    state.fillUpdateTimer = setTimeout(() => {
+      state.fillUpdateTimer = null;
+      runPbrLayerAction('update_fill', {
+        fill_material: {
+          color: state.pbrBrush.color,
+          roughness: state.pbrBrush.roughness,
+          metallic: state.pbrBrush.metallic,
+          height: state.pbrBrush.height,
+          emissive_color: state.pbrBrush.color,
+          emissive_strength: state.pbrBrush.emissive_strength,
+        },
+      });
+    }, 120);
+  }
+
   function renderPbrLayerPills() {
     const wrap = $('pbrLayerPills');
     if (!wrap) return;
     wrap.innerHTML = '';
+    const maskBadges = {
+      curvature_edges: 'Curv',
+      cavity_ao: 'AO',
+      world_normal_up: '+Y',
+      world_normal_down: '-Y',
+      color_id_part: 'ID',
+      texture_slot: 'Slot',
+    };
     const layers = state.pbrLayers || [];
     for (const l of layers) {
       const pill = document.createElement('span');
       pill.className = 'pbr-layer-pill' + (l.id === state.activePbrLayerId ? ' active' : '') + (!l.visible ? ' hidden-layer' : '');
-      pill.title = `${l.name} (${l.blend_mode} · ${Math.round((l.opacity != null ? l.opacity : 1) * 100)}%)`;
+      const mTag = maskBadges[l.mask_mode] || '';
+      const slotTag = (l.target_slot != null && l.target_slot >= 0) ? `S${l.target_slot}` : '';
+      pill.title = `${l.name} (${l.layer_type === 'fill' ? 'Smart Fill' : 'Paint'} · ${l.blend_mode} · mask=${l.mask_mode || 'none'}${slotTag ? ' · ' + slotTag : ''})`;
       const eyeBtn = document.createElement('button');
       eyeBtn.textContent = l.visible ? '👁' : '○';
       eyeBtn.title = l.visible ? 'Hide Paint Layer' : 'Show Paint Layer';
@@ -1153,10 +1248,28 @@
         ev.stopPropagation();
         runPbrLayerAction('toggle_visible', { layer_id: l.id });
       };
+      pill.appendChild(eyeBtn);
+      if (l.layer_type === 'fill') {
+        const ft = document.createElement('span');
+        ft.className = 'pbr-layer-tag fill';
+        ft.textContent = 'FILL';
+        pill.appendChild(ft);
+      }
       const lbl = document.createElement('span');
       lbl.textContent = l.name;
-      pill.appendChild(eyeBtn);
       pill.appendChild(lbl);
+      if (mTag) {
+        const mt = document.createElement('span');
+        mt.className = 'pbr-layer-tag';
+        mt.textContent = l.mask_invert ? `!${mTag}` : mTag;
+        pill.appendChild(mt);
+      }
+      if (slotTag) {
+        const stg = document.createElement('span');
+        stg.className = 'pbr-layer-tag slot';
+        stg.textContent = slotTag;
+        pill.appendChild(stg);
+      }
       if (layers.length > 1) {
         const delBtn = document.createElement('button');
         delBtn.textContent = '✕';
@@ -1170,6 +1283,7 @@
       pill.onclick = () => {
         state.activePbrLayerId = l.id;
         renderPbrLayerPills();
+        syncPbrMaskControlsFromActiveLayer();
         if (findActivePaintStackNode()) {
           runPbrLayerAction('select_layer', { layer_id: l.id });
         }
@@ -1193,10 +1307,11 @@
     const undoable = !!state._brushUndoNext;
     state._brushUndoNext = false;
 
-    // v16 Multi-Channel 3D/2D PBR Paint Layer Stack Mode!
+    // v16 + v19.1 Multi-Channel 3D/2D PBR Paint Stack & Non-Destructive Layer Mask Painting!
     if (state.brushTargetMode === 'pbr') {
       const node = findActivePaintStackNode();
       const b = Object.assign({}, state.pbrBrush, {
+        radius_px: state.brushRadius,
         emissive_color: state.pbrBrush.emissive_strength > 0.01 ? state.pbrBrush.color : '#000000',
         paint_emissive: state.pbrBrush.emissive_strength > 0.01,
       });
@@ -1204,6 +1319,7 @@
         const st = await apiPost('/api/paint_stack/stroke', {
           node_id: node ? node.id : null,
           layer_id: state.activePbrLayerId,
+          edit_target: state.pbrEditTarget || 'paint',
           strokes,
           brush: b,
           undoable,
@@ -3396,7 +3512,7 @@
       for (const n of nodes) state.opMap[n.op] = Object.assign({ category: cat }, n);
     }
     graphCanvas.setSchema(schemaPayload.schema);
-    $('versionBadge').textContent = `v19 · ${schemaPayload.schema.node_count}`;
+    $('versionBadge').textContent = `v19.1 · ${schemaPayload.schema.node_count}`;
     state.syncpacks = (schemaPayload && schemaPayload.syncpacks) || [];
     populateDecalStencils();
     populateExportTemplates();
@@ -3894,37 +4010,69 @@
         showToast(`Cleared brush mask '${sel.id}'`, 'ok');
       };
     }
-    // Milestone v16: 3D/2D Multi-Material PBR Paint Layer Stack Controls
+    // Milestone v16 + v19.1: 3D/2D Multi-Material PBR Paint & Smart Layer Mask Stack Controls
     if ($('btnBrushModeMask')) $('btnBrushModeMask').onclick = () => setBrushTargetMode('mask');
     if ($('btnBrushModePbr')) $('btnBrushModePbr').onclick = () => setBrushTargetMode('pbr');
     if ($('pbrBrushPresetSelect')) {
-      $('pbrBrushPresetSelect').onchange = (e) => applyPbrBrushPreset(e.target.value);
+      $('pbrBrushPresetSelect').onchange = (e) => {
+        applyPbrBrushPreset(e.target.value);
+        scheduleFillMaterialUpdate();
+      };
     }
     if ($('pbrBrushColor')) {
       $('pbrBrushColor').oninput = (e) => {
         state.pbrBrush.color = e.target.value;
         state.pbrBrush.erase = false;
+        scheduleFillMaterialUpdate();
       };
     }
     if ($('pbrBrushRough')) {
-      $('pbrBrushRough').oninput = (e) => { state.pbrBrush.roughness = parseFloat(e.target.value); };
+      $('pbrBrushRough').oninput = (e) => { state.pbrBrush.roughness = parseFloat(e.target.value); scheduleFillMaterialUpdate(); };
     }
     if ($('pbrBrushMetal')) {
-      $('pbrBrushMetal').oninput = (e) => { state.pbrBrush.metallic = parseFloat(e.target.value); };
+      $('pbrBrushMetal').oninput = (e) => { state.pbrBrush.metallic = parseFloat(e.target.value); scheduleFillMaterialUpdate(); };
     }
     if ($('pbrBrushHeight')) {
-      $('pbrBrushHeight').oninput = (e) => { state.pbrBrush.height = parseFloat(e.target.value); };
+      $('pbrBrushHeight').oninput = (e) => { state.pbrBrush.height = parseFloat(e.target.value); scheduleFillMaterialUpdate(); };
     }
     if ($('pbrBrushEmissive')) {
       $('pbrBrushEmissive').oninput = (e) => {
         const v = parseFloat(e.target.value);
         state.pbrBrush.emissive_strength = v;
         state.pbrBrush.paint_emissive = v > 0.01;
+        scheduleFillMaterialUpdate();
+      };
+    }
+    if ($('btnPbrAddFill')) {
+      $('btnPbrAddFill').onclick = async () => {
+        const mSel = $('pbrMaskModeSelect');
+        const mmode = (mSel && mSel.value && mSel.value !== 'none') ? mSel.value : 'curvature_edges';
+        const slotV = $('pbrLayerSlotSelect') ? parseInt($('pbrLayerSlotSelect').value, 10) : -1;
+        const st = await runPbrLayerAction('add_fill_layer', {
+          name: `Smart Fill ${(state.pbrLayers || []).length + 1}`,
+          preset: state.pbrBrush.preset || 'gold_trim',
+          fill_material: {
+            color: state.pbrBrush.color,
+            roughness: state.pbrBrush.roughness,
+            metallic: state.pbrBrush.metallic,
+            height: state.pbrBrush.height,
+            emissive_color: state.pbrBrush.color,
+            emissive_strength: state.pbrBrush.emissive_strength,
+          },
+          mask_mode: mmode,
+          mask_balance: $('pbrMaskBalance') ? parseFloat($('pbrMaskBalance').value) : 0.55,
+          target_slot: Number.isFinite(slotV) ? slotV : -1,
+        });
+        if (st) showToast(`Added Smart Fill Layer (${mmode})`, 'ok');
       };
     }
     if ($('btnPbrAddLayer')) {
       $('btnPbrAddLayer').onclick = async () => {
-        const st = await runPbrLayerAction('add_layer', { name: `PBR Layer ${(state.pbrLayers || []).length + 1}` });
+        const slotV = $('pbrLayerSlotSelect') ? parseInt($('pbrLayerSlotSelect').value, 10) : -1;
+        const st = await runPbrLayerAction('add_layer', {
+          name: `PBR Layer ${(state.pbrLayers || []).length + 1}`,
+          target_slot: Number.isFinite(slotV) ? slotV : -1,
+        });
         if (st) showToast(`Added PBR paint layer (${state.activePbrLayerId})`, 'ok');
       };
     }
@@ -3933,6 +4081,59 @@
         const st = await runPbrLayerAction('clear_layer');
         if (st) showToast(`Cleared active PBR paint layer`, 'ok');
       };
+    }
+    if ($('btnPbrTargetPaint')) {
+      $('btnPbrTargetPaint').onclick = () => {
+        state.pbrEditTarget = 'paint';
+        syncPbrMaskControlsFromActiveLayer();
+        updateViewportHud('3D PBR Layers (Paint)');
+      };
+    }
+    if ($('btnPbrTargetMask')) {
+      $('btnPbrTargetMask').onclick = () => {
+        state.pbrEditTarget = 'mask';
+        syncPbrMaskControlsFromActiveLayer();
+        updateViewportHud('3D PBR Layers (Paint Mask)');
+      };
+    }
+    if ($('pbrMaskModeSelect')) {
+      $('pbrMaskModeSelect').onchange = async (e) => {
+        const mm = e.target.value;
+        if ($('pbrMaskPartRow')) $('pbrMaskPartRow').style.display = mm === 'color_id_part' ? 'flex' : 'none';
+        const st = await runPbrLayerAction('set_mask', { mask_mode: mm });
+        if (st) showToast(`Applied smart layer mask: ${mm}`, 'ok');
+      };
+    }
+    if ($('pbrMaskBalance')) {
+      $('pbrMaskBalance').onchange = (e) => {
+        runPbrLayerAction('set_mask', { mask_balance: parseFloat(e.target.value) || 0.5 });
+      };
+    }
+    if ($('btnPbrMaskInvert')) {
+      $('btnPbrMaskInvert').onclick = async () => {
+        const lyr = getActivePbrLayerObj();
+        const nextInv = !(lyr && lyr.mask_invert);
+        const st = await runPbrLayerAction('set_mask', { mask_invert: nextInv });
+        if (st) showToast(nextInv ? 'Inverted layer smart mask' : 'Restored layer smart mask', 'ok');
+      };
+    }
+    if ($('pbrLayerSlotSelect')) {
+      $('pbrLayerSlotSelect').onchange = async (e) => {
+        const slot = parseInt(e.target.value, 10);
+        const st = await runPbrLayerAction('set_mask', { target_slot: Number.isFinite(slot) ? slot : -1 });
+        if (st) showToast(slot >= 0 ? `Restricted layer to Texture Slot [${slot}]` : 'Layer targets all texture slots', 'ok');
+      };
+    }
+    if ($('btnPbrMaskPartApply')) {
+      const applyPartPat = async () => {
+        const pat = ($('pbrMaskPartInput') && $('pbrMaskPartInput').value.trim()) || '';
+        const st = await runPbrLayerAction('set_mask', { mask_mode: 'color_id_part', mask_part_pattern: pat });
+        if (st) showToast(`Updated Color-ID part mask: ${pat || 'alternating IDs'}`, 'ok');
+      };
+      $('btnPbrMaskPartApply').onclick = applyPartPat;
+      if ($('pbrMaskPartInput')) {
+        $('pbrMaskPartInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') applyPartPat(); });
+      }
     }
     if ($('btnSplitWipe')) {
       $('btnSplitWipe').onclick = () => {

@@ -3183,6 +3183,7 @@ class TexGraph:
                 layers_json=p.get("layers_json", ""),
                 height_normal_strength=float(p.get("height_normal_strength", 2.6)),
                 tileable=tile,
+                mesh_context=self.mesh_context,
             )
         if op == "script_expr":
             return script_expr_op(

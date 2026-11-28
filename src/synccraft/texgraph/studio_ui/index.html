@@ -15,7 +15,7 @@
       <div class="brand">
         <div class="brand-mark">SC</div>
         <span>SyncCraft Studio</span>
-        <span class="brand-sub" id="versionBadge">v19 · 234</span>
+        <span class="brand-sub" id="versionBadge">v19.1 · 234</span>
       </div>
 
       <select id="projectSelect" class="sel-input" title="Load Flagship Sample or Built-in Preset" style="width: 174px;"></select>
@@ -157,9 +157,10 @@
                   <option value="matte_ink">Shadow Ink</option>
                   <option value="eraser">Eraser</option>
                 </select>
-                <input type="color" id="pbrBrushColor" value="#F0C85A" style="width:22px;height:20px;border:1px solid var(--border-subtle);background:none;padding:0;cursor:pointer;" title="Albedo Brush Color" />
+                <input type="color" id="pbrBrushColor" value="#F0C85A" style="width:20px;height:20px;border:1px solid var(--border-subtle);background:none;padding:0;cursor:pointer;" title="Albedo / Fill Layer Color" />
+                <button class="btn sm primary" id="btnPbrAddFill" title="Add Non-Destructive Smart-Masked Fill Layer (Curvature/AO/Normal/Color-ID)">+ Fill</button>
                 <button class="btn sm" id="btnPbrAddLayer" title="Add New PBR Paint Layer">+ Lyr</button>
-                <button class="btn sm danger-hover" id="btnPbrClearLayer" title="Clear Active PBR Paint Layer">Clear</button>
+                <button class="btn sm danger-hover" id="btnPbrClearLayer" title="Clear Active Layer Paint &amp; Mask">Clear</button>
               </span>
             </div>
             <div class="brush-pbr-channels" id="brushPbrChannels" style="display:none;">
@@ -167,6 +168,31 @@
               <span class="vp-lbl">M</span><input type="range" id="pbrBrushMetal" min="0" max="1" step="0.02" value="0.95" />
               <span class="vp-lbl">H</span><input type="range" id="pbrBrushHeight" min="0" max="1" step="0.02" value="0.78" />
               <span class="vp-lbl">E</span><input type="range" id="pbrBrushEmissive" min="0" max="1" step="0.05" value="0.0" />
+              <div class="pbr-mask-row" id="pbrMaskRow">
+                <div class="seg-group" title="Paint PBR material strokes or paint non-destructive White/Black mask overrides on active layer">
+                  <button class="seg-btn active" id="btnPbrTargetPaint">Paint</button>
+                  <button class="seg-btn" id="btnPbrTargetMask">Mask</button>
+                </div>
+                <select id="pbrMaskModeSelect" class="sel-input" style="height:20px;font-size:10px;flex:1 1 88px;min-width:72px;padding:0 3px;" title="Non-Destructive Smart Baker Mask Generator">
+                  <option value="none">No Mask</option>
+                  <option value="curvature_edges">Curvature Edges</option>
+                  <option value="cavity_ao">Cavity / AO</option>
+                  <option value="world_normal_up">World Up (+Y)</option>
+                  <option value="world_normal_down">World Down (-Y)</option>
+                  <option value="color_id_part">Color-ID Part</option>
+                  <option value="texture_slot">Texture Slot</option>
+                </select>
+                <input type="range" id="pbrMaskBalance" min="0.05" max="0.95" step="0.02" value="0.50" style="width:46px;flex:0 0 46px;" title="Smart Mask Balance / Coverage" />
+                <button class="btn sm" id="btnPbrMaskInvert" title="Invert Active Layer Smart Mask">Inv</button>
+                <select id="pbrLayerSlotSelect" class="sel-input" style="height:20px;font-size:10px;width:54px;flex:0 0 54px;padding:0 2px;" title="Restrict Layer Painting &amp; Compositing to Specific .bbmodel Texture Slot">
+                  <option value="-1">All</option>
+                </select>
+              </div>
+              <div class="pbr-mask-part-row" id="pbrMaskPartRow" style="display:none;">
+                <span class="vp-lbl">Part</span>
+                <input type="text" id="pbrMaskPartInput" class="txt-input" style="height:20px;font-size:10px;flex:1;" placeholder="Regex e.g. horn|crown|chest (blank = alternating IDs)" />
+                <button class="btn sm" id="btnPbrMaskPartApply">Apply</button>
+              </div>
               <div class="pbr-layer-pills" id="pbrLayerPills"></div>
             </div>
           </div>

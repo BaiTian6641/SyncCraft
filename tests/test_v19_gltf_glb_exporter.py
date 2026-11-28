@@ -417,7 +417,7 @@ class TestV19GltfGlbExporter(unittest.TestCase):
         th.start()
         try:
             health = _http_json(f"{base}/api/health")
-            self.assertEqual(health["engine_version"], "19.0")
+            self.assertGreaterEqual(float(health["engine_version"]), 19.0)
             self.assertEqual(health["node_count"], 234)
 
             # Load rigged model into live Studio session and export binary .glb via HTTP

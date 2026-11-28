@@ -128,6 +128,8 @@ class MeshBakeContext:
     obb_centers: np.ndarray = field(default_factory=lambda: np.zeros((0, 3), dtype=np.float32))
     obb_RTs: np.ndarray = field(default_factory=lambda: np.zeros((0, 3, 3), dtype=np.float32))
     obb_halfs: np.ndarray = field(default_factory=lambda: np.zeros((0, 3), dtype=np.float32))
+    # TexGraph v19 Track B: Per-texture-slot UV island masks (`slot_idx -> float32 (H, W)`)!
+    slot_masks: dict[int, np.ndarray] = field(default_factory=dict)
 
     def match_elements_mask(self, pattern: str) -> np.ndarray:
         """Return a float32 (H, W) mask matching elements whose bone/name OR mirrored short-name matches ``pattern``."""
@@ -762,9 +764,12 @@ def bake_bbmodel_maps(
             if hit is not None:
                 _MESH_BAKE_LRU.move_to_end(fp)
                 hit.bake_cache_hit = True
+                if not hit.slot_masks:
+                    _attach_bbmodel_slot_masks(hit, bbmodel_doc)
                 return hit
         disk_hit = _load_mesh_bake_disk(fp)
         if disk_hit is not None:
+            _attach_bbmodel_slot_masks(disk_hit, bbmodel_doc)
             with _MESH_BAKE_LOCK:
                 _MESH_BAKE_LRU[fp] = disk_hit
                 while len(_MESH_BAKE_LRU) > _MESH_BAKE_LRU_MAX:
@@ -1360,6 +1365,7 @@ def bake_bbmodel_maps(
         bake_cache_hit=False,
         bake_ms=round((time.perf_counter() - t_bake_start) * 1000.0, 2),
     )
+    _attach_bbmodel_slot_masks(ctx, bbmodel_doc)
     if use_cache:
         with _MESH_BAKE_LOCK:
             _MESH_BAKE_LRU[fp] = ctx
@@ -1367,3 +1373,18 @@ def bake_bbmodel_maps(
                 _MESH_BAKE_LRU.popitem(last=False)
         _save_mesh_bake_disk(fp, ctx)
     return ctx
+
+
+def _attach_bbmodel_slot_masks(ctx: MeshBakeContext, bbmodel_doc: dict[str, Any]) -> None:
+    """Populate `ctx.slot_masks` (`slot_idx -> float32 (H, W)`) cleanly for multi-slot layer masking."""
+    try:
+        from .v18_lod_baker_ops import build_slot_uv_mask, extract_bbmodel_texture_slots
+
+        slots = extract_bbmodel_texture_slots(bbmodel_doc)
+        masks: dict[int, np.ndarray] = {}
+        for s in slots:
+            idx = int(s["index"])
+            masks[idx] = build_slot_uv_mask(bbmodel_doc, idx, ctx.width, ctx.height)
+        ctx.slot_masks = masks
+    except Exception:
+        ctx.slot_masks = {}

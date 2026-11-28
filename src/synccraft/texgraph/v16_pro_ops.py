@@ -140,17 +140,93 @@ PBR_BRUSH_PRESETS: dict[str, dict[str, Any]] = {
 }
 
 
-def make_empty_paint_layer(layer_id: str = "layer_1", name: str = "PBR Paint Layer 1") -> dict[str, Any]:
+LAYER_MASK_GENERATORS: list[dict[str, str]] = [
+    {"id": "none", "title": "No Smart Mask", "badge": "", "description": "Full layer visibility (or manual painted mask only)."},
+    {"id": "curvature_edges", "title": "Curvature Edges", "badge": "Curv", "description": "Convex cuboid edges & bevels (scuffed metal / edge wear)."},
+    {"id": "cavity_ao", "title": "Cavity & Contact AO", "badge": "AO", "description": "Occluded crevices, recesses & bone joints (dirt / grime)."},
+    {"id": "world_normal_up", "title": "World Normal Up (+Y)", "badge": "+Y", "description": "Upward-facing surfaces (snow, dust, skylight moss)."},
+    {"id": "world_normal_down", "title": "World Normal Down (-Y)", "badge": "-Y", "description": "Downward-facing overhangs & undersides."},
+    {"id": "color_id_part", "title": "Color-ID Part / Bone", "badge": "ID", "description": "Isolate specific .bbmodel body parts or bones via regex pattern."},
+    {"id": "texture_slot", "title": "Texture Slot Mask", "badge": "Slot", "description": "Restrict layer strictly to one .bbmodel textures[] slot."},
+]
+
+
+def make_empty_paint_layer(
+    layer_id: str = "layer_1",
+    name: str = "PBR Paint Layer 1",
+    *,
+    target_slot: int = -1,
+    mask_mode: str = "none",
+    mask_balance: float = 0.50,
+    mask_contrast: float = 0.45,
+    mask_invert: bool = False,
+    mask_part_pattern: str = "",
+    mask_base: str = "white",
+) -> dict[str, Any]:
     return {
         "id": str(layer_id),
         "name": str(name),
+        "layer_type": "paint",
         "visible": True,
         "opacity": 1.0,
         "blend_mode": "normal",
+        "target_slot": int(target_slot),
+        "mask_mode": str(mask_mode or "none"),
+        "mask_balance": round(float(np.clip(mask_balance, 0.0, 1.0)), 3),
+        "mask_contrast": round(float(np.clip(mask_contrast, 0.0, 1.0)), 3),
+        "mask_invert": bool(mask_invert),
+        "mask_part_pattern": str(mask_part_pattern or ""),
+        "mask_base": "black" if str(mask_base).lower() == "black" else "white",
+        "mask_url": "",
         "albedo_url": "",
         "pbr_url": "",  # Packed RGBA PNG: R=roughness, G=metallic, B=height, A=pbr_paint_weight
         "emissive_url": "",  # RGBA PNG: RGB=emissive color, A=emissive strength
     }
+
+
+def make_fill_paint_layer(
+    layer_id: str = "fill_1",
+    name: str = "Smart Fill Layer",
+    *,
+    preset: str = "gold_trim",
+    fill_material: dict[str, Any] | None = None,
+    target_slot: int = -1,
+    mask_mode: str = "curvature_edges",
+    mask_balance: float = 0.55,
+    mask_contrast: float = 0.55,
+    mask_invert: bool = False,
+    mask_part_pattern: str = "",
+    mask_base: str = "white",
+    opacity: float = 0.90,
+    blend_mode: str = "normal",
+) -> dict[str, Any]:
+    """Create a Substance-Painter-style non-destructive Fill Layer driven by a Smart Baker Mask + Paint Mask."""
+    base_p = dict(PBR_BRUSH_PRESETS.get(preset, PBR_BRUSH_PRESETS["gold_trim"]))
+    if isinstance(fill_material, dict):
+        base_p.update({k: v for k, v in fill_material.items() if v is not None})
+    lyr = make_empty_paint_layer(
+        layer_id,
+        name,
+        target_slot=target_slot,
+        mask_mode=mask_mode,
+        mask_balance=mask_balance,
+        mask_contrast=mask_contrast,
+        mask_invert=mask_invert,
+        mask_part_pattern=mask_part_pattern,
+        mask_base=mask_base,
+    )
+    lyr["layer_type"] = "fill"
+    lyr["opacity"] = round(float(np.clip(opacity, 0.0, 1.0)), 3)
+    lyr["blend_mode"] = str(blend_mode or "normal")
+    lyr["fill_material"] = {
+        "color": str(base_p.get("color") or "#F0C85A"),
+        "roughness": round(float(np.clip(base_p.get("roughness", 0.25), 0.04, 0.98)), 3),
+        "metallic": round(float(np.clip(base_p.get("metallic", 0.90), 0.0, 1.0)), 3),
+        "height": round(float(np.clip(base_p.get("height", 0.72), 0.0, 1.0)), 3),
+        "emissive_color": str(base_p.get("emissive_color") or base_p.get("color") or "#38F2FF"),
+        "emissive_strength": round(float(np.clip(base_p.get("emissive_strength", 0.0), 0.0, 1.0)), 3),
+    }
+    return lyr
 
 
 def parse_layers_json(raw: Any) -> list[dict[str, Any]]:
@@ -189,6 +265,159 @@ def _encode_rgba_url(arr: np.ndarray) -> str:
     return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
 
 
+def _smoothstep_mask(e0: float, e1: float, x: np.ndarray) -> np.ndarray:
+    t = np.clip((x - e0) / max(1e-5, e1 - e0), 0.0, 1.0)
+    return (t * t * (3.0 - 2.0 * t)).astype(np.float32)
+
+
+def compute_layer_smart_mask(
+    layer: dict[str, Any],
+    H: int,
+    W: int,
+    *,
+    mesh_context: Any = None,
+    height_map: np.ndarray | None = None,
+) -> np.ndarray:
+    """Compute a layer's composite non-destructive mask (Smart Baker Generator + Painted Mask + Multi-Slot Isolation)."""
+    mode = str(layer.get("mask_mode") or "none").strip().lower()
+    bal = float(np.clip(layer.get("mask_balance", 0.50), 0.02, 0.98))
+    con = float(np.clip(layer.get("mask_contrast", 0.45), 0.0, 0.98))
+    inv = bool(layer.get("mask_invert", False))
+    m_base = str(layer.get("mask_base") or "white").strip().lower()
+    target_slot = int(layer.get("target_slot", -1) if layer.get("target_slot") is not None else -1)
+    has_mc = mesh_context is not None and getattr(mesh_context, "width", -1) == W and getattr(mesh_context, "height", -1) == H
+
+    # 1. Procedural Smart Baker Generator (`G`)
+    if mode == "none":
+        g_mask = np.zeros((H, W), dtype=np.float32) if m_base == "black" else np.ones((H, W), dtype=np.float32)
+    elif mode == "curvature_edges":
+        if has_mc and hasattr(mesh_context, "curvature_3d"):
+            curv = np.asarray(mesh_context.curvature_3d, dtype=np.float32)
+            bev = np.asarray(getattr(mesh_context, "edge_bevel", np.zeros((H, W), dtype=np.float32)), dtype=np.float32)
+            raw = np.clip(np.maximum((curv - 0.5) * 2.0, bev * 0.92), 0.0, 1.0)
+        elif height_map is not None:
+            hm = np.asarray(height_map, dtype=np.float32)
+            lap = hm - 0.25 * (np.roll(hm, -1, 0) + np.roll(hm, 1, 0) + np.roll(hm, -1, 1) + np.roll(hm, 1, 1))
+            raw = np.clip(lap * 6.0, 0.0, 1.0)
+        else:
+            yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
+            raw = np.clip(np.maximum(np.abs(xx / max(1, W - 1) - 0.5), np.abs(yy / max(1, H - 1) - 0.5)) * 2.0, 0.0, 1.0)
+        thresh = 1.0 - bal
+        hw = max(0.015, (1.0 - con) * 0.42)
+        g_mask = _smoothstep_mask(thresh - hw, thresh + hw, raw)
+    elif mode == "cavity_ao":
+        if has_mc and hasattr(mesh_context, "baked_ao"):
+            ao_inv = 1.0 - np.clip(np.asarray(mesh_context.baked_ao, dtype=np.float32), 0.0, 1.0)
+            cav = np.clip(np.asarray(getattr(mesh_context, "joint_cavity", np.zeros((H, W), dtype=np.float32)), dtype=np.float32), 0.0, 1.0)
+            curv_conc = np.clip((0.5 - np.asarray(getattr(mesh_context, "curvature_3d", np.full((H, W), 0.5)), dtype=np.float32)) * 2.0, 0.0, 1.0)
+            raw = np.clip(np.maximum(ao_inv * 1.15, np.maximum(cav, curv_conc)), 0.0, 1.0)
+        elif height_map is not None:
+            raw = np.clip(1.0 - np.asarray(height_map, dtype=np.float32), 0.0, 1.0)
+        else:
+            yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
+            raw = np.clip(1.0 - np.hypot(xx / max(1, W - 1) - 0.5, yy / max(1, H - 1) - 0.5) * 1.8, 0.0, 1.0)
+        thresh = 1.0 - bal
+        hw = max(0.015, (1.0 - con) * 0.42)
+        g_mask = _smoothstep_mask(thresh - hw, thresh + hw, raw)
+    elif mode in ("world_normal_up", "world_normal_down"):
+        sign = 1.0 if mode == "world_normal_up" else -1.0
+        if has_mc and hasattr(mesh_context, "world_normal"):
+            raw = np.clip(sign * np.asarray(mesh_context.world_normal[..., 1], dtype=np.float32), 0.0, 1.0)
+        else:
+            yy = np.linspace(1.0, 0.0, H, dtype=np.float32)[:, None]
+            raw = np.broadcast_to(yy if sign > 0 else (1.0 - yy), (H, W)).copy()
+        thresh = 1.0 - bal
+        hw = max(0.015, (1.0 - con) * 0.45)
+        g_mask = _smoothstep_mask(thresh - hw, thresh + hw, raw)
+    elif mode == "color_id_part":
+        pat = str(layer.get("mask_part_pattern") or "").strip()
+        if has_mc and hasattr(mesh_context, "match_elements_mask"):
+            if pat:
+                try:
+                    g_mask = np.clip(np.asarray(mesh_context.match_elements_mask(pat), dtype=np.float32), 0.0, 1.0)
+                except Exception:
+                    g_mask = np.asarray(mesh_context.island_mask, dtype=np.float32)
+            else:
+                eids = np.asarray(mesh_context.elem_id_map, dtype=np.int32)
+                g_mask = ((eids >= 0) & ((eids % 2) == 0)).astype(np.float32)
+        else:
+            yy, xx = np.mgrid[0:H, 0:W]
+            g_mask = (((xx // max(1, W // 4)) + (yy // max(1, H // 4))) % 2 == 0).astype(np.float32)
+    elif mode == "texture_slot":
+        slot_use = target_slot if target_slot >= 0 else 0
+        if has_mc and getattr(mesh_context, "slot_masks", None) and slot_use in mesh_context.slot_masks:
+            g_mask = np.asarray(mesh_context.slot_masks[slot_use], dtype=np.float32).copy()
+        elif has_mc and hasattr(mesh_context, "island_mask"):
+            g_mask = np.asarray(mesh_context.island_mask, dtype=np.float32).copy()
+        else:
+            g_mask = np.ones((H, W), dtype=np.float32)
+    else:
+        g_mask = np.ones((H, W), dtype=np.float32)
+
+    if inv and mode != "none":
+        g_mask = 1.0 - g_mask
+
+    # 2. Non-destructive manual Paint Mask override (`mask_url`: R=painted reveal, A=override weight)
+    mask_l = _decode_rgba_url(str(layer.get("mask_url") or ""), W, H)
+    if mask_l is not None:
+        m_a = np.clip(mask_l[..., 3], 0.0, 1.0)
+        m_v = np.clip(mask_l[..., 0], 0.0, 1.0)
+        g_mask = g_mask * (1.0 - m_a) + m_v * m_a
+
+    # 3. Multi-Texture `.bbmodel` Slot Constraint (strictly prevents bleed across texture slots!)
+    if target_slot >= 0 and has_mc and getattr(mesh_context, "slot_masks", None):
+        sm = mesh_context.slot_masks.get(target_slot)
+        if sm is not None and sm.shape == (H, W):
+            g_mask = g_mask * np.asarray(sm, dtype=np.float32)
+
+    return np.clip(g_mask, 0.0, 1.0).astype(np.float32)
+
+
+def apply_mask_strokes_to_layer(
+    layer: dict[str, Any],
+    width: int,
+    height: int,
+    strokes: list[dict[str, Any]],
+    *,
+    erase: bool = False,
+    radius_px: float = 6.0,
+    slot_mask: np.ndarray | None = None,
+) -> dict[str, Any]:
+    """Paint non-destructive reveal (white) or hide (black) strokes onto a layer's `mask_url` buffer."""
+    W, H = max(1, int(width)), max(1, int(height))
+    m_buf = _decode_rgba_url(str(layer.get("mask_url") or ""), W, H)
+    if m_buf is None:
+        m_buf = np.zeros((H, W, 4), dtype=np.float32)
+
+    s_mask = np.asarray(slot_mask, dtype=np.float32) if (slot_mask is not None and slot_mask.shape == (H, W)) else None
+    yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
+    target_val = 0.0 if erase else 1.0
+
+    for st in strokes:
+        u = float(st.get("u", 0.5))
+        v = float(st.get("v", 0.5))
+        rad = max(1.0, float(st.get("radius_px", radius_px)))
+        soft = float(np.clip(st.get("softness", 0.35), 0.0, 0.95))
+        opac = float(np.clip(st.get("opacity", 1.0), 0.05, 1.0))
+        cx = u * max(1, W - 1)
+        cy = v * max(1, H - 1)
+        d = np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2)
+        inner = rad * (1.0 - soft)
+        w_m = np.clip(1.0 - (d - inner) / max(0.5, rad - inner), 0.0, 1.0)
+        w_m = (w_m * w_m * (3.0 - 2.0 * w_m)) * opac
+        if s_mask is not None:
+            w_m = w_m * s_mask
+        val_w = np.clip(m_buf[..., 0] * (1.0 - w_m) + target_val * w_m, 0.0, 1.0)
+        m_buf[..., 0] = val_w
+        m_buf[..., 1] = val_w
+        m_buf[..., 2] = val_w
+        m_buf[..., 3] = np.clip(m_buf[..., 3] + w_m * (1.0 - m_buf[..., 3]), 0.0, 1.0)
+
+    out_layer = dict(layer)
+    out_layer["mask_url"] = _encode_rgba_url(m_buf) if float(m_buf[..., 3].max()) > 1e-4 else ""
+    return out_layer
+
+
 def apply_pbr_brush_strokes_to_layer(
     layer: dict[str, Any],
     width: int,
@@ -196,8 +425,9 @@ def apply_pbr_brush_strokes_to_layer(
     strokes: list[dict[str, Any]],
     *,
     brush: dict[str, Any] | None = None,
+    slot_mask: np.ndarray | None = None,
 ) -> dict[str, Any]:
-    """Paint multi-channel PBR brush strokes onto a single `paint_layer_stack` layer."""
+    """Paint multi-channel PBR brush strokes onto a single `paint_layer_stack` layer (optionally slot-constrained)."""
     W, H = max(1, int(width)), max(1, int(height))
     b = dict(brush or {})
     preset_id = str(b.get("preset") or "")
@@ -232,6 +462,7 @@ def apply_pbr_brush_strokes_to_layer(
     if em is None:
         em = np.zeros((H, W, 4), dtype=np.float32)
 
+    s_mask = np.asarray(slot_mask, dtype=np.float32) if (slot_mask is not None and slot_mask.shape == (H, W)) else None
     yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
     for st in strokes:
         u = float(st.get("u", 0.5))
@@ -245,6 +476,8 @@ def apply_pbr_brush_strokes_to_layer(
         inner = rad * (1.0 - soft)
         w_m = np.clip(1.0 - (d - inner) / max(0.5, rad - inner), 0.0, 1.0)
         w_m = (w_m * w_m * (3.0 - 2.0 * w_m)) * opac
+        if s_mask is not None:
+            w_m = w_m * s_mask
 
         if is_erase:
             keep = 1.0 - w_m
@@ -282,8 +515,9 @@ def paint_layer_stack_op(
     layers_json: Any = "",
     height_normal_strength: float = 2.6,
     tileable: bool = False,
+    mesh_context: Any = None,
 ) -> dict[str, np.ndarray]:
-    """Composite a Substance-Painter-style stack of multi-channel PBR paint layers onto a MATERIAL bus."""
+    """Composite a Substance-Painter-style stack of multi-channel PBR Paint & Smart-Masked Fill layers onto a MATERIAL bus."""
     H, W = int(height), int(width)
     if isinstance(base, dict) and "albedo" in base:
         alb = np.asarray(base["albedo"], dtype=np.float32).copy()
@@ -337,10 +571,43 @@ def paint_layer_stack_op(
         if opac <= 1e-4:
             continue
         bmode = str(lyr.get("blend_mode") or "normal").lower()
+        l_mask = compute_layer_smart_mask(lyr, H, W, mesh_context=mesh_context, height_map=h_ch)
+        if float(l_mask.max()) <= 1e-4:
+            continue
+
+        ltype = str(lyr.get("layer_type") or "paint").strip().lower()
+        if ltype == "fill":
+            fm = lyr.get("fill_material") or {}
+            f_rgb = np.array(hex_to_srgb(str(fm.get("color") or "#F0C85A")), dtype=np.float32)
+            f_r = float(np.clip(fm.get("roughness", 0.25), 0.04, 0.98))
+            f_m = float(np.clip(fm.get("metallic", 0.90), 0.0, 1.0))
+            f_h = float(np.clip(fm.get("height", 0.72), 0.0, 1.0))
+            f_em_s = float(np.clip(fm.get("emissive_strength", 0.0), 0.0, 1.0))
+            f_em_rgb = np.array(hex_to_srgb(str(fm.get("emissive_color") or fm.get("color") or "#38F2FF")), dtype=np.float32)
+            wf = np.clip(l_mask * opac, 0.0, 1.0)
+            if bmode == "normal":
+                alb[..., :3] = alb[..., :3] * (1.0 - wf[..., None]) + f_rgb[None, None, :] * wf[..., None]
+                alb[..., 3] = np.clip(np.maximum(alb[..., 3], wf), 0.0, 1.0)
+            else:
+                fill_rgba = np.empty((H, W, 4), dtype=np.float32)
+                fill_rgba[..., :3] = f_rgb[None, None, :]
+                fill_rgba[..., 3] = l_mask
+                blended = blend_layers(alb, fill_rgba, mode=bmode, opacity=opac)
+                alb[..., :3] = alb[..., :3] * (1.0 - wf[..., None]) + blended[..., :3] * wf[..., None]
+                alb[..., 3] = np.clip(np.maximum(alb[..., 3], wf), 0.0, 1.0)
+            r_ch = r_ch * (1.0 - wf) + f_r * wf
+            m_ch = m_ch * (1.0 - wf) + f_m * wf
+            h_ch = h_ch * (1.0 - wf) + f_h * wf
+            any_height_painted = True
+            if f_em_s > 0.005:
+                we = np.clip(wf * f_em_s, 0.0, 1.0)
+                em_ch[..., :3] = np.clip(em_ch[..., :3] * (1.0 - we[..., None]) + f_em_rgb[None, None, :] * we[..., None], 0.0, 1.0)
+                em_ch[..., 3] = np.clip(np.maximum(em_ch[..., 3], we), 0.0, 1.0)
+            continue
 
         alb_l = _decode_rgba_url(str(lyr.get("albedo_url") or ""), W, H)
         if alb_l is not None:
-            w = np.clip(alb_l[..., 3] * opac, 0.0, 1.0)
+            w = np.clip(alb_l[..., 3] * l_mask * opac, 0.0, 1.0)
             if float(w.max()) > 1e-4:
                 if bmode == "normal":
                     alb[..., :3] = alb[..., :3] * (1.0 - w[..., None]) + alb_l[..., :3] * w[..., None]
@@ -352,7 +619,7 @@ def paint_layer_stack_op(
 
         pbr_l = _decode_rgba_url(str(lyr.get("pbr_url") or ""), W, H)
         if pbr_l is not None:
-            wp = np.clip(pbr_l[..., 3] * opac, 0.0, 1.0)
+            wp = np.clip(pbr_l[..., 3] * l_mask * opac, 0.0, 1.0)
             if float(wp.max()) > 1e-4:
                 r_ch = r_ch * (1.0 - wp) + pbr_l[..., 0] * wp
                 m_ch = m_ch * (1.0 - wp) + pbr_l[..., 1] * wp
@@ -361,7 +628,7 @@ def paint_layer_stack_op(
 
         em_l = _decode_rgba_url(str(lyr.get("emissive_url") or ""), W, H)
         if em_l is not None:
-            we = np.clip(em_l[..., 3] * opac, 0.0, 1.0)
+            we = np.clip(em_l[..., 3] * l_mask * opac, 0.0, 1.0)
             if float(we.max()) > 1e-4:
                 em_ch[..., :3] = np.clip(em_ch[..., :3] * (1.0 - we[..., None]) + em_l[..., :3] * we[..., None], 0.0, 1.0)
                 em_ch[..., 3] = np.clip(np.maximum(em_ch[..., 3], we), 0.0, 1.0)

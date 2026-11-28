@@ -60,11 +60,14 @@ from .ctm_tileset import generate_ctm_tileset
 from .syncproj import DEFAULT_CHRONO_VARIANTS, SyncProject, apply_variant_to_graph, generate_variant_pack
 from .texdsl import TexDslError as TexDSLParseError, export_texdsl, parse_texdsl
 from .v16_pro_ops import (
+    LAYER_MASK_GENERATORS,
     PBR_BRUSH_PRESETS,
     ScriptSecurityError,
+    apply_mask_strokes_to_layer,
     apply_pbr_brush_strokes_to_layer,
     list_all_syncpacks,
     make_empty_paint_layer,
+    make_fill_paint_layer,
     parse_layers_json,
     run_batch_bakery,
     save_user_syncpack,
@@ -987,6 +990,7 @@ class StudioSession:
             "decal_stencil_previews": self._get_decal_stencil_previews(),
             "export_presets": ENGINE_EXPORT_PRESETS,
             "smart_baker_presets": SMART_BAKER_PRESETS,
+            "layer_mask_generators": LAYER_MASK_GENERATORS,
         }
 
     def _get_decal_stencil_previews(self) -> dict[str, str]:
@@ -2688,9 +2692,37 @@ class StudioSession:
                         n_idx += 1
                         new_id = f"layer_{n_idx}"
                     lname = str(payload.get("name") or f"PBR Layer {n_idx}")
-                    layers.append(make_empty_paint_layer(new_id, lname))
+                    tslot = int(payload.get("target_slot", self.active_texture_slot))
+                    layers.append(make_empty_paint_layer(new_id, lname, target_slot=tslot))
                     active_lid = new_id
                     self._log("info", f"Added PBR paint layer '{lname}' on '{nid}'")
+                elif layer_action == "add_fill_layer":
+                    n_idx = len(layers) + 1
+                    new_id = f"fill_{n_idx}"
+                    while any(l["id"] == new_id for l in layers):
+                        n_idx += 1
+                        new_id = f"fill_{n_idx}"
+                    preset_id = str(payload.get("preset") or "gold_trim")
+                    mmode = str(payload.get("mask_mode") or "curvature_edges")
+                    lname = str(payload.get("name") or f"Fill {n_idx}")
+                    tslot = int(payload.get("target_slot", self.active_texture_slot))
+                    layers.append(
+                        make_fill_paint_layer(
+                            new_id,
+                            lname,
+                            preset=preset_id,
+                            fill_material=payload.get("fill_material"),
+                            target_slot=tslot,
+                            mask_mode=mmode,
+                            mask_balance=float(payload.get("mask_balance", 0.55)),
+                            mask_contrast=float(payload.get("mask_contrast", 0.55)),
+                            mask_invert=bool(payload.get("mask_invert", False)),
+                            mask_part_pattern=str(payload.get("mask_part_pattern") or ""),
+                            opacity=float(payload.get("opacity", 0.92)),
+                        )
+                    )
+                    active_lid = new_id
+                    self._log("info", f"Added Smart-Masked Fill Layer '{lname}' (mask={mmode}, slot={tslot}) on '{nid}'")
                 elif layer_action == "delete_layer" and len(layers) > 1:
                     layers = [l for l in layers if l["id"] != active_lid]
                     active_lid = layers[-1]["id"]
@@ -2706,12 +2738,45 @@ class StudioSession:
                     for l in layers:
                         if l["id"] == active_lid:
                             l["blend_mode"] = str(payload.get("blend_mode") or "normal")
+                elif layer_action == "set_mask":
+                    for l in layers:
+                        if l["id"] == active_lid:
+                            if "mask_mode" in payload:
+                                l["mask_mode"] = str(payload.get("mask_mode") or "none")
+                            if "mask_balance" in payload:
+                                l["mask_balance"] = round(float(np.clip(payload.get("mask_balance", 0.5), 0.02, 0.98)), 3)
+                            if "mask_contrast" in payload:
+                                l["mask_contrast"] = round(float(np.clip(payload.get("mask_contrast", 0.45), 0.0, 0.98)), 3)
+                            if "mask_invert" in payload:
+                                l["mask_invert"] = bool(payload.get("mask_invert", False))
+                            if "mask_part_pattern" in payload:
+                                l["mask_part_pattern"] = str(payload.get("mask_part_pattern") or "")
+                            if "mask_base" in payload:
+                                l["mask_base"] = "black" if str(payload.get("mask_base")).lower() == "black" else "white"
+                            if "target_slot" in payload:
+                                l["target_slot"] = int(payload.get("target_slot", -1))
+                    self._log("info", f"Updated non-destructive mask on layer '{active_lid}'")
+                elif layer_action == "clear_mask":
+                    for l in layers:
+                        if l["id"] == active_lid:
+                            l["mask_url"] = ""
+                    self._log("info", f"Cleared manual mask strokes on layer '{active_lid}'")
+                elif layer_action == "update_fill":
+                    fm_in = payload.get("fill_material") or {}
+                    for l in layers:
+                        if l["id"] == active_lid and str(l.get("layer_type") or "paint") == "fill":
+                            fm = dict(l.get("fill_material") or {})
+                            for k in ("color", "roughness", "metallic", "height", "emissive_color", "emissive_strength"):
+                                if k in fm_in and fm_in[k] is not None:
+                                    fm[k] = fm_in[k]
+                            l["fill_material"] = fm
                 elif layer_action == "clear_layer":
                     for l in layers:
                         if l["id"] == active_lid:
                             l["albedo_url"] = ""
                             l["pbr_url"] = ""
                             l["emissive_url"] = ""
+                            l["mask_url"] = ""
                 elif layer_action == "select_layer":
                     pass
                 elif layer_action == "rename_layer":
@@ -2724,9 +2789,33 @@ class StudioSession:
                     if payload.get("undoable"):
                         self._push_undo()
                     brush = payload.get("brush") or {}
+                    edit_target = str(payload.get("edit_target") or "paint").strip().lower()
                     for i, l in enumerate(layers):
                         if l["id"] == active_lid:
-                            layers[i] = apply_pbr_brush_strokes_to_layer(l, g.width, g.height, strokes, brush=brush)
+                            l_slot = int(l.get("target_slot", -1) if l.get("target_slot") is not None else -1)
+                            eff_slot = l_slot if l_slot >= 0 else self.active_texture_slot
+                            slot_mask = None
+                            if eff_slot >= 0 and self.mesh_ctx is not None and getattr(self.mesh_ctx, "slot_masks", None):
+                                slot_mask = self.mesh_ctx.slot_masks.get(eff_slot)
+                            if edit_target == "mask":
+                                layers[i] = apply_mask_strokes_to_layer(
+                                    l,
+                                    g.width,
+                                    g.height,
+                                    strokes,
+                                    erase=bool(brush.get("erase", False)),
+                                    radius_px=float(brush.get("radius_px", 6.0)),
+                                    slot_mask=slot_mask,
+                                )
+                            else:
+                                layers[i] = apply_pbr_brush_strokes_to_layer(
+                                    l,
+                                    g.width,
+                                    g.height,
+                                    strokes,
+                                    brush=brush,
+                                    slot_mask=slot_mask,
+                                )
                             break
 
             sp.params["active_layer_id"] = active_lid
@@ -2738,7 +2827,10 @@ class StudioSession:
             st["active_layer_id"] = active_lid
             st["paint_layers"] = [
                 {k: v for k, v in l.items() if not k.endswith("_url")}
-                | {"has_paint": bool(l.get("albedo_url") or l.get("pbr_url") or l.get("emissive_url"))}
+                | {
+                    "has_paint": bool(l.get("albedo_url") or l.get("pbr_url") or l.get("emissive_url") or l.get("layer_type") == "fill"),
+                    "has_mask_paint": bool(l.get("mask_url")),
+                }
                 for l in layers
             ]
             if created_id:
@@ -3335,7 +3427,7 @@ def create_studio_server(
                         "ok": True,
                         "app": "SyncCraft Studio",
                         "synccraft_version": __version__,
-                        "engine_version": "19.0",
+                        "engine_version": "19.1",
                         "schema_version": "4.0",
                         "node_count": len(NODE_REGISTRY),
                         "active_graph": sess.graph.name,
@@ -3627,7 +3719,7 @@ def serve_studio(
     server, _ = create_studio_server(host=host, port=port, initial_sample=initial_sample, size=size)
     actual_port = server.server_address[1]
     url = f"http://{host}:{actual_port}/"
-    print(f"SyncCraft Studio v{__version__} (TexGraph v19 / Schema v4.0 · {len(NODE_REGISTRY)} nodes)")
+    print(f"SyncCraft Studio v{__version__} (TexGraph v19.1 / Schema v4.0 · {len(NODE_REGISTRY)} nodes)")
     print(f"  Listening on {url}  (Press Ctrl+C to stop)")
     if open_browser:
         threading.Timer(0.4, lambda: webbrowser.open(url)).start()
